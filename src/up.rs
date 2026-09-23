@@ -23,7 +23,14 @@ pub struct Install {
     pub chart_version: Option<String>,
     pub deployment_id: String,
     pub enrolment_code: String,
-    pub platform: String,
+    /// Only when somebody said so. Empty is the platform, which the chart
+    /// resolves: an install that writes the address down is an install
+    /// carrying a value it was never given, and the one place that address
+    /// lives should be the chart rather than every values file in existence.
+    ///
+    /// Set to reach a different one -- a staging platform, while somebody is
+    /// testing a change to the platform itself.
+    pub platform: Option<String>,
     pub image: Option<String>,
     /// Helm-style chart values, spelled as Helm spells them.
     pub values: Vec<String>,
@@ -44,8 +51,10 @@ pub fn values_document(install: &Install) -> String {
         "  enrolmentCode: {}\n",
         quoted(&install.enrolment_code)
     ));
-    out.push_str("platform:\n");
-    out.push_str(&format!("  address: {}\n", quoted(&install.platform)));
+    if let Some(platform) = &install.platform {
+        out.push_str("platform:\n");
+        out.push_str(&format!("  address: {}\n", quoted(platform)));
+    }
     if let Some(image) = &install.image {
         let (repository, tag) = image.rsplit_once(':').unwrap_or((image.as_str(), "latest"));
         out.push_str("image:\n");

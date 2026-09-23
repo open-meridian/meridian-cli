@@ -234,7 +234,11 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
             .map(String::from),
         deployment_id,
         enrolment_code,
-        platform: intended.platform.clone(),
+        // Passed through only when given: the chart holds the address, so an
+        // install that has not been told one should not write it down.
+        platform: arguments
+            .value("--platform", "--platform")
+            .map(String::from),
         image: arguments.value("--image", "--image").map(String::from),
         values: arguments.every("--values", "-f"),
         timeout: arguments

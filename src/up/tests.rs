@@ -8,7 +8,7 @@ fn install() -> Install {
         chart_version: None,
         deployment_id: "dep-7".into(),
         enrolment_code: "ENROL-9XK2".into(),
-        platform: "https://open-meridian.com".into(),
+        platform: None,
         image: None,
         values: vec![],
         timeout: "10m".into(),
@@ -37,6 +37,25 @@ fn the_enrolment_code_never_reaches_an_argument() {
     );
     assert!(arguments.contains("--values -"), "{arguments}");
     assert!(values_document(&install()).contains("ENROL-9XK2"));
+}
+
+#[test]
+fn an_install_that_was_told_no_platform_writes_none() {
+    // The chart holds the address, and an install that wrote it down would be
+    // carrying a value nobody gave it -- which is how a values file ends up
+    // pinning a platform somebody later moves.
+    let document = values_document(&install());
+
+    assert!(!document.contains("platform"), "{document}");
+}
+
+#[test]
+fn a_platform_somebody_named_is_carried() {
+    // A staging platform, while somebody tests a change to the platform.
+    let mut intended = install();
+    intended.platform = Some("https://uat.open-meridian.com".into());
+
+    assert!(values_document(&intended).contains("uat.open-meridian.com"));
 }
 
 #[test]
