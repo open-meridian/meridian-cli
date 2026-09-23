@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1
+#
+# Build, test and lint the CLI.
+#
+# The host is not asked for a Rust toolchain, exactly as in meridian-core:
+# everything runs here at a pinned version, so a contributor needs only Docker
+# and every check is reproducible.
+#
+# git and ca-certificates because this crate's one dependency on the runtime is
+# a git dependency at a pinned revision, which cargo fetches over HTTPS.
+
+ARG RUST_VERSION=1.90
+
+FROM rust:${RUST_VERSION}-slim-bookworm AS base
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /w
+COPY Cargo.toml Cargo.lock ./
+COPY src/ src/
+
+FROM base AS check
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/w/target \
+    cargo build --locked
+
+# Every check with a fake machine, the params file's refusals, and the
+# argument parser. Nothing here reaches a cluster or a platform: what needs one
+# is `make e2e-up`, against a real deployment.
+FROM base AS test
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/w/target \
+    cargo test --locked
+
+FROM base AS lint
+RUN rustup component add clippy rustfmt
+RUN cargo fmt --all -- --check
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/w/target \
+    cargo clippy --locked --all-targets -- -D warnings
+
+# One artifact per target, built on that target's own runner: the release
+# workflow runs this stage and takes the binary out of it.
+FROM base AS release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/w/target \
+    cargo build --locked --release && cp target/release/meridian /meridian

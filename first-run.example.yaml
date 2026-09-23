@@ -1,0 +1,38 @@
+# The wizard's answers, and no credential.
+#
+# Every field the wizard asks for as a password is read from MERIDIAN_<FIELD>
+# instead -- MERIDIAN_DB_SERVING_PASSWORD for db_serving_password, and so on --
+# and a file naming one is refused with the variable to use. A params file that
+# works with the passwords in it is a params file that gets committed.
+#
+# The names are the wizard's own. `meridian up --params` reads the form the
+# deployment serves and refuses a field it does not ask for, so nothing here is
+# a list that can drift.
+
+# The database. Two roles on one database: the migrating role may create a
+# table and the serving role must not. Both are tested before anything is
+# written.
+db_host: postgres.internal
+db_port: 5432
+db_name: meridian
+db_sslmode: require
+db_serving_role: meridian_app
+db_migrating_role: meridian_migrate
+
+# Signing in. `bundled` runs Zitadel in this cluster; `oidc` connects the
+# firm's own provider.
+backend: bundled
+zitadel_db_host: postgres.internal
+zitadel_db_port: 5432
+zitadel_db_name: meridian_zitadel
+zitadel_db_role: meridian_zitadel
+zitadel_db_sslmode: require
+
+# `local` makes you an account; `ldap` connects the firm's directory.
+directory: local
+admin_login: ada
+
+# Where a browser reaches this deployment. The directory sends people back to
+# the first of them.
+dashboard_url: https://meridian.firm.example
+zitadel_url: https://id.firm.example

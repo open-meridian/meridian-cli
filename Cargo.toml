@@ -1,0 +1,27 @@
+[package]
+name = "meridian-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+# AGPL, because this links meridian-core's crates and the deployment runtime is
+# the product. Said out loud in spec/the-cli.md rather than discovered.
+license = "AGPL-3.0-or-later"
+description = "Bringing a Meridian deployment up, and working with one that is already running"
+
+[[bin]]
+name = "meridian"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = "0.1"
+# The assertion code this checks a clock against, at a pinned revision, the
+# way the SDK pins the schema: a bound that moves deliberately.
+meridian-conductor = { git = "https://github.com/open-meridian/meridian-core.git", rev = "7c51733ced673b591ccac25cf205c3161870d391" }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "signal"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

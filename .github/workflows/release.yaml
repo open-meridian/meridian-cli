@@ -1,0 +1,68 @@
+# One artifact per target, built on that target's own runner.
+#
+# No package manager in the first pass (spec/the-cli, ruling 2): a formula that
+# lags the release is worse than a download. A tag is what publishes; nothing
+# here runs on a push to main.
+#
+# Linux is statically linked against musl, so the binary runs on whatever a
+# firm's build agent happens to be. That is possible without a C toolchain only
+# because every dependency is pure Rust (requirement 2); the first C library
+# makes every target harder at once, and this workflow is where that would be
+# discovered.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: macos-13
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: rustup toolchain install 1.90 --profile minimal
+      - run: rustup target add ${{ matrix.target }} --toolchain 1.90
+
+      - run: cargo +1.90 build --release --locked --target ${{ matrix.target }}
+
+      - name: Name it for the target it runs on
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/meridian dist/meridian-${{ matrix.target }}
+          shasum -a 256 dist/meridian-${{ matrix.target }} > dist/meridian-${{ matrix.target }}.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meridian-${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true

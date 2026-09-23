@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Local green is the completion signal; CI is confirmation, not the first place
+# a failure is found.
+set -euo pipefail
+exec make ci-local
