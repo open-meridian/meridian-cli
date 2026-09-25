@@ -18,6 +18,8 @@ RUN apt-get update \
 WORKDIR /w
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
+# What `meridian plugin new` writes, compiled into the binary.
+COPY plugin-template/ plugin-template/
 
 FROM base AS check
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reference-plugin"
+version = "0.1.0"
+description = "A Meridian plugin"
+requires-python = ">=3.11"
+# The SDK and nothing else of Meridian's, pinned exactly: the sidecar this runs
+# beside speaks one version of the contract, and a range would let a rebuild
+# pick up another.
+dependencies = ["open-meridian==0.1.0"]
+
+[project.scripts]
+reference-plugin = "reference_plugin.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

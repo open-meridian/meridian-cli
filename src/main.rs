@@ -6,6 +6,7 @@
 
 mod doctor;
 mod machine;
+mod plugin;
 mod up;
 
 use doctor::Intended;
@@ -13,8 +14,9 @@ use doctor::Intended;
 const USAGE: &str = "\
 meridian -- bringing a Meridian deployment up
 
-  meridian doctor    can this machine and this cluster run a deployment?
-  meridian up        install the chart, and open this deployment's wizard
+  meridian doctor            can this machine and this cluster run a deployment?
+  meridian up                install the chart, and open this deployment's wizard
+  meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>
 
 Both:
   -n, --namespace <name>    where the deployment goes (default: meridian)
@@ -37,16 +39,23 @@ up:
       --port <n>            the local port the wizard is forwarded to (default: 8443)
       --timeout <d>         how long to give Helm (default: 10m)
       --no-doctor           skip the checks. A check nobody runs does not exist
+
+plugin new:
+      --into <dir>          where to write it (default: ./<name>). Never somewhere
+                            that already exists
 ";
 
 struct Arguments {
     command: String,
+    /// The words after a command that takes them: `plugin new <name>`.
+    words: Vec<String>,
     flags: Vec<(String, String)>,
     switches: Vec<String>,
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 13] = [
+const TAKES_A_VALUE: [&str; 14] = [
+    "--into",
     "-n",
     "--namespace",
     "--platform",
@@ -70,11 +79,18 @@ const SWITCHES: [&str; 4] = ["--no-doctor", "-h", "--help", "-v"];
 fn parse(said: Vec<String>) -> Result<Arguments, String> {
     let mut said = said.into_iter();
     let command = said.next().unwrap_or_default();
+    let mut words = Vec::new();
     let mut flags = Vec::new();
     let mut switches = Vec::new();
 
     while let Some(argument) = said.next() {
         if !argument.starts_with('-') {
+            // Only `plugin` takes words. Anywhere else a stray one is refused
+            // rather than ignored, as it always was.
+            if command == "plugin" {
+                words.push(argument);
+                continue;
+            }
             return Err(format!("{argument} is not an option this takes"));
         }
         // Both spellings, because `--params=x` is what a script writes and
@@ -102,6 +118,7 @@ fn parse(said: Vec<String>) -> Result<Arguments, String> {
 
     Ok(Arguments {
         command,
+        words,
         flags,
         switches,
     })
@@ -180,10 +197,38 @@ async fn main() {
             std::process::exit(code);
         }
         "up" => std::process::exit(brought_up(&arguments, intended).await),
+        "plugin" => std::process::exit(plugin_command(&arguments)),
         "-h" | "--help" | "help" | "" => print!("{USAGE}"),
         other => {
             eprintln!("meridian: {other} is not a command\n\n{USAGE}");
             std::process::exit(2);
+        }
+    }
+}
+
+/// `meridian plugin new <name>`, and nothing else under `plugin` yet: upload,
+/// test and share are the spec's, and come with the local registry.
+fn plugin_command(arguments: &Arguments) -> i32 {
+    match arguments.words.as_slice() {
+        [new, name] if new == "new" => {
+            let into = arguments
+                .value("--into", "--into")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from(name));
+            match plugin::scaffold(name, &into) {
+                Ok(_) => {
+                    print!("{}", plugin::next_steps(name, &into));
+                    0
+                }
+                Err(refusal) => {
+                    eprintln!("meridian: {refusal}");
+                    1
+                }
+            }
+        }
+        _ => {
+            eprintln!("meridian: plugin takes `new <name>`\n\n{USAGE}");
+            2
         }
     }
 }
@@ -313,6 +358,14 @@ mod tests {
         // A misspelled --no-doctor that is quietly ignored installs something
         // the person asked not to have checked.
         assert!(parse(said("up --no-docter")).is_err());
+    }
+
+    #[test]
+    fn plugin_takes_its_words_and_nothing_else_does() {
+        let plugin = parse(said("plugin new snaptrade --into /tmp/s")).expect("parsed");
+        assert_eq!(plugin.words, ["new", "snaptrade"]);
+        assert_eq!(plugin.value("--into", "--into"), Some("/tmp/s"));
+        assert!(parse(said("doctor snaptrade")).is_err());
     }
 
     #[test]
