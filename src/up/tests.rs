@@ -224,14 +224,26 @@ fn a_lost_session_is_the_page_that_asks_for_a_code() {
 }
 
 #[test]
-fn the_first_administrators_code_is_taken_from_the_page_that_shows_it_once() {
-    let page = "<h1>This deployment is configured</h1><p>wrote the database</p>\
-                <h2>Your first administrator's code</h2><p><code>ADM-4T7Q</code></p>";
+fn who_administers_it_is_read_off_the_page_that_says_so() {
+    // The wizard's applied page, as meridian-core's dashboard writes it for
+    // each way of naming an administrator.
+    let local = "<h1>This deployment is configured</h1>\
+                 <p><strong>ada</strong> administers this deployment. Sign in with \
+                 the account and password you just gave; there is nothing to redeem.</p>";
+    let group = "<p>Everybody in <strong>meridian-admins</strong> administers this \
+                 deployment. Sign in through the directory you configured.</p>";
 
-    assert_eq!(first_admin_code(page).as_deref(), Some("ADM-4T7Q"));
-    // The fingerprint on the closed page is also in a <code>, and is not this.
     assert_eq!(
-        first_admin_code("<p>Its fingerprint is <code>SHA256:x</code></p>"),
+        administrator(local).as_deref(),
+        Some("ada administers this deployment")
+    );
+    assert_eq!(
+        administrator(group).as_deref(),
+        Some("Everybody in meridian-admins administers this deployment")
+    );
+    // A page that did not finish says nothing of the kind.
+    assert_eq!(
+        administrator("<ul class=\"refusal\"><li>nope</li></ul>"),
         None
     );
 }

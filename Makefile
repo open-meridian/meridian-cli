@@ -80,12 +80,19 @@ lock:
 		sh -c 'apt-get update >/dev/null && apt-get install -y --no-install-recommends git >/dev/null && cargo generate-lockfile'
 	@echo "lock: Cargo.lock regenerated"
 
-# A real deployment, driven by this binary rather than by a test's HTTP calls:
-# the same path `make e2e-first-run` proves in meridian-core. Not yet written;
-# the target exists so that adding it is a change to one line.
+# A real deployment, driven by this binary rather than by a test's HTTP calls
+# (spec/the-cli's verification): meridian-core's cluster run, with
+# `meridian up --params` installing the chart and answering the wizard, and
+# every check after it -- the database, the administrator's permission, their
+# sign-in, and a real browser -- as the run makes them for its own driver.
+# Needs meridian-core and meridian-platform beside this checkout, and a
+# cluster in the current kube context.
+CORE ?= ../meridian-core
+
 e2e-up:
-	@echo "e2e-up: not built yet. spec/the-cli says what it must prove." >&2
-	@exit 1
+	@test -f "$(CORE)/e2e/cluster/run.py" || { echo "no meridian-core at $(CORE); set CORE=<path>" >&2; exit 1; }
+	@$(DOCKER) build -q -f Dockerfile.rust --target e2e -t meridian-cli-e2e:local . >/dev/null
+	@$(MAKE) --no-print-directory -C "$(CORE)" e2e-cluster E2E_DRIVER=cli E2E_CLI_IMAGE=meridian-cli-e2e:local
 
 install-hooks:
 	@git config core.hooksPath hooks

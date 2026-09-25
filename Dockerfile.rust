@@ -51,3 +51,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/w/target \
     cargo build --locked --release && cp target/release/meridian /meridian
+
+# The CLI as a person runs it, for the end-to-end run: the binary and the two
+# tools it drives, helm and kubectl, at pinned versions and nothing else. It
+# is not what anybody installs; `release` is.
+FROM debian:bookworm-slim AS e2e
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=alpine/helm:3.16.2 /usr/bin/helm /usr/local/bin/helm
+COPY --from=registry.k8s.io/kubectl:v1.35.0 /bin/kubectl /usr/local/bin/kubectl
+COPY --from=release /meridian /usr/local/bin/meridian
+ENTRYPOINT ["meridian"]

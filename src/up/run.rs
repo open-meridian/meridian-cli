@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
 use super::{
-    answers, asked_for, findings, first_admin_code, helm_arguments, params_from, passes, shown,
+    administrator, answers, asked_for, findings, helm_arguments, params_from, passes, shown,
     values_document, wants_a_code,
 };
 
@@ -337,19 +337,15 @@ async fn scripted(
     println!("They pass. Applying.");
 
     let (_, applied) = wizard.post("/first-run/apply", &posted).await?;
-    let Some(first_admin) = first_admin_code(&applied) else {
+    let Some(who) = administrator(&applied) else {
         return Err(format!(
             "applying did not finish:\n  - {}",
             findings(&applied).join("\n  - ")
         ));
     };
 
-    println!("\nThis deployment is configured.");
-    println!("\n  Your first administrator's code: {first_admin}");
-    println!(
-        "\nCopy it now: it is shown once, and the platform keeps only its hash. \
-         \nSign in through the directory you configured and redeem it there."
-    );
+    println!("\nThis deployment is configured. {who}.");
+    println!("Sign in at its dashboard the way you chose; there is nothing to redeem.");
     Ok(())
 }
 

@@ -317,13 +317,22 @@ pub fn wants_a_code(page: &str) -> bool {
     page.contains("first-run/claim")
 }
 
-/// The first administrator's code, shown once.
-pub fn first_admin_code(page: &str) -> Option<String> {
-    let at = page.find("Your first administrator's code")?;
-    let rest = &page[at..];
-    let open = rest.find("<code>")? + "<code>".len();
-    let close = rest[open..].find("</code>")?;
-    Some(unescape(&rest[open..open + close]))
+/// Who administers the deployment, as the wizard says once it is applied.
+///
+/// Applying names the administrator and writes their permission; nothing is
+/// redeemed afterwards (decisions/017). This read a first administrator's
+/// code off the page until 2026-09-25, a year's worth of design after the
+/// page stopped showing one, so `up --params` reported a deployment it had
+/// just configured as one that did not finish.
+pub fn administrator(page: &str) -> Option<String> {
+    let at = page.find("administers this deployment")?;
+    let open = page[..at].rfind("<p>")? + "<p>".len();
+    let close = page[at..].find('.').map(|end| at + end)?;
+    let said: String = page[open..close]
+        .split('<')
+        .map(|part| part.split_once('>').map_or(part, |(_, text)| text))
+        .collect();
+    Some(unescape(&said))
 }
 
 fn unescape(said: &str) -> String {
