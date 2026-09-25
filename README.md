@@ -60,8 +60,11 @@ db_port: 5432
 db_name: meridian
 db_serving_role: meridian_app
 db_migrating_role: meridian_migrate
-backend: bundled
-directory: ldap
+backend: ldap
+ldap_servers: ldaps://ldap.firm.internal:636
+ldap_base_dn: ou=people,dc=firm,dc=internal
+ldap_bind_dn: cn=meridian,ou=services,dc=firm,dc=internal
+admin_group: meridian-admins
 dashboard_url: https://meridian.firm.example
 ```
 
@@ -69,6 +72,7 @@ dashboard_url: https://meridian.firm.example
 export MERIDIAN_FIRST_RUN_CODE=…
 export MERIDIAN_DB_SERVING_PASSWORD=…
 export MERIDIAN_DB_MIGRATING_PASSWORD=…
+export MERIDIAN_LDAP_BIND_PASSWORD=…
 meridian up --id dep-7 --params first-run.yaml
 ```
 

@@ -19,20 +19,36 @@ db_sslmode: require
 db_serving_role: meridian_app
 db_migrating_role: meridian_migrate
 
-# Signing in. `bundled` runs Zitadel in this cluster; `oidc` connects the
-# firm's own provider.
-backend: bundled
-zitadel_db_host: postgres.internal
-zitadel_db_port: 5432
-zitadel_db_name: meridian_zitadel
-zitadel_db_role: meridian_zitadel
-zitadel_db_sslmode: require
-
-# `local` makes you an account; `ldap` connects the firm's directory.
-directory: local
+# Signing in: one of `local`, `ldap` or `oidc`, and only that one's fields.
+#
+# `local` -- the firm has no directory, and this deployment holds one account
+# for you. Its password is read from MERIDIAN_ADMIN_PASSWORD.
+backend: local
 admin_login: ada
+admin_email: ada@firm.example
+admin_given_name: Ada
+admin_family_name: Park
 
-# Where a browser reaches this deployment. The directory sends people back to
-# the first of them.
+# `ldap` -- the firm's LDAP or Active Directory. The bind password is read from
+# MERIDIAN_LDAP_BIND_PASSWORD. ldap_start_tls: "on" for an ldap:// address.
+#
+#   backend: ldap
+#   ldap_servers: ldaps://ldap.firm.internal:636
+#   ldap_base_dn: ou=people,dc=firm,dc=internal
+#   ldap_bind_dn: cn=meridian,ou=services,dc=firm,dc=internal
+#   ldap_user_filter: (uid={})
+#   admin_group: meridian-admins
+#
+# `oidc` -- the firm's own OpenID Connect provider. The issuer exactly as the
+# provider states it; the client secret, if any, from
+# MERIDIAN_OIDC_CLIENT_SECRET.
+#
+#   backend: oidc
+#   oidc_issuer: https://login.firm.example
+#   oidc_client_id: meridian
+#   oidc_groups_claim: groups
+#   admin_group: meridian-admins
+
+# Where a browser reaches this deployment. A firm's own provider sends people
+# back to it.
 dashboard_url: https://meridian.firm.example
-zitadel_url: https://id.firm.example

@@ -22,7 +22,7 @@ const PAGE: &str = "\
 <label>Host<input name=\"db_host\" value=\"\" placeholder=\"postgres\"></label>\
 <label>Port<input name=\"db_port\" value=\"5432\" placeholder=\"5432\"></label>\
 <label>Serving password<input type=\"password\" name=\"db_serving_password\" autocomplete=\"off\"></label>\
-<label>Backend<select name=\"backend\"><option value=\"bundled\">Bundled</option></select></label>\
+<label>How people sign in<select name=\"backend\"><option value=\"local\">An account here</option></select></label>\
 <button formaction=\"/first-run/check\">Test</button>\
 <button formaction=\"/first-run/apply\">Apply</button>\
 </form>";
@@ -168,7 +168,7 @@ fn a_typo_is_refused_against_the_form_rather_than_posted_as_nothing() {
 
 #[test]
 fn credentials_come_from_the_environment_and_the_rest_from_the_file() {
-    let params = params_from("db_host: postgres\ndb_port: 5432\nbackend: bundled\n").unwrap();
+    let params = params_from("db_host: postgres\ndb_port: 5432\nbackend: local\n").unwrap();
     let (fields, credentials) = asked_for(PAGE);
 
     let posted = answers(&params, &fields, &credentials, &|named| {
@@ -182,8 +182,8 @@ fn credentials_come_from_the_environment_and_the_rest_from_the_file() {
 
 #[test]
 fn a_credential_the_environment_does_not_hold_is_left_to_the_wizard_to_refuse() {
-    // The bundled directory leaves the firm's own provider's fields empty, and
-    // an empty credential for a route nobody chose is correct.
+    // Choosing one way to sign in leaves the other two's fields empty, and an
+    // empty credential for a route nobody chose is correct.
     let params = params_from("db_host: postgres\n").unwrap();
     let (fields, credentials) = asked_for(PAGE);
 
@@ -195,13 +195,13 @@ fn a_credential_the_environment_does_not_hold_is_left_to_the_wizard_to_refuse() 
 #[test]
 fn the_wizards_findings_are_read_back_as_it_lists_them() {
     let page = "<ul class=\"refusal\"><li>the serving role may create tables</li>\
-                <li>zitadel&#39;s database refused the login</li></ul>";
+                <li>this deployment could not sign in to the directory</li></ul>";
 
     assert_eq!(
         findings(page),
         vec![
             "the serving role may create tables".to_string(),
-            "zitadel's database refused the login".to_string(),
+            "this deployment could not sign in to the directory".to_string(),
         ]
     );
     assert!(!passes(page));

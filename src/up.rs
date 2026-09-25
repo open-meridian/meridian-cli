@@ -250,9 +250,9 @@ pub fn answers(
             Some(secret) => {
                 answers.insert(name.clone(), secret);
             }
-            // Not a refusal: the bundled directory leaves the firm's own
-            // provider's fields empty, and an empty credential for a route
-            // nobody chose is correct. The wizard's own check is what says
+            // Not a refusal: choosing one way to sign in leaves the other
+            // two's fields empty, and an empty credential for a route nobody
+            // chose is correct. The wizard's own check is what says
             // whether an answer is missing.
             None => continue,
         }
