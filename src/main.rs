@@ -4,9 +4,11 @@
 //! deployment's own wizard are the whole path there, and anything this makes
 //! convenient is possible without it (spec/the-cli, requirement 16).
 
+mod connect;
 mod doctor;
 mod machine;
 mod plugin;
+mod sessions;
 mod up;
 
 use doctor::Intended;
@@ -17,6 +19,9 @@ meridian -- bringing a Meridian deployment up
   meridian doctor            can this machine and this cluster run a deployment?
   meridian up                install the chart, and open this deployment's wizard
   meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>
+  meridian connect <address> sign in to a deployment's dashboard, and keep the session
+  meridian sign-out [<address>]
+                             end that session, here and at the deployment
 
 Both:
   -n, --namespace <name>    where the deployment goes (default: meridian)
@@ -43,6 +48,10 @@ up:
 plugin new:
       --into <dir>          where to write it (default: ./<name>). Never somewhere
                             that already exists
+
+connect:
+  <address> is the dashboard's: https://<host>, or http://127.0.0.1:<port> for a
+  local one. The sign-in opens in your browser; this never takes a password.
 ";
 
 struct Arguments {
@@ -85,9 +94,9 @@ fn parse(said: Vec<String>) -> Result<Arguments, String> {
 
     while let Some(argument) = said.next() {
         if !argument.starts_with('-') {
-            // Only `plugin` takes words. Anywhere else a stray one is refused
+            // Only these take words. Anywhere else a stray one is refused
             // rather than ignored, as it always was.
-            if command == "plugin" {
+            if matches!(command.as_str(), "plugin" | "connect" | "sign-out") {
                 words.push(argument);
                 continue;
             }
@@ -198,6 +207,8 @@ async fn main() {
         }
         "up" => std::process::exit(brought_up(&arguments, intended).await),
         "plugin" => std::process::exit(plugin_command(&arguments)),
+        "connect" => std::process::exit(connect_command(&arguments).await),
+        "sign-out" => std::process::exit(sign_out_command(&arguments).await),
         "-h" | "--help" | "help" | "" => print!("{USAGE}"),
         other => {
             eprintln!("meridian: {other} is not a command\n\n{USAGE}");
@@ -231,6 +242,150 @@ fn plugin_command(arguments: &Arguments) -> i32 {
             2
         }
     }
+}
+
+/// `meridian connect <address>`: W6.13 from this side.
+async fn connect_command(arguments: &Arguments) -> i32 {
+    let [given] = arguments.words.as_slice() else {
+        eprintln!("meridian: connect takes the dashboard's address\n\n{USAGE}");
+        return 2;
+    };
+    let address = match connect::address(given) {
+        Ok(address) => address,
+        Err(refusal) => {
+            eprintln!("meridian connect: {refusal}");
+            return 2;
+        }
+    };
+    let within = match sessions::directory() {
+        Ok(within) => within,
+        Err(refusal) => {
+            eprintln!("meridian connect: {refusal}");
+            return 1;
+        }
+    };
+
+    let (listener, redirect_uri) = match connect::listen().await {
+        Ok(listening) => listening,
+        Err(refusal) => {
+            eprintln!("meridian connect: {refusal}");
+            return 1;
+        }
+    };
+    let pkce = connect::Pkce::new();
+    let state = connect::state();
+    let url = connect::authorize_url(&address, &redirect_uri, &pkce, &state);
+    println!("Sign in to {address} in your browser. If it did not open, go to:\n\n  {url}\n");
+    connect::open_browser(&url);
+
+    let code = match connect::returned(&listener, &state, connect::WAIT).await {
+        Ok(connect::Returned::Code(code)) => code,
+        Ok(connect::Returned::Declined) => {
+            eprintln!("meridian connect: not connected; the sign-in was declined or refused.");
+            return 1;
+        }
+        Err(refusal) => {
+            eprintln!("meridian connect: {refusal}. Run it again when you are ready.");
+            return 1;
+        }
+    };
+    let issued = match connect::exchange(&address, &code, &pkce.verifier, &redirect_uri).await {
+        Ok(issued) => issued,
+        Err(refusal) => {
+            eprintln!("meridian connect: {refusal}");
+            return 1;
+        }
+    };
+
+    // One session per deployment on this machine: the one this replaces is
+    // ended at the deployment, not left to lapse there on its own.
+    if let Some(earlier) = sessions::read(&within, &address) {
+        let _ = connect::sign_out(&address, &earlier.session).await;
+    }
+    let held = sessions::Held {
+        address: address.clone(),
+        session: issued.session,
+        subject: issued.subject,
+        expires_at: issued.expires_at,
+    };
+    if let Err(refusal) = sessions::write(&within, &held) {
+        // Connected and unable to keep it: end it rather than leave a live
+        // session nobody holds.
+        let _ = connect::sign_out(&address, &held.session).await;
+        eprintln!("meridian connect: {refusal}");
+        return 1;
+    }
+    println!(
+        "Connected to {address} as {}. The session ends after 30 minutes unused, \
+         and at {} at the latest.",
+        held.subject, held.expires_at
+    );
+    0
+}
+
+/// `meridian sign-out [<address>]`: W6.14 from this side.
+async fn sign_out_command(arguments: &Arguments) -> i32 {
+    let within = match sessions::directory() {
+        Ok(within) => within,
+        Err(refusal) => {
+            eprintln!("meridian sign-out: {refusal}");
+            return 1;
+        }
+    };
+    let held = match arguments.words.as_slice() {
+        [given] => {
+            let address = match connect::address(given) {
+                Ok(address) => address,
+                Err(refusal) => {
+                    eprintln!("meridian sign-out: {refusal}");
+                    return 2;
+                }
+            };
+            match sessions::read(&within, &address) {
+                Some(held) => held,
+                None => {
+                    println!("Not connected to {address}.");
+                    return 0;
+                }
+            }
+        }
+        [] => {
+            let mut every = sessions::all(&within);
+            match every.len() {
+                0 => {
+                    println!("Not connected to anything.");
+                    return 0;
+                }
+                1 => every.remove(0),
+                _ => {
+                    eprintln!("meridian sign-out: connected to more than one; say which:");
+                    for held in &every {
+                        eprintln!("  meridian sign-out {}", held.address);
+                    }
+                    return 2;
+                }
+            }
+        }
+        _ => {
+            eprintln!("meridian: sign-out takes at most one address\n\n{USAGE}");
+            return 2;
+        }
+    };
+
+    let told = connect::sign_out(&held.address, &held.session).await;
+    if let Err(refusal) = sessions::forget(&within, &held.address) {
+        eprintln!("meridian sign-out: could not forget the session: {refusal}");
+        return 1;
+    }
+    match told {
+        Ok(()) => println!("Signed out of {}.", held.address),
+        // Forgotten here either way. What cannot be reached cannot be told,
+        // and the session lapses there by itself within 30 minutes.
+        Err(refusal) => println!(
+            "Forgotten here, but {refusal}; the session there lapses on its own within 30 minutes."
+        ),
+    }
+    0
 }
 
 async fn examined(intended: &Intended) -> (String, i32) {
@@ -366,6 +521,17 @@ mod tests {
         assert_eq!(plugin.words, ["new", "snaptrade"]);
         assert_eq!(plugin.value("--into", "--into"), Some("/tmp/s"));
         assert!(parse(said("doctor snaptrade")).is_err());
+    }
+
+    #[test]
+    fn connect_and_sign_out_take_an_address() {
+        assert_eq!(
+            parse(said("connect https://dash.firm.example"))
+                .unwrap()
+                .words,
+            ["https://dash.firm.example"]
+        );
+        assert!(parse(said("sign-out")).unwrap().words.is_empty());
     }
 
     #[test]

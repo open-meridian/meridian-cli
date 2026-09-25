@@ -952,11 +952,14 @@ name = "meridian-cli"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "meridian-conductor",
+ "rand 0.8.8",
  "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "tokio",
 ]
 
