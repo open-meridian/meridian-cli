@@ -116,10 +116,13 @@ pub fn next_steps(name: &str, into: &Path) -> String {
         "Made {name} in {into}, on the Python SDK (open-meridian).\n\
          \n\
          \x20 cd {into}\n\
-         \x20 docker build -t {name} .\n\
+         \x20 meridian plugin upload\n\
+         \x20 meridian plugin launch {name} 0.1.0 --instance {name}\n\
          \n\
-         Launch it in a deployment as a `sidecars[]` entry: its image, and the role its\n\
-         grants come from. It reaches its sidecar and nothing else.\n",
+         Upload builds its image here and puts it in the catalogue of the deployment\n\
+         `meridian connect` signed you in to; launch shows the roles and tags its\n\
+         pyproject.toml asks for, and runs it once you approve them. It reaches its\n\
+         sidecar and nothing else.\n",
         into = into.display()
     )
 }

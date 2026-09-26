@@ -4,6 +4,7 @@
 //! deployment's own wizard are the whole path there, and anything this makes
 //! convenient is possible without it (spec/the-cli, requirement 16).
 
+mod catalogue;
 mod connect;
 mod doctor;
 mod machine;
@@ -19,6 +20,11 @@ meridian -- bringing a Meridian deployment up
   meridian doctor            can this machine and this cluster run a deployment?
   meridian up                install the chart, and open this deployment's wizard
   meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>
+  meridian plugin upload     build the plugin here and put it in the deployment's catalogue
+  meridian plugin list       the catalogue: versions uploaded, and what is launched
+  meridian plugin launch <name> <version> --instance <id>
+                             run a version, once you approve the roles and tags it asks for
+  meridian plugin stop <id>  stop a launched instance
   meridian connect <address> sign in to a deployment's dashboard, and keep the session
   meridian sign-out [<address>]
                              end that session, here and at the deployment
@@ -49,6 +55,15 @@ plugin new:
       --into <dir>          where to write it (default: ./<name>). Never somewhere
                             that already exists
 
+plugin upload, list, launch, stop: as the deployment's administrator, through the
+session `meridian connect` keeps
+      --deployment <addr>   which connected deployment, when there is more than one
+      --dir <dir>           upload: the plugin's directory (default: .). Its image is
+                            built with docker, from its own Dockerfile
+      --instance <id>       launch: the instance's name, which its page is found by
+      --yes                 launch: approve what it asks for without being asked. For
+                            a script that has already read it
+
 connect:
   <address> is the dashboard's: https://<host>, or http://127.0.0.1:<port> for a
   local one. The sign-in opens in your browser; this never takes a password.
@@ -63,8 +78,11 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 14] = [
+const TAKES_A_VALUE: [&str; 17] = [
     "--into",
+    "--deployment",
+    "--dir",
+    "--instance",
     "-n",
     "--namespace",
     "--platform",
@@ -83,7 +101,7 @@ const TAKES_A_VALUE: [&str; 14] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 4] = ["--no-doctor", "-h", "--help", "-v"];
+const SWITCHES: [&str; 5] = ["--no-doctor", "--yes", "-h", "--help", "-v"];
 
 fn parse(said: Vec<String>) -> Result<Arguments, String> {
     let mut said = said.into_iter();
@@ -206,7 +224,7 @@ async fn main() {
             std::process::exit(code);
         }
         "up" => std::process::exit(brought_up(&arguments, intended).await),
-        "plugin" => std::process::exit(plugin_command(&arguments)),
+        "plugin" => std::process::exit(plugin_command(&arguments).await),
         "connect" => std::process::exit(connect_command(&arguments).await),
         "sign-out" => std::process::exit(sign_out_command(&arguments).await),
         "-h" | "--help" | "help" | "" => print!("{USAGE}"),
@@ -217,9 +235,16 @@ async fn main() {
     }
 }
 
-/// `meridian plugin new <name>`, and nothing else under `plugin` yet: upload,
-/// test and share are the spec's, and come with the local registry.
-fn plugin_command(arguments: &Arguments) -> i32 {
+/// `meridian plugin new <name>`, and the catalogue's commands: upload, list,
+/// launch and stop (spec/the-local-plugin-registry). Test and share are the
+/// spec's, and not built yet.
+async fn plugin_command(arguments: &Arguments) -> i32 {
+    let words: Vec<&str> = arguments.words.iter().map(String::as_str).collect();
+    if let Some(&verb) = words.first() {
+        if matches!(verb, "upload" | "list" | "launch" | "stop") {
+            return catalogue_command(arguments, &words).await;
+        }
+    }
     match arguments.words.as_slice() {
         [new, name] if new == "new" => {
             let into = arguments
@@ -238,10 +263,131 @@ fn plugin_command(arguments: &Arguments) -> i32 {
             }
         }
         _ => {
-            eprintln!("meridian: plugin takes `new <name>`\n\n{USAGE}");
+            eprintln!("meridian: plugin takes `new <name>`, `upload`, `list`, `launch <name> <version>` or `stop <instance>`\n\n{USAGE}");
             2
         }
     }
+}
+
+/// The session a catalogue command acts through: the one held, or the one
+/// `--deployment` names.
+fn held_session(arguments: &Arguments) -> Result<sessions::Held, String> {
+    let within = sessions::directory()?;
+    if let Some(given) = arguments.value("--deployment", "--deployment") {
+        let address = connect::address(given)?;
+        return sessions::read(&within, &address).ok_or(format!(
+            "not connected to {address}: `meridian connect {address}` first"
+        ));
+    }
+    let mut every = sessions::all(&within);
+    match every.len() {
+        0 => Err("not connected to a deployment: `meridian connect <address>` first".into()),
+        1 => Ok(every.remove(0)),
+        _ => Err(format!(
+            "connected to more than one deployment; say which with --deployment: {}",
+            every
+                .iter()
+                .map(|held| held.address.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// Asked at the terminal; anything but yes is no.
+fn approved(question: &str) -> bool {
+    use std::io::{BufRead as _, IsTerminal as _, Write as _};
+    if !std::io::stdin().is_terminal() {
+        return false;
+    }
+    print!("{question} [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut answer);
+    matches!(answer.trim(), "y" | "Y" | "yes" | "Yes")
+}
+
+async fn catalogue_command(arguments: &Arguments, words: &[&str]) -> i32 {
+    let held = match held_session(arguments) {
+        Ok(held) => held,
+        Err(refusal) => {
+            eprintln!("meridian plugin: {refusal}");
+            return 2;
+        }
+    };
+    let (address, session) = (held.address.as_str(), held.session.as_str());
+    let done = match words {
+        ["upload"] => {
+            let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
+            catalogue::upload(address, session, &dir)
+                .await
+                .map(|digest| format!("Uploaded to {address}, as {digest}.\n"))
+        }
+        ["list"] => catalogue::catalogue(address, session)
+            .await
+            .map(|held| catalogue::listed(&held)),
+        ["launch", name, version] => {
+            let Some(instance) = arguments.value("--instance", "--instance") else {
+                eprintln!("meridian plugin launch: --instance <id> names what it runs as");
+                return 2;
+            };
+            if !catalogue::is_name(instance) {
+                eprintln!("meridian plugin launch: `{instance}` is not an instance's name: lowercase letters, digits and single hyphens");
+                return 2;
+            }
+            launched(arguments, address, session, name, version, instance).await
+        }
+        ["stop", instance] => catalogue::stop(address, session, instance)
+            .await
+            .map(|_| format!("Stopped {instance}.\n")),
+        _ => {
+            eprintln!("meridian: plugin takes `upload`, `list`, `launch <name> <version>` or `stop <instance>`\n\n{USAGE}");
+            return 2;
+        }
+    };
+    match done {
+        Ok(said) => {
+            print!("{said}");
+            0
+        }
+        Err(refusal) => {
+            eprintln!("meridian plugin {}: {refusal}", words[0]);
+            1
+        }
+    }
+}
+
+/// W8.3: what the version asks for, shown, and approved by the person.
+async fn launched(
+    arguments: &Arguments,
+    address: &str,
+    session: &str,
+    name: &str,
+    version: &str,
+    instance: &str,
+) -> Result<String, String> {
+    let held = catalogue::catalogue(address, session).await?;
+    let (roles, tags) = catalogue::declared(&held, name, version).ok_or(format!(
+        "{name} {version} is not in {address}'s catalogue: `meridian plugin list` shows what is"
+    ))?;
+    let listed = |names: &[String]| {
+        if names.is_empty() {
+            "none".to_string()
+        } else {
+            names.join(", ")
+        }
+    };
+    println!("{name} {version} asks for");
+    println!("  roles: {}", listed(&roles));
+    println!("  tags:  {}", listed(&tags));
+    if !arguments.set("--yes") && !approved(&format!("Launch it as {instance}, with these?")) {
+        return Err(
+            "not approved, so not launched. Where there is no terminal to ask at, --yes approves"
+                .into(),
+        );
+    }
+    catalogue::launch(address, session, name, version, instance, &roles, &tags).await?;
+    Ok(format!("Launched {instance}: {name} {version}.\n"))
 }
 
 /// `meridian connect <address>`: W6.13 from this side.
@@ -532,6 +678,22 @@ mod tests {
             ["https://dash.firm.example"]
         );
         assert!(parse(said("sign-out")).unwrap().words.is_empty());
+    }
+
+    #[test]
+    fn a_launch_takes_its_instance_and_its_approval() {
+        let launch = parse(said(
+            "plugin launch reference-plugin 0.1.0 --instance ref --deployment http://127.0.0.1:8443 --yes",
+        ))
+        .unwrap();
+        assert_eq!(launch.words, ["launch", "reference-plugin", "0.1.0"]);
+        assert_eq!(launch.value("--instance", "--instance"), Some("ref"));
+        assert_eq!(
+            launch.value("--deployment", "--deployment"),
+            Some("http://127.0.0.1:8443")
+        );
+        assert!(launch.set("--yes"));
+        assert!(parse(said("plugin upload --dir")).is_err());
     }
 
     #[test]
