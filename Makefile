@@ -3,6 +3,13 @@ SHELL := /bin/bash
 RUST_VERSION := 1.90
 DOCKER := DOCKER_BUILDKIT=1 docker
 
+# A pre-push hook runs with GIT_DIR naming this repository, absolutely when
+# pushed from a worktree, and the template's `git init`, `fetch` and
+# `checkout` in .sdk-scratch would then act on this repository instead:
+# staging meridian-python's template/ here and marking this clone shallow.
+unexport GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
+         GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
+
 .PHONY: help ci-local ci-local-deep build test lint fmt lock install-hooks e2e-up \
         vendor-template check-vendored-template check-install check-c-deps
 
