@@ -5,8 +5,10 @@
 //! Upload builds the plugin's image on this machine, as its Dockerfile says
 //! -- on the base image of the SDK it pins -- reads it back with `docker
 //! save`, and pushes it into the deployment's registry through the
-//! dashboard, blob by blob in the registry's own protocol, skipping every
-//! blob the registry already holds: the base, after the first plugin on it.
+//! dashboard, blob by blob in the registry's own protocol, sending no blob the
+//! registry already holds. The registry keeps blobs per repository, so one
+//! another plugin's repository holds -- the SDK's base, after the first
+//! plugin on it -- is mounted from there rather than sent again.
 //! Then it sends the metadata from the plugin's pyproject.toml and the
 //! image's digest, and the conductor records the version. What a plugin may
 //! do is its roles', from that metadata; nothing here writes a grant.
@@ -289,25 +291,48 @@ async fn push(
     image: &Image,
 ) -> Result<String, String> {
     let http = client()?;
-    let repository = format!("{address}/terminal/registry/v2/plugins/{}", metadata.name);
+    let plugins = format!("{address}/terminal/registry/v2/plugins");
+    let repository = format!("{plugins}/{}", metadata.name);
+    let holds = |url: String| {
+        let http = http.clone();
+        async move {
+            http.head(url)
+                .bearer_auth(session)
+                .send()
+                .await
+                .map(|answer| answer.status().is_success())
+                .map_err(|failed| format!("could not reach {address}: {failed}"))
+        }
+    };
+    let others = others(address, session, &metadata.name).await;
     for (digest, path) in &image.blobs {
-        let held = http
-            .head(format!("{repository}/blobs/{digest}"))
-            .bearer_auth(session)
-            .send()
-            .await
-            .map_err(|failed| format!("could not reach {address}: {failed}"))?;
-        if held.status().is_success() {
+        if holds(format!("{repository}/blobs/{digest}")).await? {
             println!("  {digest}: already there");
             continue;
         }
+        let mut from = None;
+        for other in &others {
+            if holds(format!("{plugins}/{other}/blobs/{digest}")).await? {
+                from = Some(other.as_str());
+                break;
+            }
+        }
         let started = http
-            .post(format!("{repository}/blobs/uploads/"))
+            .post(match from {
+                Some(other) => mount_url(&repository, digest, other),
+                None => format!("{repository}/blobs/uploads/"),
+            })
             .bearer_auth(session)
             .send()
             .await
             .map_err(|failed| format!("could not reach {address}: {failed}"))?;
         let status = started.status();
+        // Mounted: linked into this repository, nothing sent. A registry that
+        // will not mount opens an upload instead, which is sent as ever.
+        if let (Some(other), reqwest::StatusCode::CREATED) = (from, status) {
+            println!("  {digest}: already there, in plugins/{other}");
+            continue;
+        }
         let location = started
             .headers()
             .get("location")
@@ -356,6 +381,28 @@ async fn push(
         ));
     }
     Ok(image.digest.clone())
+}
+
+/// The other plugins in the catalogue, whose repositories may hold blobs
+/// this one shares. None when the catalogue cannot be read: then every blob
+/// is sent, which is slower and no less right.
+async fn others(address: &str, session: &str, name: &str) -> Vec<String> {
+    let held = catalogue(address, session).await.unwrap_or_default();
+    let named: std::collections::BTreeSet<String> = held["versions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v["name"].as_str())
+        .filter(|other| *other != name && is_name(other))
+        .map(String::from)
+        .collect();
+    named.into_iter().collect()
+}
+
+/// Starting an upload that is a mount: `digest`, linked from another
+/// plugin's repository into this one.
+pub fn mount_url(repository: &str, digest: &str, other: &str) -> String {
+    format!("{repository}/blobs/uploads/?mount={digest}&from=plugins/{other}")
 }
 
 async fn record(

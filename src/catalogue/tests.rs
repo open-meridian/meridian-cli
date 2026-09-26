@@ -210,3 +210,16 @@ fn a_launch_approves_what_the_version_declared() {
     assert!(said.contains("p 0.2.0  roles: none  tags: none"), "{said}");
     assert!(said.contains("p  p 0.1.0  failed: no image"), "{said}");
 }
+
+#[test]
+fn a_blob_another_plugin_holds_is_mounted_from_its_repository() {
+    assert_eq!(
+        mount_url(
+            "http://localhost:18480/terminal/registry/v2/plugins/reference-custody",
+            "sha256:ab",
+            "reference-plugin"
+        ),
+        "http://localhost:18480/terminal/registry/v2/plugins/reference-custody\
+         /blobs/uploads/?mount=sha256:ab&from=plugins/reference-plugin"
+    );
+}
