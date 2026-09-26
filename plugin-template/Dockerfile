@@ -1,12 +1,16 @@
 # The plugin's image. It runs beside a sidecar in the deployment's cluster, and
 # reaches nothing but that sidecar.
-FROM python:3.12-slim
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
+#
+# Built on the base image for the SDK this plugin pins: Python and
+# open-meridian, the same version as pyproject.toml's, already installed. So
+# the image's own layers are this plugin and whatever it needs besides, and an
+# upload sends only those. Move the two together when moving to a new SDK.
+#
+# BASE is for building against a base made locally rather than a released one.
+ARG BASE=ghcr.io/open-meridian/plugin-python:0.2.0
+FROM ${BASE}
 WORKDIR /plugin
 COPY . .
-# PIP_FIND_LINKS, if given, is a directory of wheels to prefer -- an SDK built
-# locally rather than taken from PyPI. Unset, everything comes from PyPI.
-ARG PIP_FIND_LINKS
 RUN pip install .
 USER 65532
 CMD ["reference-plugin"]

@@ -9,4 +9,5 @@ deployment launches it, never from here.
     docker build -t reference-plugin .
 
 Then launch it in a deployment as a `sidecars[]` entry naming this image and
-the role its grants come from.
+the roles its grants come from. It holds none as it stands, and is admitted
+with no topics until it names some.

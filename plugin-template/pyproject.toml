@@ -10,10 +10,23 @@ requires-python = ">=3.11"
 # The SDK and nothing else of Meridian's, pinned exactly: the sidecar this runs
 # beside speaks one version of the contract, and a range would let a rebuild
 # pick up another.
-dependencies = ["open-meridian==0.1.0"]
+dependencies = ["open-meridian==0.2.0"]
 
 [project.scripts]
 reference-plugin = "reference_plugin.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# What this plugin says about itself, which `meridian plugin upload` sends and
+# a deployment admin approves before it runs (W8). Declarations, not grants.
+[tool.meridian]
+# Roles from the deployment's fixed list -- ccm, compliance, custody, dgm, ems,
+# match, oms, operations, portfolio, reporting, servicing, settlement, signal
+# -- and its grants are theirs. None, as here, is a plugin admitted with no
+# topics.
+roles = []
+# Its own names for its parts, which people are granted at read or write.
+tags = []
+# Whether it serves a page through its sidecar.
+interface = true

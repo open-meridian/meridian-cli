@@ -18,7 +18,7 @@ mod tests;
 
 /// The template, file by file, as it sits in `plugin-template/`. A test fails
 /// if a file there is missing from this list, so a new one cannot be dropped.
-const TEMPLATE: [(&str, &str); 6] = [
+const TEMPLATE: [(&str, &str); 7] = [
     (
         ".dockerignore",
         include_str!("../plugin-template/.dockerignore"),
@@ -36,6 +36,10 @@ const TEMPLATE: [(&str, &str); 6] = [
     (
         "src/reference_plugin/__main__.py",
         include_str!("../plugin-template/src/reference_plugin/__main__.py"),
+    ),
+    (
+        "src/reference_plugin/page.py",
+        include_str!("../plugin-template/src/reference_plugin/page.py"),
     ),
 ];
 
