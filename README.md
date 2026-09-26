@@ -9,6 +9,29 @@ meridian up                  # install the chart, then open the wizard
 meridian up --params f.yaml  # the same, answered from a file
 ```
 
+## Install
+
+On macOS (Apple silicon or Intel) or Linux (x86_64 or arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/open-meridian/meridian-cli/main/install.sh | sh
+```
+
+It downloads this machine's binary from the latest release, checks it against
+the `.sha256` published beside it, and puts it in `~/.local/bin` -- no `sudo`.
+`MERIDIAN_INSTALL_DIR` puts it elsewhere and `MERIDIAN_VERSION` picks a
+release. Then:
+
+```
+meridian --version           # which release this is
+meridian upgrade             # replace it with the latest; --to <v> for another
+meridian uninstall           # end every session it holds, and remove it
+```
+
+Nothing is looked up unless you ask: `meridian` never checks for a newer
+release on its own. The checksum catches a broken download, not a compromised
+release; signing is not built yet.
+
 **What it is not: the way to install in a cloud.** A marketplace listing
 installs the chart and the deployment's own wizard does the rest. Nothing here
 is required for that, and anything this makes convenient is possible without

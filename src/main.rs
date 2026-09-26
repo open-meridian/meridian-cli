@@ -9,6 +9,7 @@ mod connect;
 mod doctor;
 mod machine;
 mod plugin;
+mod release;
 mod sessions;
 mod up;
 
@@ -28,6 +29,9 @@ meridian -- bringing a Meridian deployment up
   meridian connect <address> sign in to a deployment's dashboard, and keep the session
   meridian sign-out [<address>]
                              end that session, here and at the deployment
+  meridian upgrade           replace this binary with the latest release
+  meridian uninstall         end every session this holds, and remove it
+  meridian --version         which release this is
 
 Both:
   -n, --namespace <name>    where the deployment goes (default: meridian)
@@ -64,6 +68,15 @@ session `meridian connect` keeps
       --yes                 launch: approve what it asks for without being asked. For
                             a script that has already read it
 
+upgrade:
+      --to <version>        a named release instead of the latest, older or newer.
+                            Nothing is looked up unless asked: this never checks
+                            for a newer release on its own
+
+uninstall:
+      --yes                 remove without being asked. Sessions with deployments
+                            it cannot reach are forgotten here and lapse there
+
 connect:
   <address> is the dashboard's: https://<host>, or http://127.0.0.1:<port> for a
   local one. The sign-in opens in your browser; this never takes a password.
@@ -78,8 +91,9 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 17] = [
+const TAKES_A_VALUE: [&str; 18] = [
     "--into",
+    "--to",
     "--deployment",
     "--dir",
     "--instance",
@@ -227,6 +241,9 @@ async fn main() {
         "plugin" => std::process::exit(plugin_command(&arguments).await),
         "connect" => std::process::exit(connect_command(&arguments).await),
         "sign-out" => std::process::exit(sign_out_command(&arguments).await),
+        "upgrade" => std::process::exit(upgrade_command(&arguments).await),
+        "uninstall" => std::process::exit(uninstall_command(&arguments).await),
+        "--version" | "version" => println!("{}", release::version_line()),
         "-h" | "--help" | "help" | "" => print!("{USAGE}"),
         other => {
             eprintln!("meridian: {other} is not a command\n\n{USAGE}");
@@ -535,6 +552,112 @@ async fn sign_out_command(arguments: &Arguments) -> i32 {
             "Forgotten here, but {refusal}; the session there lapses on its own within 30 minutes."
         ),
     }
+    0
+}
+
+/// `meridian upgrade [--to <version>]` (spec/the-cli, ruling 8).
+async fn upgrade_command(arguments: &Arguments) -> i32 {
+    match upgraded(arguments).await {
+        Ok(said) => {
+            println!("{said}");
+            0
+        }
+        Err(refusal) => {
+            eprintln!("meridian upgrade: {refusal}");
+            1
+        }
+    }
+}
+
+async fn upgraded(arguments: &Arguments) -> Result<String, String> {
+    let base = release::releases()?;
+    let exe = release::this_binary()?;
+    let tag = match arguments.value("--to", "--to") {
+        Some(named) => format!("v{}", named.trim_start_matches('v')),
+        None => release::latest(&base).await?,
+    };
+    let now = release::VERSION;
+    if release::compare(&tag, now) == std::cmp::Ordering::Equal {
+        return Ok(format!("meridian {now} is {tag} already; nothing to do."));
+    }
+    // Before anything is fetched: a directory it cannot write is said now,
+    // not after a download.
+    release::writable(exe.parent().ok_or("this binary is in no directory")?)?;
+    let bytes = release::download(&base, &tag).await?;
+    release::replace(&exe, &bytes)?;
+    let direction = match release::compare(&tag, now) {
+        std::cmp::Ordering::Less => "down",
+        _ => "up",
+    };
+    Ok(format!(
+        "meridian {now} -> {}: {direction}graded {}.",
+        tag.trim_start_matches('v'),
+        exe.display()
+    ))
+}
+
+/// `meridian uninstall [--yes]` (spec/the-cli, ruling 8): every session
+/// ended and forgotten, then the sessions directory, then the binary. A
+/// session left on disk after the binary is gone is a credential nobody
+/// would think to remove.
+async fn uninstall_command(arguments: &Arguments) -> i32 {
+    let (exe, within) = match (release::this_binary(), sessions::directory()) {
+        (Ok(exe), Ok(within)) => (exe, within),
+        (Err(refusal), _) | (_, Err(refusal)) => {
+            eprintln!("meridian uninstall: {refusal}");
+            return 1;
+        }
+    };
+    // Checked first, so nothing is ended if the binary cannot then go.
+    if let Err(refusal) = exe
+        .parent()
+        .ok_or_else(|| "this binary is in no directory".to_string())
+        .and_then(release::writable)
+    {
+        eprintln!("meridian uninstall: {refusal}");
+        return 1;
+    }
+    let held = sessions::all(&within);
+    println!("This removes:");
+    for session in &held {
+        println!(
+            "  your session with {}, ended there and here",
+            session.address
+        );
+    }
+    if within.exists() {
+        println!("  {}", within.display());
+    }
+    println!("  {}", exe.display());
+    if !arguments.set("--yes") && !approved("Remove them?") {
+        eprintln!("meridian uninstall: not approved, so nothing was removed. Where there is no terminal to ask at, --yes approves");
+        return 1;
+    }
+    for session in &held {
+        match connect::sign_out(&session.address, &session.session).await {
+            Ok(()) => println!("Signed out of {}.", session.address),
+            Err(refusal) => println!(
+                "Forgotten here, but {refusal}; the session with {} lapses there within 30 minutes.",
+                session.address
+            ),
+        }
+        let _ = sessions::forget(&within, &session.address);
+    }
+    if within.exists() {
+        if let Err(failed) = std::fs::remove_dir_all(&within) {
+            eprintln!("meridian uninstall: {}: {failed}", within.display());
+            return 1;
+        }
+        // Its parent too, when this made it and nothing else is in it.
+        if let Some(parent) = within.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+    if let Err(failed) = std::fs::remove_file(&exe) {
+        eprintln!("meridian uninstall: {}: {failed}", exe.display());
+        return 1;
+    }
+    println!("Removed meridian {}.", release::VERSION);
     0
 }
 

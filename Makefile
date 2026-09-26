@@ -4,20 +4,21 @@ RUST_VERSION := 1.90
 DOCKER := DOCKER_BUILDKIT=1 docker
 
 .PHONY: help ci-local ci-local-deep build test lint fmt lock install-hooks e2e-up \
-        vendor-template check-vendored-template
+        vendor-template check-vendored-template check-install
 
 help:
 	@echo "  make ci-local   run every gate (the pre-push gate, and what CI mirrors)"
 	@echo "  make build      compile the binary"
 	@echo "  make test       the unit tests: every check against a fake machine"
 	@echo "  make lint       rustfmt --check and clippy with warnings denied"
+	@echo "  make check-install  the install script, upgrade and uninstall, against stand-in releases"
 	@echo "  make fmt        apply rustfmt"
 	@echo "  make lock       regenerate Cargo.lock"
 	@echo "  make e2e-up     install into a throwaway namespace and answer the wizard"
 	@echo "  make vendor-template  move the scaffold \`plugin new\` writes to SDK_REV"
 
 # Local green is the completion signal; CI is confirmation.
-ci-local: check-vendored-template build test lint
+ci-local: check-vendored-template build test lint check-install
 	@echo
 	@echo "ci-local: GREEN"
 
@@ -68,6 +69,17 @@ lint:
 		|| { echo "lint FAILED; see it with:" >&2; \
 		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target lint --progress=plain ." >&2; exit 1; }
 	@echo "lint OK: formatting and clippy clean"
+
+# The install script, shellchecked, and run with `meridian upgrade` and
+# `uninstall` against a stand-in for GitHub's releases (spec/the-cli, ruling 8).
+check-install:
+	@$(DOCKER) build -f Dockerfile.rust --target shellcheck . >/dev/null 2>&1 \
+		|| { echo "check-install FAILED: shellcheck; see it with:" >&2; \
+		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target shellcheck --progress=plain ." >&2; exit 1; }
+	@$(DOCKER) build -f Dockerfile.rust --target install-test . >/dev/null 2>&1 \
+		|| { echo "check-install FAILED; see the output with:" >&2; \
+		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target install-test --progress=plain --no-cache-filter install-test ." >&2; exit 1; }
+	@echo "check-install OK: the install script, upgrade and uninstall, against stand-in releases"
 
 # Applied in a container and written back, because the host has no toolchain.
 fmt:

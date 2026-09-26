@@ -16,7 +16,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /w
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
 # What `meridian plugin new` writes, compiled into the binary.
 COPY plugin-template/ plugin-template/
@@ -51,6 +51,24 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/w/target \
     cargo build --locked --release && cp target/release/meridian /meridian
+
+# The install script, `meridian upgrade` and `uninstall`, against a stand-in
+# for GitHub's releases (tests/install). The real binary, from `release`, is
+# the one upgraded and uninstalled; tester is somebody who cannot write where
+# it lives.
+FROM debian:bookworm-slim AS install-test
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl python3 \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --create-home tester
+COPY --from=release /meridian /usr/local/bin/meridian
+COPY install.sh /w/install.sh
+COPY tests/install/ /w/tests/install/
+RUN sh /w/tests/install/run.sh
+
+FROM koalaman/shellcheck-alpine:v0.10.0 AS shellcheck
+COPY install.sh tests/install/run.sh /w/
+RUN shellcheck --shell=sh /w/install.sh /w/run.sh
 
 # The CLI as a person runs it, for the end-to-end run: the binary and the two
 # tools it drives, helm and kubectl, at pinned versions and nothing else. It
