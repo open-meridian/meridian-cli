@@ -61,5 +61,10 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=alpine/helm:3.16.2 /usr/bin/helm /usr/local/bin/helm
 COPY --from=registry.k8s.io/kubectl:v1.35.0 /bin/kubectl /usr/local/bin/kubectl
+# `meridian plugin upload` builds with docker, as it does on a person's own
+# machine. The cluster run gives the pod the node's daemon, so these are the
+# client alone: static binaries, and buildx, which `docker build` now is.
+COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker:29-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 COPY --from=release /meridian /usr/local/bin/meridian
 ENTRYPOINT ["meridian"]

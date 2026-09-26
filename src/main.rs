@@ -387,7 +387,11 @@ async fn launched(
         );
     }
     catalogue::launch(address, session, name, version, instance, &roles, &tags).await?;
-    Ok(format!("Launched {instance}: {name} {version}.\n"))
+    // A deployment admin opens any plugin's page; anybody else, one they
+    // are granted a part of (spec/deployment-dashboard-and-access, ruling 19).
+    Ok(format!(
+        "Launched {instance}: {name} {version}.\nIts page, if it serves one: {address}/plugins/{instance}\n"
+    ))
 }
 
 /// `meridian connect <address>`: W6.13 from this side.
