@@ -44,6 +44,19 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/w/target \
     cargo clippy --locked --all-targets -- -D warnings
 
+# spec/the-cli, requirement 2: aws-lc-rs is the one dependency that compiles C,
+# on any target. What builds C does it through cc, cmake or pkg-config, so a
+# second C library shows up here as a second crate depending on one of them.
+FROM base AS c-deps
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    found=$(for t in cc cmake pkg-config; do \
+              cargo tree -q --locked --target all -e normal,build -i "$t" --depth 1 --prefix none 2>/dev/null; \
+            done | cut -d' ' -f1 | grep -vxE 'cc|cmake|pkg-config' | sort -u | tr '\n' ' ') \
+ && if [ "$found" != "aws-lc-sys " ]; then \
+      echo "C is compiled by: ${found:-nothing}; spec/the-cli requirement 2 names aws-lc-sys alone" >&2; exit 1; \
+    fi
+
 # One artifact per target, built on that target's own runner: the release
 # workflow runs this stage and takes the binary out of it.
 FROM base AS release

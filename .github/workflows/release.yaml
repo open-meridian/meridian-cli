@@ -5,12 +5,10 @@
 # here runs on a push to main.
 #
 # Linux is statically linked against musl, so the binary runs on whatever a
-# firm's build agent happens to be. Requirement 2 of spec/the-cli wants every
-# dependency pure Rust so that needs no C toolchain; it does not hold today --
-# rustls's providers, aws-lc-rs (through reqwest, here and in meridian-core)
-# and ring (through the NATS client), compile C -- so the Linux runners are
-# given musl's compiler and cmake. design/installing-and-upgrading-the-cli
-# records it.
+# firm's build agent happens to be. One dependency compiles C, the TLS
+# provider aws-lc-rs (spec/the-cli, requirement 2; `make check-c-deps` holds
+# it to one), so the Linux runners are given musl's C compiler and nothing
+# else. macOS has Xcode's.
 #
 # A tag publishes. Run by hand (workflow_dispatch) it builds every target and
 # publishes nothing: the way to find out a release would build before cutting
@@ -46,9 +44,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: musl's C compiler, and cmake, for the C the TLS providers compile
+      - name: musl's C compiler, for the C the TLS provider compiles
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
 
       - run: rustup toolchain install 1.90 --profile minimal
       - run: rustup target add ${{ matrix.target }} --toolchain 1.90
