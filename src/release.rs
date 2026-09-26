@@ -148,6 +148,37 @@ pub fn replace(exe: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// The header every request to a deployment names this CLI's version in
+/// (W6.13): the deployment refuses one it cannot serve.
+pub const VERSION_HEADER: &str = "meridian-cli-version";
+
+/// Default headers for a client that talks to deployments.
+pub fn naming_this_version() -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        VERSION_HEADER,
+        reqwest::header::HeaderValue::from_static(VERSION),
+    );
+    headers
+}
+
+/// A deployment's refusal of this CLI's version, as the person reads it: its
+/// reason, and what to do about it. None for any other answer.
+pub fn version_refused(status: reqwest::StatusCode, body: &str) -> Option<String> {
+    if status != reqwest::StatusCode::BAD_REQUEST {
+        return None;
+    }
+    let said: serde_json::Value = serde_json::from_str(body).ok()?;
+    (said["error"] == "cli_version").then(|| {
+        format!(
+            "{} (this is meridian {VERSION}; `meridian upgrade --to <version>` moves it)",
+            said["reason"]
+                .as_str()
+                .unwrap_or("this deployment does not serve this CLI's version")
+        )
+    })
+}
+
 fn client(redirects: bool) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(300))

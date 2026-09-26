@@ -225,11 +225,15 @@ fn client() -> Result<reqwest::Client, String> {
         // Long enough for a layer of a few hundred megabytes on a slow link.
         .timeout(Duration::from_secs(900))
         .redirect(reqwest::redirect::Policy::none())
+        .default_headers(crate::release::naming_this_version())
         .build()
         .map_err(|failed| failed.to_string())
 }
 
 fn said(status: reqwest::StatusCode, body: &str) -> String {
+    if let Some(refused) = crate::release::version_refused(status, body) {
+        return refused;
+    }
     let reason = serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|v| v["error"].as_str().map(String::from))

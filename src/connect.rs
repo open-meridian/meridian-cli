@@ -265,6 +265,7 @@ pub struct Issued {
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
+        .default_headers(crate::release::naming_this_version())
         .build()
         .map_err(|failed| failed.to_string())
 }
@@ -289,6 +290,9 @@ pub async fn exchange(
         .map_err(|failed| format!("could not reach {address}: {failed}"))?;
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
+    if let Some(refused) = crate::release::version_refused(status, &text) {
+        return Err(format!("{address} did not issue a session: {refused}"));
+    }
     if !status.is_success() {
         return Err(format!(
             "{address} did not issue a session ({status}): {}",
@@ -301,15 +305,21 @@ pub async fn exchange(
 }
 
 /// End a session at the deployment. Whether it was still live makes no
-/// difference to what the CLI does next, so only reaching it matters.
+/// difference to what the CLI does next, so reaching it matters, and being
+/// heard: a deployment refusing this CLI's version ended nothing.
 pub async fn sign_out(address: &str, session: &str) -> Result<(), String> {
-    client()?
+    let answer = client()?
         .post(format!("{address}/terminal/sign-out"))
         .bearer_auth(session)
         .send()
         .await
-        .map(|_| ())
-        .map_err(|failed| format!("could not reach {address}: {failed}"))
+        .map_err(|failed| format!("could not reach {address}: {failed}"))?;
+    let status = answer.status();
+    let text = answer.text().await.unwrap_or_default();
+    match crate::release::version_refused(status, &text) {
+        Some(refused) => Err(format!("{address} refused: {refused}")),
+        None => Ok(()),
+    }
 }
 
 /// Open the sign-in in the person's browser, if there is one to open. The

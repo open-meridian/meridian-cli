@@ -119,3 +119,33 @@ fn releases_come_over_https_or_from_this_machine() {
         assert!(releases_from(Some(refused)).is_err(), "{refused}");
     }
 }
+
+#[test]
+fn a_deployment_refusing_this_version_is_said_as_what_to_do() {
+    let body = r#"{"error":"cli_version","reason":"meridian 0.0.9 is older than this deployment serves; it serves meridian 0.1.0 or later","serves":"0.1.0"}"#;
+    let said = version_refused(reqwest::StatusCode::BAD_REQUEST, body).unwrap();
+    assert!(said.contains("serves meridian 0.1.0 or later"), "{said}");
+    assert!(said.contains("meridian upgrade --to"), "{said}");
+    // Anything else is somebody else's refusal.
+    assert_eq!(
+        version_refused(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":"invalid_request"}"#
+        ),
+        None
+    );
+    assert_eq!(
+        version_refused(reqwest::StatusCode::UNAUTHORIZED, body),
+        None
+    );
+    assert_eq!(
+        version_refused(reqwest::StatusCode::BAD_REQUEST, "not json"),
+        None
+    );
+}
+
+#[test]
+fn every_request_to_a_deployment_names_this_version() {
+    let headers = naming_this_version();
+    assert_eq!(headers[VERSION_HEADER], VERSION);
+}
