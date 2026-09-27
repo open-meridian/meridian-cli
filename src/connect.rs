@@ -74,7 +74,9 @@ pub fn address(given: &str) -> Result<String, String> {
         .filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit()))
         .map(|(host, _)| host)
         .unwrap_or(rest);
-    let local = matches!(host, "127.0.0.1" | "[::1]" | "localhost");
+    // A name under `.localhost` is this machine by definition (RFC 6761),
+    // which is how a local deployment is reached through its Ingress.
+    let local = matches!(host, "127.0.0.1" | "[::1]" | "localhost") || host.ends_with(".localhost");
     match scheme {
         "https" => Ok(trimmed.to_string()),
         "http" if local => Ok(trimmed.to_string()),

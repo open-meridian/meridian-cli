@@ -197,3 +197,22 @@ async fn signing_out_presents_the_session_as_a_bearer() {
         "{sent}"
     );
 }
+
+#[test]
+fn plain_http_is_for_this_machine_alone_including_names_under_localhost() {
+    for local in [
+        "http://127.0.0.1:8443",
+        "http://localhost:8443",
+        "http://meridian.localhost",
+        "http://meridian-e2e.localhost",
+    ] {
+        assert!(address(local).is_ok(), "{local}");
+    }
+    for remote in [
+        "http://meridian.firm.example",
+        "http://localhost.firm.example",
+        "http://evil-localhost",
+    ] {
+        assert!(address(remote).is_err(), "{remote}");
+    }
+}

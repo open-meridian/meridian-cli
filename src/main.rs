@@ -51,7 +51,12 @@ up:
                             each of those comes from MERIDIAN_<FIELD>
       --first-run-code <c>  the claim code --params redeems (or MERIDIAN_FIRST_RUN_CODE)
   -f, --values <file>       Helm-style chart values, passed straight through
-      --port <n>            the local port the wizard is forwarded to (default: 8443)
+      --host <name>         the name it is reached by through the cluster's ingress
+                            controller (default: meridian.localhost, which every
+                            browser sends to this machine)
+      --no-ingress          reach it by a port-forward this command holds, as on a
+                            cluster with no ingress controller
+      --port <n>            the local port a port-forward uses (default: 8443)
       --timeout <d>         how long to give Helm (default: 10m)
       --no-doctor           skip the checks. A check nobody runs does not exist
 
@@ -91,8 +96,9 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 18] = [
+const TAKES_A_VALUE: [&str; 19] = [
     "--into",
+    "--host",
     "--to",
     "--deployment",
     "--dir",
@@ -115,7 +121,7 @@ const TAKES_A_VALUE: [&str; 18] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 5] = ["--no-doctor", "--yes", "-h", "--help", "-v"];
+const SWITCHES: [&str; 6] = ["--no-doctor", "--no-ingress", "--yes", "-h", "--help", "-v"];
 
 fn parse(said: Vec<String>) -> Result<Arguments, String> {
     let mut said = said.into_iter();
@@ -718,6 +724,16 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
             .value("--timeout", "--timeout")
             .unwrap_or("10m")
             .into(),
+        ingress: None,
+    };
+    let ingress_host = match arguments.set("--no-ingress") {
+        true => None,
+        false => Some(
+            arguments
+                .value("--host", "--host")
+                .unwrap_or("meridian.localhost")
+                .to_string(),
+        ),
     };
 
     let port = match arguments
@@ -735,7 +751,15 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
     let params = arguments.value("--params", "-p").map(String::from);
     let first_run_code = credential(arguments, "--first-run-code", "MERIDIAN_FIRST_RUN_CODE");
 
-    match up::run::up(&install, port, params.as_deref(), first_run_code.as_deref()).await {
+    match up::run::up(
+        &install,
+        port,
+        params.as_deref(),
+        first_run_code.as_deref(),
+        ingress_host.as_deref(),
+    )
+    .await
+    {
         Ok(()) => 0,
         Err(refusal) => {
             eprintln!("\nmeridian up: {refusal}");

@@ -12,6 +12,7 @@ fn install() -> Install {
         image: None,
         values: vec![],
         timeout: "10m".into(),
+        ingress: None,
     }
 }
 
@@ -261,4 +262,34 @@ fn a_form_post_escapes_what_a_password_can_hold() {
         form_encoded(&fields),
         "db_host=postgres.internal&db_serving_password=a%26b%3Dc%20d%2Be%25"
     );
+}
+
+#[test]
+fn the_ingress_is_asked_for_by_name_and_class_and_otherwise_not_at_all() {
+    assert!(!values_document(&install()).contains("ingress"));
+    let through = Install {
+        ingress: Some(Ingress {
+            host: "meridian.localhost".into(),
+            class: "traefik".into(),
+        }),
+        ..install()
+    };
+    let values = values_document(&through);
+    assert!(
+        values.contains(
+            "ingress:\n  enabled: true\n  host: \"meridian.localhost\"\n  className: \"traefik\"\n"
+        ),
+        "{values}"
+    );
+}
+
+#[test]
+fn the_class_is_the_default_or_the_only_one_and_never_a_guess() {
+    assert_eq!(chosen_class("traefik\t\n").as_deref(), Some("traefik"));
+    assert_eq!(
+        chosen_class("nginx\t\ntraefik\ttrue\n").as_deref(),
+        Some("traefik")
+    );
+    assert_eq!(chosen_class("nginx\t\ntraefik\t\n"), None);
+    assert_eq!(chosen_class(""), None);
 }

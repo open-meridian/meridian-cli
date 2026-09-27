@@ -35,6 +35,39 @@ pub struct Install {
     /// Helm-style chart values, spelled as Helm spells them.
     pub values: Vec<String>,
     pub timeout: String,
+    /// The chart's Ingress, where the cluster has a controller to read it
+    /// (spec/live-plugin-development, ruling 1). None is a port-forward.
+    pub ingress: Option<Ingress>,
+}
+
+/// How the deployment is reached through the cluster's ingress controller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ingress {
+    /// A name under `.localhost` locally, which every browser sends to this
+    /// machine, plugin pages' names below it included.
+    pub host: String,
+    pub class: String,
+}
+
+/// Which IngressClass to use, from `kubectl get ingressclass` as `name<TAB>is-default`
+/// lines: the one marked default, or the only one. None when there is none, or
+/// several and none marked -- choosing among them is not this command's to guess.
+pub fn chosen_class(listed: &str) -> Option<String> {
+    let classes: Vec<(&str, bool)> = listed
+        .lines()
+        .filter_map(|line| {
+            let (name, default) = line.split_once('\t').unwrap_or((line, ""));
+            let name = name.trim();
+            (!name.is_empty()).then_some((name, default.trim() == "true"))
+        })
+        .collect();
+    if let Some((name, _)) = classes.iter().find(|(_, default)| *default) {
+        return Some(name.to_string());
+    }
+    match classes.as_slice() {
+        [(only, _)] => Some(only.to_string()),
+        _ => None,
+    }
 }
 
 /// The values this passes to Helm, as a document on its standard input.
@@ -54,6 +87,12 @@ pub fn values_document(install: &Install) -> String {
     if let Some(platform) = &install.platform {
         out.push_str("platform:\n");
         out.push_str(&format!("  address: {}\n", quoted(platform)));
+    }
+    if let Some(ingress) = &install.ingress {
+        out.push_str("ingress:\n");
+        out.push_str("  enabled: true\n");
+        out.push_str(&format!("  host: {}\n", quoted(&ingress.host)));
+        out.push_str(&format!("  className: {}\n", quoted(&ingress.class)));
     }
     if let Some(image) = &install.image {
         let (repository, tag) = image.rsplit_once(':').unwrap_or((image.as_str(), "latest"));

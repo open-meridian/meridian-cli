@@ -100,6 +100,7 @@ pub async fn up(
     port: u16,
     params: Option<&str>,
     first_run_code: Option<&str>,
+    ingress_host: Option<&str>,
 ) -> Result<(), String> {
     // Read before anything is installed: a file with a password in it should
     // be refused on the person's own machine, not after a release exists.
@@ -107,6 +108,38 @@ pub async fn up(
         Some(path) => Some(read_params(path)?),
         None => None,
     };
+
+    // Through the cluster's ingress controller where it has one, as a name
+    // under `.localhost`, so the deployment keeps an address after this
+    // command ends and plugin pages have names to sit below. A port-forward
+    // where it has none, as before.
+    let mut install = install.clone();
+    if let Some(host) = ingress_host {
+        let listed = kubectl(
+            &install,
+            &[
+                "get",
+                "ingressclass",
+                "-o",
+                "jsonpath={range .items[*]}{.metadata.name}{\"\\t\"}{.metadata.annotations.ingressclass\\.kubernetes\\.io/is-default-class}{\"\\n\"}{end}",
+            ],
+        )
+        .await
+        .unwrap_or_default();
+        match super::chosen_class(&listed) {
+            Some(class) => {
+                install.ingress = Some(super::Ingress {
+                    host: host.to_string(),
+                    class,
+                })
+            }
+            None => println!(
+                "No single ingress controller in this cluster to reach it through, so it is \
+                 reached by a port-forward this command holds."
+            ),
+        }
+    }
+    let install = &install;
 
     println!(
         "Installing {} into {}:\n",
@@ -120,12 +153,22 @@ pub async fn up(
     println!("Waiting for {service} to answer its health check.");
     wait_for_rollout(install, &service).await?;
 
-    let mut forward = port_forward(install, &service, port).await?;
-    let address = format!("http://127.0.0.1:{port}");
-    let outcome = wizard(&address, params, first_run_code).await;
+    let (address, mut forward) = match &install.ingress {
+        Some(ingress) => (format!("http://{}", ingress.host), None),
+        None => (
+            format!("http://127.0.0.1:{port}"),
+            Some(port_forward(install, &service, port).await?),
+        ),
+    };
+    let outcome = wizard(&address, params, first_run_code, forward.is_some()).await;
 
     // The forward is this process's; nothing should outlive it.
-    let _ = forward.kill().await;
+    if let Some(forward) = forward.as_mut() {
+        let _ = forward.kill().await;
+    }
+    if outcome.is_ok() && forward.is_none() {
+        println!("\nThe dashboard stays at {address}.");
+    }
     outcome
 }
 
@@ -256,9 +299,32 @@ async fn wizard(
     address: &str,
     params: Option<BTreeMap<String, String>>,
     first_run_code: Option<&str>,
+    forwarded: bool,
 ) -> Result<(), String> {
     let mut wizard = Wizard::new(address.to_string())?;
     let deadline = std::time::Instant::now() + DASHBOARD_TIMEOUT;
+    // The dashboard's own health first. Through an ingress controller that
+    // has not read the new Ingress yet, every path is the controller's 404,
+    // which read below as "first run is over" and stopped a fresh install.
+    loop {
+        match wizard.get("/healthz").await {
+            Ok((200, _)) => break,
+            _ if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_secs(2)).await
+            }
+            other => {
+                return Err(format!(
+                    "the dashboard never answered at {address}: {other:?}. It is running; the {} \
+                     is what did not carry.",
+                    if forwarded {
+                        "forward"
+                    } else {
+                        "ingress controller"
+                    }
+                ))
+            }
+        }
+    }
     loop {
         match wizard.get("/first-run").await {
             Ok((200, _)) => break,
@@ -272,8 +338,13 @@ async fn wizard(
             }
             other => {
                 return Err(format!(
-                    "the wizard never answered at {address}: {other:?}. \
-                     The dashboard is running; the forward is what did not carry."
+                    "the wizard never answered at {address}: {other:?}. The dashboard is \
+                     running; the {} is what did not carry.",
+                    if forwarded {
+                        "forward"
+                    } else {
+                        "ingress controller"
+                    }
                 ))
             }
         }
@@ -282,9 +353,13 @@ async fn wizard(
     let Some(params) = params else {
         println!("\nThe wizard is at {address}/first-run");
         println!("It asks for a first-run code, which a deployment administrator issues on the platform.");
-        println!("\nThis forward is held open here. Press Ctrl-C when the wizard says it is done.");
-        let _ = tokio::signal::ctrl_c().await;
-        println!("\nForward closed. Nothing else was left running.");
+        if forwarded {
+            println!(
+                "\nThis forward is held open here. Press Ctrl-C when the wizard says it is done."
+            );
+            let _ = tokio::signal::ctrl_c().await;
+            println!("\nForward closed. Nothing else was left running.");
+        }
         return Ok(());
     };
 

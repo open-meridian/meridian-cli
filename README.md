@@ -61,10 +61,17 @@ meridian up --id dep-7
 ```
 
 Runs `doctor` first — skip it with `--no-doctor` — then installs the chart with
-the two values the platform gave you, waits for the dashboard, forwards a local
-port to it, and prints the wizard's address. A first-run dashboard has no public
-address and should not get one, so the forward is held by this process and
-dropped when you stop it.
+the two values the platform gave you, waits for the dashboard, and prints the
+wizard's address.
+
+Where the cluster has an ingress controller — Rancher Desktop's Traefik, say —
+it is reached through the chart's Ingress as `http://meridian.localhost`
+(`--host` for another name under `.localhost`). Every browser sends that name,
+and every plugin's page on a name below it, to this machine, so the address
+stays after `up` ends and plugin pages work. Answer the wizard's dashboard
+address with it. Where there is no controller, or with `--no-ingress`, `up`
+forwards a local port instead (`--port`, default 8443) and holds the forward
+until you stop it.
 
 It drives your own `helm` and `kubectl` and prints the command it used, so you
 can do the same by hand. It embeds no Helm library: the chart is what says what
