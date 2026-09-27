@@ -56,6 +56,8 @@ up:
                             browser sends to this machine)
       --no-ingress          reach it by a port-forward this command holds, as on a
                             cluster with no ingress controller
+      --development         install it for development: it may run plugin code as
+                            it is being written, and says so on every page
       --port <n>            the local port a port-forward uses (default: 8443)
       --timeout <d>         how long to give Helm (default: 10m)
       --no-doctor           skip the checks. A check nobody runs does not exist
@@ -121,7 +123,15 @@ const TAKES_A_VALUE: [&str; 19] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 6] = ["--no-doctor", "--no-ingress", "--yes", "-h", "--help", "-v"];
+const SWITCHES: [&str; 7] = [
+    "--no-doctor",
+    "--no-ingress",
+    "--development",
+    "--yes",
+    "-h",
+    "--help",
+    "-v",
+];
 
 fn parse(said: Vec<String>) -> Result<Arguments, String> {
     let mut said = said.into_iter();
@@ -725,6 +735,7 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
             .unwrap_or("10m")
             .into(),
         ingress: None,
+        development: arguments.set("--development"),
     };
     let ingress_host = match arguments.set("--no-ingress") {
         true => None,

@@ -38,6 +38,9 @@ pub struct Install {
     /// The chart's Ingress, where the cluster has a controller to read it
     /// (spec/live-plugin-development, ruling 1). None is a port-forward.
     pub ingress: Option<Ingress>,
+    /// Installed for development: it may run plugin code as it is being
+    /// written, and says so on every page (ruling 2). Only when asked.
+    pub development: bool,
 }
 
 /// How the deployment is reached through the cluster's ingress controller.
@@ -87,6 +90,9 @@ pub fn values_document(install: &Install) -> String {
     if let Some(platform) = &install.platform {
         out.push_str("platform:\n");
         out.push_str(&format!("  address: {}\n", quoted(platform)));
+    }
+    if install.development {
+        out.push_str("development: true\n");
     }
     if let Some(ingress) = &install.ingress {
         out.push_str("ingress:\n");

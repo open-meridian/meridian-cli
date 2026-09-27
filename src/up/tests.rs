@@ -13,6 +13,7 @@ fn install() -> Install {
         values: vec![],
         timeout: "10m".into(),
         ingress: None,
+        development: false,
     }
 }
 
@@ -292,4 +293,14 @@ fn the_class_is_the_default_or_the_only_one_and_never_a_guess() {
     );
     assert_eq!(chosen_class("nginx\t\ntraefik\t\n"), None);
     assert_eq!(chosen_class(""), None);
+}
+
+#[test]
+fn development_is_asked_for_only_when_said() {
+    assert!(!values_document(&install()).contains("development"));
+    let marked = Install {
+        development: true,
+        ..install()
+    };
+    assert!(values_document(&marked).contains("development: true\n"));
 }
