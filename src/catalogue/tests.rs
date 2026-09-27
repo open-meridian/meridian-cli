@@ -13,7 +13,7 @@ fn the_templates_pyproject_is_metadata() {
             roles: vec![],
             tags: vec![],
             interface: true,
-            sdk_version: "0.2.0".into(),
+            sdk_version: "0.3.0".into(),
         }
     );
 }
@@ -35,7 +35,7 @@ fn roles_and_tags_are_read_and_held_to_their_form() {
 
 #[test]
 fn a_pyproject_missing_what_upload_sends_is_refused() {
-    let unpinned = TEMPLATE.replace("open-meridian==0.2.0", "open-meridian>=0.2");
+    let unpinned = TEMPLATE.replace("open-meridian==0.3.0", "open-meridian>=0.3");
     assert!(metadata(&unpinned)
         .unwrap_err()
         .contains("pin open-meridian"));
