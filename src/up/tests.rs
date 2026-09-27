@@ -319,3 +319,24 @@ fn a_local_name_is_reached_over_http_and_any_other_over_https() {
     // Not a suffix match on the text: `notlocalhost` is somebody's domain.
     assert_eq!(address_of("notlocalhost"), "https://notlocalhost");
 }
+
+#[test]
+fn an_id_is_the_platforms_shape_or_nothing_is_installed() {
+    assert_eq!(check_id("DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0P"), Ok(()));
+    let doubled = check_id("DEP-DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0P").unwrap_err();
+    assert!(doubled.contains("DEP- twice"), "{doubled}");
+    assert!(
+        doubled.contains("`DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0P`"),
+        "{doubled}"
+    );
+    for wrong in [
+        "dep-7",
+        "01M3GZ8K4Q7T2V9W6X5Y3R1N0P",
+        "DEP-XXXX-XXXX",
+        "DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0",
+        "DEP-01m3gz8k4q7t2v9w6x5y3r1n0p",
+        "DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0L",
+    ] {
+        assert!(check_id(wrong).is_err(), "{wrong}");
+    }
+}

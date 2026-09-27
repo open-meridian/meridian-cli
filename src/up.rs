@@ -53,6 +53,35 @@ pub struct Ingress {
     pub class: String,
 }
 
+/// A deployment's identifier as the platform mints it: `DEP-`, then 26
+/// characters of Crockford base 32 -- 48 bits of time and 80 of randomness
+/// (meridian-platform's `domain/ids.py`). Checked before anything is
+/// installed, because a wrong one is otherwise learned from a refused
+/// enrolment in a pod's log.
+pub fn check_id(id: &str) -> Result<(), String> {
+    const CROCKFORD: &str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let copy = "copy it from the deployment's page on the platform";
+    if id.starts_with("DEP-DEP-") {
+        return Err(format!(
+            "`{id}` has DEP- twice: the identifier starts with it already. \
+             It is `{}`",
+            &id[4..]
+        ));
+    }
+    let Some(rest) = id.strip_prefix("DEP-") else {
+        return Err(format!(
+            "`{id}` is not a deployment's identifier, which starts DEP-: {copy}"
+        ));
+    };
+    if rest.len() != 26 || !rest.chars().all(|c| CROCKFORD.contains(c)) {
+        return Err(format!(
+            "`{id}` is not a deployment's identifier: DEP- and then 26 capital letters \
+             and digits, with no I, L, O or U. {copy}"
+        ));
+    }
+    Ok(())
+}
+
 /// The address a name is reached at through the Ingress: plain HTTP for a
 /// name under `.localhost`, which never leaves this machine, and HTTPS for any
 /// other, since the chart serves plain HTTP only to a local install.

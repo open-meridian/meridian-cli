@@ -7,6 +7,7 @@ terminal, and for working with one that is already running.
 meridian doctor              # can this machine and this cluster run a deployment?
 meridian up                  # install the chart, then open the wizard
 meridian up --params f.yaml  # the same, answered from a file
+meridian down                # uninstall it, keeping its namespace unless asked
 meridian connect <address>   # sign in to a deployment, and keep the session
 meridian plugin new <name>   # start a plugin from the SDK's reference plugin
 meridian plugin upload       # build it and put it in the deployment's catalogue
@@ -62,8 +63,11 @@ install.
 
 ```
 export MERIDIAN_ENROLMENT_CODE=…       # the one-time code, from the platform
-meridian up --id dep-7
+meridian up --id DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0P
 ```
+
+`--id` is the deployment's identifier exactly as the platform shows it, `DEP-`
+included; one of any other shape is refused before anything is installed.
 
 Runs `doctor` first — skip it with `--no-doctor` — then installs the chart with
 the two values the platform gave you, waits for the dashboard, and prints the
@@ -86,7 +90,7 @@ ingress:
 ```
 
 ```
-meridian up --id dep-7 --host meridian.firm.example -f ingress.yaml
+meridian up --id DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0P --host meridian.firm.example -f ingress.yaml
 ``` Answer the wizard's dashboard
 address with it. Where there is no controller, or with `--no-ingress`, `up`
 forwards a local port instead (`--port`, default 8443) and holds the forward
@@ -128,7 +132,7 @@ export MERIDIAN_FIRST_RUN_CODE=…
 export MERIDIAN_DB_SERVING_PASSWORD=…
 export MERIDIAN_DB_MIGRATING_PASSWORD=…
 export MERIDIAN_LDAP_BIND_PASSWORD=…
-meridian up --id dep-7 --params first-run.yaml
+meridian up --id DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0P --params first-run.yaml
 ```
 
 **The file holds no credential.** Every field the wizard asks for as a password
@@ -138,6 +142,26 @@ the variable to use — because a file that works is a file that gets committed.
 The field names are the wizard's own: what it asks for is read from the page it
 serves, so a typo is refused against the real form rather than posted as an
 empty answer.
+
+## down
+
+```
+meridian down
+meridian down --delete-namespace
+```
+
+Uninstalls the release, once you agree (`--yes` for a script). The namespace
+is kept, and with it the database the deployment brought and the deployment's
+own key, so `meridian up` again picks both back up.
+
+`--delete-namespace` removes the namespace too, asked separately: the
+database and all its data go, which nothing backs up, and so does the
+deployment's key, after which the platform refuses it a new enrolment code
+until the key is revoked there. Either way the deployment still exists on the
+platform; retiring it there is what revokes its key. A session this machine
+held with it is forgotten. It never touches the cluster itself.
+
+Not to be confused with `meridian uninstall`, which removes this CLI.
 
 ## connect and plugins
 
@@ -171,7 +195,7 @@ each save is running in about a second, in the same pod, with the same
 sidecar and the same grants.
 
 ```
-meridian up --id dep-7 --development
+meridian up --id DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0P --development
 meridian connect http://meridian.localhost
 meridian plugin new my-plugin && cd my-plugin
 meridian plugin dev --instance my-plugin

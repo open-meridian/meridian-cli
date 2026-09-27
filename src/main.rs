@@ -7,6 +7,7 @@
 mod catalogue;
 mod connect;
 mod doctor;
+mod down;
 mod live;
 mod machine;
 mod plugin;
@@ -21,6 +22,7 @@ meridian -- bringing a Meridian deployment up
 
   meridian doctor            can this machine and this cluster run a deployment?
   meridian up                install the chart, and open this deployment's wizard
+  meridian down              uninstall it, keeping its namespace unless asked
   meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>
   meridian plugin upload     build the plugin here and put it in the deployment's catalogue
   meridian plugin list       the catalogue: versions uploaded, and what is launched
@@ -98,6 +100,13 @@ asked wrongly, and 3 when there is no session or it has lapsed
       --print <path>        open: the page at that path on the plugin's host, as you
                             are served it, instead of a link
 
+down:
+      --release <name>      the Helm release (default: meridian)
+      --delete-namespace    remove the namespace too, and with it the database the
+                            deployment brought and the deployment's own key. Asked
+                            separately; never the cluster itself
+      --yes                 do it without being asked. For a script
+
 upgrade:
       --to <version>        a named release instead of the latest, older or newer.
                             Nothing is looked up unless asked: this never checks
@@ -148,8 +157,9 @@ const TAKES_A_VALUE: [&str; 21] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 9] = [
+const SWITCHES: [&str; 10] = [
     "--no-doctor",
+    "--delete-namespace",
     "--json",
     "--follow",
     "--no-ingress",
@@ -287,6 +297,7 @@ async fn main() {
             std::process::exit(code);
         }
         "up" => std::process::exit(brought_up(&arguments, intended).await),
+        "down" => std::process::exit(down_command(&arguments, &intended.namespace).await),
         "plugin" => std::process::exit(plugin_command(&arguments).await),
         "connect" => std::process::exit(connect_command(&arguments).await),
         "sign-out" => std::process::exit(sign_out_command(&arguments).await),
@@ -874,6 +885,34 @@ async fn printed(
     Ok(())
 }
 
+/// `meridian down`: `up`'s mirror (spec/the-cli, "teardown and relaunch is
+/// scriptable").
+async fn down_command(arguments: &Arguments, namespace: &str) -> i32 {
+    if !arguments.words.is_empty() {
+        eprintln!("meridian down: takes no words\n\n{USAGE}");
+        return 2;
+    }
+    let asked = down::Down {
+        release: arguments
+            .value("--release", "--release")
+            .unwrap_or("meridian")
+            .to_string(),
+        namespace: namespace.to_string(),
+        delete_namespace: arguments.set("--delete-namespace"),
+    };
+    let yes = arguments.set("--yes");
+    match down::down(&asked, |question| yes || approved(question)).await {
+        Ok(said) => {
+            print!("{said}");
+            0
+        }
+        Err(refusal) => {
+            eprintln!("meridian down: {refusal}");
+            1
+        }
+    }
+}
+
 /// `meridian connect <address>`: W6.13 from this side.
 async fn connect_command(arguments: &Arguments) -> i32 {
     let [given] = arguments.words.as_slice() else {
@@ -1130,6 +1169,17 @@ async fn examined(intended: &Intended) -> (String, i32) {
 }
 
 async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
+    // Before the doctor and long before Helm: a wrong identifier is otherwise
+    // learned from a refused enrolment in a pod's log.
+    let Some(deployment_id) = arguments.value("--id", "--id").map(String::from) else {
+        eprintln!("meridian up: --id is this deployment's identifier, which the platform gave you when you registered it.");
+        return 2;
+    };
+    if let Err(refusal) = up::check_id(&deployment_id) {
+        eprintln!("meridian up: {refusal}. Nothing was installed.");
+        return 2;
+    }
+
     // Run by `up` rather than asked for, because a check nobody runs is a
     // check that does not exist (spec/the-cli, ruling 3).
     if !arguments.set("--no-doctor") {
@@ -1142,10 +1192,6 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
         println!();
     }
 
-    let Some(deployment_id) = arguments.value("--id", "--id").map(String::from) else {
-        eprintln!("meridian up: --id is this deployment's identifier, which the platform gave you when you registered it.");
-        return 2;
-    };
     let Some(enrolment_code) = credential(arguments, "--enrolment-code", "MERIDIAN_ENROLMENT_CODE")
     else {
         eprintln!(
