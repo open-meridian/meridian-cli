@@ -149,8 +149,7 @@ fn a_new_plugin_commits_claudes_shared_files_and_keeps_all_of_them_out_of_its_im
     for ignored in [
         "CLAUDE.local.md",
         ".claude/settings.local.json",
-        ".claude/dev.jsonl",
-        ".claude/dev.err",
+        ".meridian/",
     ] {
         assert!(
             gitignore.iter().any(|l| l == ignored),
@@ -164,7 +163,7 @@ fn a_new_plugin_commits_claudes_shared_files_and_keeps_all_of_them_out_of_its_im
         );
     }
     let dockerignore = lines(".dockerignore");
-    for ignored in ["CLAUDE.md", "CLAUDE.local.md", ".claude"] {
+    for ignored in ["CLAUDE.md", "CLAUDE.local.md", ".claude", ".meridian"] {
         assert!(
             dockerignore.iter().any(|l| l == ignored),
             "{ignored}: {dockerignore:?}"
@@ -185,11 +184,14 @@ fn plugin_dev_sends_none_of_claudes_files() {
     let scratch = Scratch::new("claude-live");
     let into = scratch.0.join("meridian-snaptrade");
     scaffold("meridian-snaptrade", &into).expect("scaffolded");
-    std::fs::write(into.join(".claude/dev.jsonl"), "{}\n").unwrap();
+    // Where the skill has `plugin dev` write its own output.
+    std::fs::create_dir_all(into.join(".meridian")).unwrap();
+    std::fs::write(into.join(".meridian/dev.jsonl"), "{}\n").unwrap();
     let sent = crate::live::scan(&into, &crate::live::Ignored::of(&into));
     assert!(
-        sent.keys()
-            .all(|path| !path.contains("CLAUDE") && !path.starts_with(".claude")),
+        sent.keys().all(|path| !path.contains("CLAUDE")
+            && !path.starts_with(".claude")
+            && !path.starts_with(".meridian")),
         "{:?}",
         sent.keys().collect::<Vec<_>>()
     );

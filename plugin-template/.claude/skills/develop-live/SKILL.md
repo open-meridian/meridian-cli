@@ -18,9 +18,11 @@ theirs.
 - `meridian --version` is 0.1.3 or later. Older ones have no `plugin dev`: the
   person runs `meridian upgrade`.
 - The person has run `meridian connect <address>`. You cannot do it for them:
-  it signs in through their browser. When any command exits **3**, the session
-  is missing or has lapsed. Stop, tell the person to run the `meridian connect`
-  the command printed, and carry on once they have.
+  it signs in through their browser. `meridian plugin list` says whether the
+  session is there: it lists the catalogue, or exits **3**. Whenever any
+  command exits 3, the session is missing or has lapsed. Stop, tell the person
+  to run the `meridian connect` the command printed, and carry on once they
+  have. There is no `meridian status`.
 - The deployment was installed for development (`meridian up --development`).
   Elsewhere `plugin dev` is refused, and nothing is wrong with the plugin.
 
@@ -38,16 +40,18 @@ nothing.
 Run it in the background, and keep it running for the whole session:
 
 ```sh
-meridian plugin dev --instance reference-plugin --yes --json > .claude/dev.jsonl 2> .claude/dev.err
+mkdir -p .meridian
+meridian plugin dev --instance reference-plugin --yes --json > .meridian/dev.jsonl 2> .meridian/dev.err
 ```
 
-Its output goes under `.claude/` on purpose. `plugin dev` sends every file in
-this directory that changes, except what `.dockerignore` names, and
-`.claude/` is named there. Anywhere else in this directory, its own output
-would be sent to the plugin as a change, again and again. Both files are
-git-ignored: they are this session's, not the plugin's.
+Its output goes under `.meridian/` on purpose. `plugin dev` sends every file
+in this directory that changes, except `.meridian/` and what `.dockerignore`
+names. Anywhere else in this directory, its own output would be sent to the
+plugin as a change, again and again. Not under `.claude/`, which Claude Code
+guards: writing there needs a permission a session may not have.
+`.meridian/` is git-ignored, since it is this session's, not the plugin's.
 
-`.claude/dev.jsonl` gets one JSON object a line:
+`.meridian/dev.jsonl` gets one JSON object a line:
 
 | `event` | Means |
 |---|---|
@@ -59,8 +63,9 @@ git-ignored: they are this session's, not the plugin's.
 | `exited` | It stopped by itself, without an error |
 | `refused` | The sidecar refused it something; `reason` says what |
 
-Wait for the first `ready` before changing anything. `.claude/dev.err` says
-what it is doing, and why it stopped if it did.
+Wait for the first `ready` before changing anything. `.meridian/dev.err` says
+what it is doing, and why it stopped if it did. The first run builds and
+uploads the plugin's image, which takes a minute or two.
 
 ## Change something
 
