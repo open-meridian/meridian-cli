@@ -1,0 +1,22 @@
+# Written as `.gitignore` by `meridian plugin new`. It is kept as `gitignore`
+# here, because in the SDK's own repository a real one would hide the Claude
+# files below from git, and with them from every scaffold.
+
+# Python's leavings.
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Claude Code's files are the person's own, not the plugin's: the scaffold
+# writes a CLAUDE.md and a skill for the live loop, and neither is committed
+# unless somebody takes these lines out.
+CLAUDE.md
+CLAUDE.local.md
+.claude/

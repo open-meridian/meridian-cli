@@ -120,3 +120,69 @@ fn a_name_is_one_every_place_it_goes_accepts() {
         assert!(check_name(bad).is_err(), "{bad:?}");
     }
 }
+
+#[test]
+fn a_new_plugin_keeps_claudes_files_out_of_git_and_out_of_its_image() {
+    let scratch = Scratch::new("claude");
+    let into = scratch.0.join("meridian-snaptrade");
+    scaffold("meridian-snaptrade", &into).expect("scaffolded");
+
+    let files = every_file(&into);
+    for written in [
+        ".gitignore",
+        "CLAUDE.md",
+        ".claude/skills/develop-live/SKILL.md",
+    ] {
+        assert!(files.contains(&written.to_string()), "{written}: {files:?}");
+    }
+    assert!(
+        !files.contains(&"gitignore".to_string()),
+        "written as .gitignore"
+    );
+
+    let lines = |file: &str| -> Vec<String> {
+        std::fs::read_to_string(into.join(file))
+            .expect("written")
+            .lines()
+            .map(|line| line.trim().to_string())
+            .collect()
+    };
+    let gitignore = lines(".gitignore");
+    for ignored in ["CLAUDE.md", "CLAUDE.local.md", ".claude/"] {
+        assert!(
+            gitignore.iter().any(|l| l == ignored),
+            "{ignored}: {gitignore:?}"
+        );
+    }
+    let dockerignore = lines(".dockerignore");
+    for ignored in ["CLAUDE.md", "CLAUDE.local.md", ".claude"] {
+        assert!(
+            dockerignore.iter().any(|l| l == ignored),
+            "{ignored}: {dockerignore:?}"
+        );
+    }
+
+    // And what they teach is about this plugin, not the template.
+    let skill = std::fs::read_to_string(into.join(".claude/skills/develop-live/SKILL.md")).unwrap();
+    assert!(skill.starts_with("---\nname: develop-live\n"), "{skill}");
+    assert!(skill.contains("meridian plugin dev --instance meridian-snaptrade"));
+    assert!(!skill.contains("reference-plugin") && !skill.contains("reference_plugin"));
+    let claude = std::fs::read_to_string(into.join("CLAUDE.md")).unwrap();
+    assert!(claude.contains("src/meridian_snaptrade/"), "{claude}");
+}
+
+#[test]
+fn plugin_dev_sends_none_of_claudes_files() {
+    let scratch = Scratch::new("claude-live");
+    let into = scratch.0.join("meridian-snaptrade");
+    scaffold("meridian-snaptrade", &into).expect("scaffolded");
+    std::fs::write(into.join(".claude/dev.jsonl"), "{}\n").unwrap();
+    let sent = crate::live::scan(&into, &crate::live::Ignored::of(&into));
+    assert!(
+        sent.keys()
+            .all(|path| !path.contains("CLAUDE") && !path.starts_with(".claude")),
+        "{:?}",
+        sent.keys().collect::<Vec<_>>()
+    );
+    assert!(sent.contains_key("pyproject.toml"));
+}

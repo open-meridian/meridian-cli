@@ -7,9 +7,11 @@
 //! gives the same plugin every time, and `check-vendored-template` fails when
 //! this copy stops being the SDK's.
 //!
-//! The only thing changed on the way out is the name: the template calls
-//! itself `reference-plugin`, importable as `reference_plugin`, and both become
-//! whatever the plugin is called.
+//! Two things change on the way out. The name: the template calls itself
+//! `reference-plugin`, importable as `reference_plugin`, and both become
+//! whatever the plugin is called. And `gitignore` is written as `.gitignore`:
+//! a real one in the SDK's repository would hide the Claude files it ignores
+//! from git there, and so from every scaffold.
 
 use std::path::{Path, PathBuf};
 
@@ -18,11 +20,17 @@ mod tests;
 
 /// The template, file by file, as it sits in `plugin-template/`. A test fails
 /// if a file there is missing from this list, so a new one cannot be dropped.
-const TEMPLATE: [(&str, &str); 7] = [
+const TEMPLATE: [(&str, &str); 10] = [
+    (
+        ".claude/skills/develop-live/SKILL.md",
+        include_str!("../plugin-template/.claude/skills/develop-live/SKILL.md"),
+    ),
     (
         ".dockerignore",
         include_str!("../plugin-template/.dockerignore"),
     ),
+    ("CLAUDE.md", include_str!("../plugin-template/CLAUDE.md")),
+    ("gitignore", include_str!("../plugin-template/gitignore")),
     ("Dockerfile", include_str!("../plugin-template/Dockerfile")),
     ("README.md", include_str!("../plugin-template/README.md")),
     (
@@ -92,7 +100,7 @@ pub fn scaffold(name: &str, into: &Path) -> Result<Vec<PathBuf>, String> {
 
     let mut wrote = Vec::new();
     for (path, contents) in TEMPLATE {
-        let path = into.join(renamed(path, name, &module));
+        let path = into.join(renamed(written_as(path), name, &module));
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|failed| format!("{}: {failed}", parent.display()))?;
@@ -102,6 +110,14 @@ pub fn scaffold(name: &str, into: &Path) -> Result<Vec<PathBuf>, String> {
         wrote.push(path);
     }
     Ok(wrote)
+}
+
+/// Where a template file goes in the plugin.
+fn written_as(path: &str) -> &str {
+    match path {
+        "gitignore" => ".gitignore",
+        other => other,
+    }
 }
 
 /// The template's name for itself, replaced by the plugin's. The distribution
@@ -122,7 +138,14 @@ pub fn next_steps(name: &str, into: &Path) -> String {
          Upload builds its image here and puts it in the catalogue of the deployment\n\
          `meridian connect` signed you in to; launch shows the roles and tags its\n\
          pyproject.toml asks for, and runs it once you approve them. It reaches its\n\
-         sidecar and nothing else.\n",
+         sidecar and nothing else.\n\
+         \n\
+         On a deployment installed for development, run it as you write it instead:\n\
+         \n\
+         \x20 meridian plugin dev --instance {name}\n\
+         \n\
+         CLAUDE.md and the develop-live skill in .claude/ teach Claude Code that loop.\n\
+         They are yours: .gitignore keeps them out of the repository.\n",
         into = into.display()
     )
 }

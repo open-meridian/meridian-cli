@@ -2,3 +2,8 @@
 __pycache__
 *.pyc
 .venv
+# Claude Code's files: in neither the image nor what `meridian plugin dev`
+# sends, which reads this list too.
+.claude
+CLAUDE.md
+CLAUDE.local.md
