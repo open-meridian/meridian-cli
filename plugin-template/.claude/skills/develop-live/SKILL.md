@@ -44,7 +44,8 @@ meridian plugin dev --instance reference-plugin --yes --json > .claude/dev.jsonl
 Its output goes under `.claude/` on purpose. `plugin dev` sends every file in
 this directory that changes, except what `.dockerignore` names, and
 `.claude/` is named there. Anywhere else in this directory, its own output
-would be sent to the plugin as a change, again and again.
+would be sent to the plugin as a change, again and again. Both files are
+git-ignored: they are this session's, not the plugin's.
 
 `.claude/dev.jsonl` gets one JSON object a line:
 

@@ -7,11 +7,9 @@
 //! gives the same plugin every time, and `check-vendored-template` fails when
 //! this copy stops being the SDK's.
 //!
-//! Two things change on the way out. The name: the template calls itself
-//! `reference-plugin`, importable as `reference_plugin`, and both become
-//! whatever the plugin is called. And `gitignore` is written as `.gitignore`:
-//! a real one in the SDK's repository would hide the Claude files it ignores
-//! from git there, and so from every scaffold.
+//! The only thing changed on the way out is the name: the template calls
+//! itself `reference-plugin`, importable as `reference_plugin`, and both become
+//! whatever the plugin is called.
 
 use std::path::{Path, PathBuf};
 
@@ -30,7 +28,7 @@ const TEMPLATE: [(&str, &str); 10] = [
         include_str!("../plugin-template/.dockerignore"),
     ),
     ("CLAUDE.md", include_str!("../plugin-template/CLAUDE.md")),
-    ("gitignore", include_str!("../plugin-template/gitignore")),
+    (".gitignore", include_str!("../plugin-template/.gitignore")),
     ("Dockerfile", include_str!("../plugin-template/Dockerfile")),
     ("README.md", include_str!("../plugin-template/README.md")),
     (
@@ -100,7 +98,7 @@ pub fn scaffold(name: &str, into: &Path) -> Result<Vec<PathBuf>, String> {
 
     let mut wrote = Vec::new();
     for (path, contents) in TEMPLATE {
-        let path = into.join(renamed(written_as(path), name, &module));
+        let path = into.join(renamed(path, name, &module));
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|failed| format!("{}: {failed}", parent.display()))?;
@@ -110,14 +108,6 @@ pub fn scaffold(name: &str, into: &Path) -> Result<Vec<PathBuf>, String> {
         wrote.push(path);
     }
     Ok(wrote)
-}
-
-/// Where a template file goes in the plugin.
-fn written_as(path: &str) -> &str {
-    match path {
-        "gitignore" => ".gitignore",
-        other => other,
-    }
 }
 
 /// The template's name for itself, replaced by the plugin's. The distribution
@@ -145,7 +135,7 @@ pub fn next_steps(name: &str, into: &Path) -> String {
          \x20 meridian plugin dev --instance {name}\n\
          \n\
          CLAUDE.md and the develop-live skill in .claude/ teach Claude Code that loop.\n\
-         They are yours: .gitignore keeps them out of the repository.\n",
+         Commit them with the plugin, so whoever works on it next has them too.\n",
         into = into.display()
     )
 }

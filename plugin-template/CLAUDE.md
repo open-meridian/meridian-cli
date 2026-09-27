@@ -12,5 +12,7 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   dev` in the background, edit, wait for `ready` at your revision, then check.
 - A save changes what the plugin does, never what it is allowed to do. Roles,
   tags and dependencies take a new version, which a person approves.
-- This file and `.claude/` are the person's own: `.gitignore` keeps them out of
-  the repository, and `.dockerignore` out of the image and the live instance.
+- This file and `.claude/` are committed with the plugin, for whoever works on
+  it next. `CLAUDE.local.md` and `.claude/settings.local.json` are one
+  person's own, and git-ignored. `.dockerignore` keeps all of them out of the
+  image and the live instance.

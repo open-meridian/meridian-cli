@@ -18,5 +18,5 @@ running in about a second:
     meridian plugin dev --instance reference-plugin
 
 `CLAUDE.md` and the `develop-live` skill under `.claude/` teach Claude Code
-the same loop. They are yours rather than the plugin's, so `.gitignore` keeps
-them out of the repository and `.dockerignore` out of the image.
+the same loop. Commit them with the plugin, so whoever works on it next has
+them too; `.dockerignore` keeps them out of its image.

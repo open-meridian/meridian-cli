@@ -122,7 +122,7 @@ fn a_name_is_one_every_place_it_goes_accepts() {
 }
 
 #[test]
-fn a_new_plugin_keeps_claudes_files_out_of_git_and_out_of_its_image() {
+fn a_new_plugin_commits_claudes_shared_files_and_keeps_all_of_them_out_of_its_image() {
     let scratch = Scratch::new("claude");
     let into = scratch.0.join("meridian-snaptrade");
     scaffold("meridian-snaptrade", &into).expect("scaffolded");
@@ -135,10 +135,6 @@ fn a_new_plugin_keeps_claudes_files_out_of_git_and_out_of_its_image() {
     ] {
         assert!(files.contains(&written.to_string()), "{written}: {files:?}");
     }
-    assert!(
-        !files.contains(&"gitignore".to_string()),
-        "written as .gitignore"
-    );
 
     let lines = |file: &str| -> Vec<String> {
         std::fs::read_to_string(into.join(file))
@@ -147,11 +143,24 @@ fn a_new_plugin_keeps_claudes_files_out_of_git_and_out_of_its_image() {
             .map(|line| line.trim().to_string())
             .collect()
     };
+    // Committed, as Claude Code's own convention has it: what is shared is in
+    // git, and only what is one person's is ignored.
     let gitignore = lines(".gitignore");
-    for ignored in ["CLAUDE.md", "CLAUDE.local.md", ".claude/"] {
+    for ignored in [
+        "CLAUDE.local.md",
+        ".claude/settings.local.json",
+        ".claude/dev.jsonl",
+        ".claude/dev.err",
+    ] {
         assert!(
             gitignore.iter().any(|l| l == ignored),
             "{ignored}: {gitignore:?}"
+        );
+    }
+    for shared in ["CLAUDE.md", ".claude", ".claude/", ".claude/skills/"] {
+        assert!(
+            !gitignore.iter().any(|l| l == shared),
+            "{shared} is committed: {gitignore:?}"
         );
     }
     let dockerignore = lines(".dockerignore");
