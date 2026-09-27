@@ -22,7 +22,7 @@ meridian -- bringing a Meridian deployment up
 
   meridian doctor            can this machine and this cluster run a deployment?
   meridian up                install the chart, and open this deployment's wizard
-  meridian down              uninstall it, keeping its namespace unless asked
+  meridian down              uninstall it; --delete-namespace removes its namespace too
   meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>
   meridian plugin upload     build the plugin here and put it in the deployment's catalogue
   meridian plugin list       the catalogue: versions uploaded, and what is launched
@@ -100,12 +100,11 @@ asked wrongly, and 3 when there is no session or it has lapsed
       --print <path>        open: the page at that path on the plugin's host, as you
                             are served it, instead of a link
 
-down:
+down: nothing is asked, since saying down is the decision
       --release <name>      the Helm release (default: meridian)
       --delete-namespace    remove the namespace too, and with it the database the
-                            deployment brought and the deployment's own key. Asked
-                            separately; never the cluster itself
-      --yes                 do it without being asked. For a script
+                            deployment brought and the deployment's own key. Never
+                            the cluster itself
 
 upgrade:
       --to <version>        a named release instead of the latest, older or newer.
@@ -900,8 +899,7 @@ async fn down_command(arguments: &Arguments, namespace: &str) -> i32 {
         namespace: namespace.to_string(),
         delete_namespace: arguments.set("--delete-namespace"),
     };
-    let yes = arguments.set("--yes");
-    match down::down(&asked, |question| yes || approved(question)).await {
+    match down::down(&asked).await {
         Ok(said) => {
             print!("{said}");
             0

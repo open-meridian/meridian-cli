@@ -150,16 +150,16 @@ meridian down
 meridian down --delete-namespace
 ```
 
-Uninstalls the release, once you agree (`--yes` for a script). The namespace
-is kept, and with it the database the deployment brought and the deployment's
-own key, so `meridian up` again picks both back up.
+Uninstalls the release. Nothing is asked: saying `down` is the decision. The
+namespace is kept, and with it the database the deployment brought and the
+deployment's own key, so `meridian up` again picks both back up.
 
-`--delete-namespace` removes the namespace too, asked separately: the
-database and all its data go, which nothing backs up, and so does the
-deployment's key, after which the platform refuses it a new enrolment code
-until the key is revoked there. Either way the deployment still exists on the
-platform; retiring it there is what revokes its key. A session this machine
-held with it is forgotten. It never touches the cluster itself.
+`--delete-namespace` removes the namespace too: the database and all its data
+go, which nothing backs up, and so does the deployment's key, after which the
+platform refuses it a new enrolment code until the key is revoked there.
+Either way the deployment still exists on the platform; retiring it there is
+what revokes its key. A session this machine held with it is forgotten. It
+never touches the cluster itself.
 
 Not to be confused with `meridian uninstall`, which removes this CLI.
 
