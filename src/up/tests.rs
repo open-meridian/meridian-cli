@@ -304,3 +304,18 @@ fn development_is_asked_for_only_when_said() {
     };
     assert!(values_document(&marked).contains("development: true\n"));
 }
+
+#[test]
+fn a_local_name_is_reached_over_http_and_any_other_over_https() {
+    assert_eq!(
+        address_of("meridian.localhost"),
+        "http://meridian.localhost"
+    );
+    assert_eq!(address_of("localhost"), "http://localhost");
+    assert_eq!(
+        address_of("meridian.firm.example"),
+        "https://meridian.firm.example"
+    );
+    // Not a suffix match on the text: `notlocalhost` is somebody's domain.
+    assert_eq!(address_of("notlocalhost"), "https://notlocalhost");
+}

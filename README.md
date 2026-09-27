@@ -70,10 +70,24 @@ the two values the platform gave you, waits for the dashboard, and prints the
 wizard's address.
 
 Where the cluster has an ingress controller — Rancher Desktop's Traefik, say —
-it is reached through the chart's Ingress as `http://meridian.localhost`
-(`--host` for another name under `.localhost`). Every browser sends that name,
-and every plugin's page on a name below it, to this machine, so the address
-stays after `up` ends and plugin pages work. Answer the wizard's dashboard
+it is reached through the chart's Ingress as `http://meridian.localhost`.
+Every browser sends that name, and every plugin's page on a name below it, to
+this machine, so the address stays after `up` ends and plugin pages work.
+`--host` names another: under `.localhost` it is plain HTTP, and any other
+name — your firm's — is reached over HTTPS, with the Secrets holding its
+certificates named in a values file:
+
+```yaml
+# ingress.yaml
+ingress:
+  tls:
+    secretName: meridian-tls                 # for the name
+    pluginsSecretName: meridian-plugins-tls  # for *.plugins.<the name>
+```
+
+```
+meridian up --id dep-7 --host meridian.firm.example -f ingress.yaml
+``` Answer the wizard's dashboard
 address with it. Where there is no controller, or with `--no-ingress`, `up`
 forwards a local port instead (`--port`, default 8443) and holds the forward
 until you stop it.

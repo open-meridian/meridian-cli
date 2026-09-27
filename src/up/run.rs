@@ -154,7 +154,7 @@ pub async fn up(
     wait_for_rollout(install, &service).await?;
 
     let (address, mut forward) = match &install.ingress {
-        Some(ingress) => (format!("http://{}", ingress.host), None),
+        Some(ingress) => (super::address_of(&ingress.host), None),
         None => (
             format!("http://127.0.0.1:{port}"),
             Some(port_forward(install, &service, port).await?),

@@ -64,7 +64,9 @@ up:
   -f, --values <file>       Helm-style chart values, passed straight through
       --host <name>         the name it is reached by through the cluster's ingress
                             controller (default: meridian.localhost, which every
-                            browser sends to this machine)
+                            browser sends to this machine). Any other name is
+                            reached over HTTPS, with its certificate's Secret
+                            named in a values file (-f)
       --no-ingress          reach it by a port-forward this command holds, as on a
                             cluster with no ingress controller
       --development         install it for development: it may run plugin code as

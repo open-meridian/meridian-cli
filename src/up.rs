@@ -47,9 +47,18 @@ pub struct Install {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ingress {
     /// A name under `.localhost` locally, which every browser sends to this
-    /// machine, plugin pages' names below it included.
+    /// machine, plugin pages' names below it included; or the firm's own name,
+    /// reached over HTTPS.
     pub host: String,
     pub class: String,
+}
+
+/// The address a name is reached at through the Ingress: plain HTTP for a
+/// name under `.localhost`, which never leaves this machine, and HTTPS for any
+/// other, since the chart serves plain HTTP only to a local install.
+pub fn address_of(host: &str) -> String {
+    let local = host == "localhost" || host.ends_with(".localhost");
+    format!("{}://{host}", if local { "http" } else { "https" })
 }
 
 /// Which IngressClass to use, from `kubectl get ingressclass` as `name<TAB>is-default`
