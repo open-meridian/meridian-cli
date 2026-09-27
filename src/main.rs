@@ -7,6 +7,7 @@
 mod catalogue;
 mod connect;
 mod doctor;
+mod live;
 mod machine;
 mod plugin;
 mod release;
@@ -26,6 +27,16 @@ meridian -- bringing a Meridian deployment up
   meridian plugin launch <name> <version> --instance <id>
                              run a version, once you approve the roles and tags it asks for
   meridian plugin stop <id>  stop a launched instance
+  meridian plugin dev --instance <id>
+                             run the plugin here live on a development deployment,
+                             sending each save as it is made
+  meridian plugin logs --instance <id>
+                             what a live plugin printed
+  meridian plugin events --instance <id>
+                             what happened to a live plugin: synced, restarted,
+                             ready, crashed, refused, each with its revision
+  meridian plugin open --instance <id>
+                             a link to a plugin's page that one browser opens once
   meridian connect <address> sign in to a deployment's dashboard, and keep the session
   meridian sign-out [<address>]
                              end that session, here and at the deployment
@@ -66,14 +77,24 @@ plugin new:
       --into <dir>          where to write it (default: ./<name>). Never somewhere
                             that already exists
 
-plugin upload, list, launch, stop: as the deployment's administrator, through the
-session `meridian connect` keeps
+plugin upload, list, launch, stop, dev, logs, events, open: through the session
+`meridian connect` keeps. They exit 0 when done, 1 when refused or failed, 2 when
+asked wrongly, and 3 when there is no session or it has lapsed
       --deployment <addr>   which connected deployment, when there is more than one
-      --dir <dir>           upload: the plugin's directory (default: .). Its image is
-                            built with docker, from its own Dockerfile
-      --instance <id>       launch: the instance's name, which its page is found by
-      --yes                 launch: approve what it asks for without being asked. For
-                            a script that has already read it
+      --dir <dir>           upload, dev: the plugin's directory (default: .). Its image
+                            is built with docker, from its own Dockerfile
+      --instance <id>       launch, dev, logs, events, open: the instance's name,
+                            which its page is found by
+      --yes                 launch, dev: approve what it asks for without being asked.
+                            For a script that has already read it
+      --json                dev, logs, events, open: JSON on stdout, one object, or one
+                            per line for dev and --follow; progress goes to stderr
+      --release             dev: upload the plugin as it is now as a version, and run
+                            that version in place of the live instance
+      --since <revision>    logs, events: only what came after that revision
+      --follow              events: keep reporting them as they happen
+      --print <path>        open: the page at that path on the plugin's host, as you
+                            are served it, instead of a link
 
 upgrade:
       --to <version>        a named release instead of the latest, older or newer.
@@ -98,8 +119,10 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 19] = [
+const TAKES_A_VALUE: [&str; 21] = [
     "--into",
+    "--since",
+    "--print",
     "--host",
     "--to",
     "--deployment",
@@ -123,8 +146,10 @@ const TAKES_A_VALUE: [&str; 19] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 7] = [
+const SWITCHES: [&str; 9] = [
     "--no-doctor",
+    "--json",
+    "--follow",
     "--no-ingress",
     "--development",
     "--yes",
@@ -154,6 +179,12 @@ fn parse(said: Vec<String>) -> Result<Arguments, String> {
         // `--params x` is what a person types.
         if let Some((flag, value)) = argument.split_once('=') {
             flags.push((flag.to_string(), value.to_string()));
+            continue;
+        }
+        // `up --release <name>` names a Helm release; `plugin dev --release`
+        // releases the code, and takes nothing.
+        if argument == "--release" && command == "plugin" {
+            switches.push(argument);
             continue;
         }
         if TAKES_A_VALUE.contains(&argument.as_str())
@@ -277,6 +308,9 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
         if matches!(verb, "upload" | "list" | "launch" | "stop") {
             return catalogue_command(arguments, &words).await;
         }
+        if matches!(verb, "dev" | "logs" | "events" | "open") {
+            return live_command(arguments, &words).await;
+        }
     }
     match arguments.words.as_slice() {
         [new, name] if new == "new" => {
@@ -296,7 +330,7 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
             }
         }
         _ => {
-            eprintln!("meridian: plugin takes `new <name>`, `upload`, `list`, `launch <name> <version>` or `stop <instance>`\n\n{USAGE}");
+            eprintln!("meridian: plugin takes `new <name>`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events` or `open`\n\n{USAGE}");
             2
         }
     }
@@ -333,8 +367,8 @@ fn approved(question: &str) -> bool {
     if !std::io::stdin().is_terminal() {
         return false;
     }
-    print!("{question} [y/N] ");
-    let _ = std::io::stdout().flush();
+    eprint!("{question} [y/N] ");
+    let _ = std::io::stderr().flush();
     let mut answer = String::new();
     let _ = std::io::stdin().lock().read_line(&mut answer);
     matches!(answer.trim(), "y" | "Y" | "yes" | "Yes")
@@ -345,7 +379,7 @@ async fn catalogue_command(arguments: &Arguments, words: &[&str]) -> i32 {
         Ok(held) => held,
         Err(refusal) => {
             eprintln!("meridian plugin: {refusal}");
-            return 2;
+            return 3;
         }
     };
     let (address, session) = (held.address.as_str(), held.session.as_str());
@@ -368,7 +402,7 @@ async fn catalogue_command(arguments: &Arguments, words: &[&str]) -> i32 {
                 eprintln!("meridian plugin launch: `{instance}` is not an instance's name: lowercase letters, digits and single hyphens");
                 return 2;
             }
-            launched(arguments, address, session, name, version, instance).await
+            launched(arguments, address, session, name, version, instance, false).await
         }
         ["stop", instance] => catalogue::stop(address, session, instance)
             .await
@@ -384,21 +418,23 @@ async fn catalogue_command(arguments: &Arguments, words: &[&str]) -> i32 {
             0
         }
         Err(refusal) => {
-            eprintln!("meridian plugin {}: {refusal}", words[0]);
-            1
+            let failed = classified(address, refusal);
+            eprintln!("meridian plugin {}: {}", words[0], failed.said());
+            failed.code()
         }
     }
 }
 
 /// W8.3: what the version asks for, shown, and approved by the person.
-async fn launched(
+async fn approval(
     arguments: &Arguments,
     address: &str,
     session: &str,
     name: &str,
     version: &str,
     instance: &str,
-) -> Result<String, String> {
+    live: bool,
+) -> Result<(Vec<String>, Vec<String>), String> {
     let held = catalogue::catalogue(address, session).await?;
     let (roles, tags) = catalogue::declared(&held, name, version).ok_or(format!(
         "{name} {version} is not in {address}'s catalogue: `meridian plugin list` shows what is"
@@ -410,21 +446,430 @@ async fn launched(
             names.join(", ")
         }
     };
-    println!("{name} {version} asks for");
-    println!("  roles: {}", listed(&roles));
-    println!("  tags:  {}", listed(&tags));
-    if !arguments.set("--yes") && !approved(&format!("Launch it as {instance}, with these?")) {
+    eprintln!("{name} {version} asks for");
+    eprintln!("  roles: {}", listed(&roles));
+    eprintln!("  tags:  {}", listed(&tags));
+    let how = if live { "live " } else { "" };
+    if !arguments.set("--yes") && !approved(&format!("Launch it {how}as {instance}, with these?")) {
         return Err(
             "not approved, so not launched. Where there is no terminal to ask at, --yes approves"
                 .into(),
         );
     }
-    catalogue::launch(address, session, name, version, instance, &roles, &tags).await?;
+    Ok((roles, tags))
+}
+
+async fn launched(
+    arguments: &Arguments,
+    address: &str,
+    session: &str,
+    name: &str,
+    version: &str,
+    instance: &str,
+    live: bool,
+) -> Result<String, String> {
+    let (roles, tags) =
+        approval(arguments, address, session, name, version, instance, live).await?;
+    let asked = catalogue::Launch {
+        name,
+        version,
+        instance,
+        roles: &roles,
+        tags: &tags,
+        live,
+    };
+    catalogue::launch(address, session, &asked).await?;
     // A deployment admin opens any plugin's page; anybody else, one they
     // are granted a part of (spec/deployment-dashboard-and-access, ruling 19).
     Ok(format!(
         "Launched {instance}: {name} {version}.\nIts page, if it serves one: {address}/plugins/{instance}\n"
     ))
+}
+
+// ── The live loop (spec/live-plugin-development, requirements 10 to 14) ──
+
+/// A catalogue command's refusal, told apart when it is the session.
+fn classified(address: &str, said: String) -> live::Failed {
+    if said.starts_with("401") {
+        return live::Failed::Session(format!(
+            "{said}: `meridian connect {address}` to sign in again"
+        ));
+    }
+    live::Failed::Refused(said)
+}
+
+async fn live_command(arguments: &Arguments, words: &[&str]) -> i32 {
+    let verb = words[0];
+    let held = match held_session(arguments) {
+        Ok(held) => held,
+        Err(refusal) => {
+            eprintln!("meridian plugin {verb}: {refusal}");
+            return 3;
+        }
+    };
+    let Some(instance) = arguments.value("--instance", "--instance") else {
+        eprintln!("meridian plugin {verb}: --instance <id> names the instance");
+        return 2;
+    };
+    if !catalogue::is_name(instance) {
+        eprintln!("meridian plugin {verb}: `{instance}` is not an instance's name: lowercase letters, digits and single hyphens");
+        return 2;
+    }
+    let since = match arguments.value("--since", "--since").map(str::parse::<u64>) {
+        None => None,
+        Some(Ok(since)) => Some(since),
+        Some(Err(_)) => {
+            eprintln!("meridian plugin {verb}: --since takes a revision, a whole number");
+            return 2;
+        }
+    };
+    let deployment = live::Deployment {
+        address: &held.address,
+        session: &held.session,
+    };
+    let json = arguments.set("--json");
+    let done = match words {
+        ["dev"] if arguments.set("--release") => {
+            release(arguments, &deployment, instance, json).await
+        }
+        ["dev"] => develop(arguments, &deployment, instance, json).await,
+        ["logs"] => logs(&deployment, instance, since, json).await,
+        ["events"] => {
+            events(
+                &deployment,
+                instance,
+                since,
+                arguments.set("--follow"),
+                json,
+            )
+            .await
+        }
+        ["open"] => match arguments.value("--print", "--print") {
+            Some(path) => printed(&deployment, instance, path, json).await,
+            None => opened(&deployment, instance, json).await,
+        },
+        _ => {
+            eprintln!("meridian: plugin {verb} takes no words; --instance <id> names the instance\n\n{USAGE}");
+            return 2;
+        }
+    };
+    match done {
+        Ok(()) => 0,
+        Err(failed) => {
+            eprintln!("meridian plugin {verb}: {}", failed.said());
+            failed.code()
+        }
+    }
+}
+
+/// `plugin dev`: upload once, launch live, send the directory, then each
+/// save, reporting every event with its revision (requirement 10).
+async fn develop(
+    arguments: &Arguments,
+    deployment: &live::Deployment<'_>,
+    instance: &str,
+    json: bool,
+) -> Result<(), live::Failed> {
+    let (address, session) = (deployment.address, deployment.session);
+    let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
+    let pyproject = std::fs::read_to_string(dir.join("pyproject.toml"))
+        .map_err(|failed| format!("{} has no pyproject.toml: {failed}", dir.display()))?;
+    let metadata = catalogue::metadata(&pyproject)?;
+    let (name, version) = (metadata.name.as_str(), metadata.version.as_str());
+
+    let held = catalogue::catalogue(address, session)
+        .await
+        .map_err(|said| classified(address, said))?;
+    let running = held["launches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|launch| launch["instance_id"] == instance && launch["state"] == "launched");
+    match running {
+        Some(launch) if launch["live"] == true => {
+            eprintln!(
+                "{instance} is live already; sending {} to it.",
+                dir.display()
+            );
+        }
+        Some(launch) => {
+            return Err(live::Failed::Refused(format!(
+                "{instance} runs {} {} as a version, not live: `meridian plugin stop {instance}` \
+                 first, or choose another --instance",
+                launch["name"].as_str().unwrap_or_default(),
+                launch["version"].as_str().unwrap_or_default(),
+            )));
+        }
+        None => {
+            if catalogue::declared(&held, name, version).is_some() {
+                eprintln!(
+                    "{name} {version} is uploaded already, so it is what runs, with {}'s files \
+                     sent over it. A change to its dependencies needs a new version.",
+                    dir.display()
+                );
+            } else {
+                catalogue::upload(address, session, &dir)
+                    .await
+                    .map_err(|said| classified(address, said))?;
+            }
+            let said = launched(arguments, address, session, name, version, instance, true)
+                .await
+                .map_err(|said| classified(address, said))?;
+            eprint!("{said}");
+        }
+    }
+    watch(deployment, instance, &dir, json).await
+}
+
+/// Send what changed, as it changes, until interrupted; report every event.
+async fn watch(
+    deployment: &live::Deployment<'_>,
+    instance: &str,
+    dir: &std::path::Path,
+    json: bool,
+) -> Result<(), live::Failed> {
+    let ignored = live::Ignored::of(dir);
+    let mut sent = live::Snapshot::new();
+    let mut seen = live::Seen::default();
+    let mut since: Option<u64> = None;
+    let mut waiting_said = String::new();
+    let mut scan = tokio::time::interval(live::SCAN);
+    let mut poll = tokio::time::interval(live::POLL);
+    let interrupted = tokio::signal::ctrl_c();
+    tokio::pin!(interrupted);
+    eprintln!(
+        "Watching {} for {instance}. Ctrl-C stops watching; the instance keeps running.",
+        dir.display()
+    );
+    loop {
+        tokio::select! {
+            _ = &mut interrupted => {
+                eprintln!("Stopped watching. {instance} runs on, live: `meridian plugin stop {instance}` stops it.");
+                return Ok(());
+            }
+            _ = scan.tick() => {
+                if live::scan(dir, &ignored) == sent {
+                    continue;
+                }
+                // A save is often several writes: the directory as it is a
+                // moment later, not halfway.
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let now = live::scan(dir, &ignored);
+                let change = live::change(dir, &sent, &now)?;
+                if change.is_empty() {
+                    sent = now;
+                    continue;
+                }
+                match deployment.send(instance, &change).await {
+                    Ok(revision) => {
+                        waiting_said.clear();
+                        since = Some(revision.saturating_sub(1));
+                        if json {
+                            println!("{}", serde_json::json!({ "event": "sent", "revision": revision,
+                                "files": change.files.len(), "deleted": change.deleted.len() }));
+                        } else {
+                            println!("r{revision} sent ({} files, {} deleted)", change.files.len(), change.deleted.len());
+                        }
+                        sent = now;
+                    }
+                    Err(live::Failed::Session(said)) => return Err(live::Failed::Session(said)),
+                    // Not up yet, or restarting: tried again at the next scan,
+                    // and said once.
+                    Err(live::Failed::Refused(said)) => {
+                        if said != waiting_said {
+                            eprintln!("Not sent yet, trying again: {said}");
+                            waiting_said = said;
+                        }
+                    }
+                }
+            }
+            _ = poll.tick() => {
+                let Ok(said) = deployment.events(instance, since).await else {
+                    continue;
+                };
+                for event in seen.new_in(&said) {
+                    if json {
+                        println!("{event}");
+                    } else {
+                        println!("{}", live::line(&event));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `plugin dev --release`: the directory as it is, uploaded as a version and
+/// run in place of the live instance (requirement 13, ruling 7).
+async fn release(
+    arguments: &Arguments,
+    deployment: &live::Deployment<'_>,
+    instance: &str,
+    json: bool,
+) -> Result<(), live::Failed> {
+    let (address, session) = (deployment.address, deployment.session);
+    let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
+    let pyproject = std::fs::read_to_string(dir.join("pyproject.toml"))
+        .map_err(|failed| format!("{} has no pyproject.toml: {failed}", dir.display()))?;
+    let metadata = catalogue::metadata(&pyproject)?;
+    let (name, version) = (metadata.name.as_str(), metadata.version.as_str());
+    let digest = catalogue::upload(address, session, &dir)
+        .await
+        .map_err(|said| {
+            if said.contains("recorded already") {
+                live::Failed::Refused(format!(
+                    "{name} {version} is recorded already, and a version is never replaced: \
+                     raise the version in pyproject.toml, then release again"
+                ))
+            } else {
+                classified(address, said)
+            }
+        })?;
+    let (roles, tags) = approval(arguments, address, session, name, version, instance, false)
+        .await
+        .map_err(|said| classified(address, said))?;
+    let held = catalogue::catalogue(address, session)
+        .await
+        .map_err(|said| classified(address, said))?;
+    let running = held["launches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|launch| launch["instance_id"] == instance && launch["state"] == "launched");
+    if running {
+        catalogue::stop(address, session, instance)
+            .await
+            .map_err(|said| classified(address, said))?;
+    }
+    let asked = catalogue::Launch {
+        name,
+        version,
+        instance,
+        roles: &roles,
+        tags: &tags,
+        live: false,
+    };
+    catalogue::launch(address, session, &asked)
+        .await
+        .map_err(|said| classified(address, said))?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "instance_id": instance, "name": name,
+            "version": version, "digest": digest })
+        );
+    } else {
+        println!("Released {name} {version} as {digest}, and launched it as {instance}.");
+    }
+    Ok(())
+}
+
+/// `plugin logs`: what the plugin printed after a revision (requirement 11).
+async fn logs(
+    deployment: &live::Deployment<'_>,
+    instance: &str,
+    since: Option<u64>,
+    json: bool,
+) -> Result<(), live::Failed> {
+    let said = deployment.output(instance, since).await?;
+    if json {
+        println!("{said}");
+    } else {
+        for line in said["lines"].as_array().into_iter().flatten() {
+            println!("{}", line.as_str().unwrap_or_default());
+        }
+    }
+    Ok(())
+}
+
+/// `plugin events`: what happened to it, after a revision, and as it happens
+/// with --follow (requirement 11).
+async fn events(
+    deployment: &live::Deployment<'_>,
+    instance: &str,
+    since: Option<u64>,
+    follow: bool,
+    json: bool,
+) -> Result<(), live::Failed> {
+    let mut seen = live::Seen::default();
+    let said = deployment.events(instance, since).await?;
+    if json && !follow {
+        println!("{said}");
+        return Ok(());
+    }
+    let report = |event: &serde_json::Value| {
+        if json {
+            println!("{event}");
+        } else {
+            println!("{}", live::line(event));
+        }
+    };
+    seen.new_in(&said).iter().for_each(report);
+    if !follow {
+        return Ok(());
+    }
+    let interrupted = tokio::signal::ctrl_c();
+    tokio::pin!(interrupted);
+    let mut poll = tokio::time::interval(live::POLL);
+    loop {
+        tokio::select! {
+            _ = &mut interrupted => return Ok(()),
+            _ = poll.tick() => {
+                let said = deployment.events(instance, since).await?;
+                seen.new_in(&said).iter().for_each(report);
+            }
+        }
+    }
+}
+
+/// `plugin open`: a link to the plugin's host that one browser opens, once
+/// (W6.15).
+async fn opened(
+    deployment: &live::Deployment<'_>,
+    instance: &str,
+    json: bool,
+) -> Result<(), live::Failed> {
+    let url = deployment.open(instance).await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "instance_id": instance, "url": url })
+        );
+    } else {
+        println!("{url}");
+        eprintln!("One browser may open it, within a minute; it signs that browser in to {instance}'s page alone.");
+    }
+    Ok(())
+}
+
+/// `plugin open --print <path>`: the page as the person is served it
+/// (W6.15). The plugin's own error is printed, and is a failure.
+async fn printed(
+    deployment: &live::Deployment<'_>,
+    instance: &str,
+    path: &str,
+    json: bool,
+) -> Result<(), live::Failed> {
+    use std::io::Write as _;
+    let said = deployment.page(instance, path).await?;
+    let status = said["status"].as_u64().unwrap_or(0);
+    if json {
+        println!("{said}");
+    } else if let Some(body) = said["body"].as_str() {
+        print!("{body}");
+    } else if let Some(encoded) = said["body_base64"].as_str() {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|failed| failed.to_string())?;
+        let _ = std::io::stdout().write_all(&bytes);
+    }
+    if !(200..300).contains(&status) {
+        return Err(live::Failed::Refused(format!(
+            "{instance} answered {status} for {path}"
+        )));
+    }
+    Ok(())
 }
 
 /// `meridian connect <address>`: W6.13 from this side.
@@ -797,6 +1242,19 @@ mod tests {
         assert_eq!(arguments.value("--params", "-p"), Some("first-run.yaml"));
         assert!(arguments.set("--no-doctor"));
         assert_eq!(arguments.value("--id", "--id"), Some("dep-7"));
+    }
+
+    #[test]
+    fn release_names_a_helm_release_for_up_and_releases_the_code_for_plugin() {
+        let up = parse(said("up --release trial --no-doctor")).unwrap();
+        assert_eq!(up.value("--release", "--release"), Some("trial"));
+        assert!(up.set("--no-doctor"));
+
+        let dev = parse(said("plugin dev --release --dir ./p --instance x --yes")).unwrap();
+        assert!(dev.set("--release"));
+        assert_eq!(dev.words, ["dev"]);
+        assert_eq!(dev.value("--dir", "--dir"), Some("./p"));
+        assert_eq!(dev.value("--instance", "--instance"), Some("x"));
     }
 
     #[test]

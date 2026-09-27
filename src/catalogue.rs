@@ -260,7 +260,7 @@ pub async fn upload(address: &str, session: &str, dir: &Path) -> Result<String, 
         .map_err(|failed| format!("{} has no pyproject.toml: {failed}", dir.display()))?;
     let metadata = metadata(&pyproject)?;
     let tag = format!("meridian-plugin/{}:{}", metadata.name, metadata.version);
-    println!("Building {tag} from {} ...", dir.display());
+    eprintln!("Building {tag} from {} ...", dir.display());
     docker(&["build", "-t", &tag, &dir.display().to_string()]).await?;
 
     let scratch = std::env::temp_dir().join(format!("meridian-upload-{}", std::process::id()));
@@ -311,7 +311,7 @@ async fn push(
     let others = others(address, session, &metadata.name).await;
     for (digest, path) in &image.blobs {
         if holds(format!("{repository}/blobs/{digest}")).await? {
-            println!("  {digest}: already there");
+            eprintln!("  {digest}: already there");
             continue;
         }
         let mut from = None;
@@ -334,7 +334,7 @@ async fn push(
         // Mounted: linked into this repository, nothing sent. A registry that
         // will not mount opens an upload instead, which is sent as ever.
         if let (Some(other), reqwest::StatusCode::CREATED) = (from, status) {
-            println!("  {digest}: already there, in plugins/{other}");
+            eprintln!("  {digest}: already there, in plugins/{other}");
             continue;
         }
         let location = started
@@ -367,7 +367,7 @@ async fn push(
                 said(status, &sent.text().await.unwrap_or_default())
             ));
         }
-        println!("  {digest}: sent, {size} bytes");
+        eprintln!("  {digest}: sent, {size} bytes");
     }
     let named = http
         .put(format!("{repository}/manifests/{}", metadata.version))
@@ -563,21 +563,29 @@ async fn post(
     serde_json::from_str(&text).map_err(|failed| failed.to_string())
 }
 
+/// What a launch asks for: a recorded version, the instance it runs as, what
+/// was approved of it, and whether it runs live (W8.3).
+pub struct Launch<'a> {
+    pub name: &'a str,
+    pub version: &'a str,
+    pub instance: &'a str,
+    pub roles: &'a [String],
+    pub tags: &'a [String],
+    pub live: bool,
+}
+
 pub async fn launch(
     address: &str,
     session: &str,
-    name: &str,
-    version: &str,
-    instance: &str,
-    roles: &[String],
-    tags: &[String],
+    asked: &Launch<'_>,
 ) -> Result<serde_json::Value, String> {
     post(
         address,
         session,
         "/terminal/plugins/launch",
-        serde_json::json!({ "name": name, "version": version, "instance_id": instance,
-                            "approved_roles": roles, "approved_tags": tags }),
+        serde_json::json!({ "name": asked.name, "version": asked.version,
+                            "instance_id": asked.instance, "approved_roles": asked.roles,
+                            "approved_tags": asked.tags, "live": asked.live }),
     )
     .await
 }
