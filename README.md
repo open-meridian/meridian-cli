@@ -25,8 +25,8 @@ meridian upgrade             # replace this binary with the latest release
 meridian uninstall           # end every session it holds, and remove it
 ```
 
-Every command takes `--json` and exits non-zero on failure, for scripts and AI
-agents.
+Every command exits non-zero on failure, and `plugin dev`, `logs`, `events` and
+`open` take `--json` for scripts and AI agents.
 
 ## Install
 
