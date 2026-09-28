@@ -1,7 +1,9 @@
 # meridian
 
-The command line for bringing a Meridian deployment up where you have a
-terminal, and for working with one that is already running.
+The command line for [Open Meridian](https://open-meridian.com), the
+open-source OEMS: it brings a deployment up where you have a terminal, and
+works with one that is already running. The whole install, step by step, is
+meridian-core's [INSTALL.md](https://github.com/open-meridian/meridian-core/blob/main/INSTALL.md).
 
 ```
 meridian doctor              # can this machine and this cluster run a deployment?
@@ -9,11 +11,22 @@ meridian up                  # install the chart, then open the wizard
 meridian up --params f.yaml  # the same, answered from a file
 meridian down                # uninstall it, keeping its namespace unless asked
 meridian connect <address>   # sign in to a deployment, and keep the session
+meridian sign-out            # end that session, here and at the deployment
 meridian plugin new <name>   # start a plugin from the SDK's reference plugin
 meridian plugin upload       # build it and put it in the deployment's catalogue
+meridian plugin list         # versions uploaded, and what is launched
 meridian plugin launch …     # run a version, once you approve what it asks for
+meridian plugin stop <id>    # stop a launched instance
 meridian plugin dev …        # run it live while you write it, on a development deployment
+meridian plugin logs …       # what a plugin printed
+meridian plugin events …     # what its sidecar refused it, and what else happened
+meridian plugin open …       # its page: a link one browser opens, or --print
+meridian upgrade             # replace this binary with the latest release
+meridian uninstall           # end every session it holds, and remove it
 ```
+
+Every command takes `--json` and exits non-zero on failure, for scripts and AI
+agents.
 
 ## Install
 
@@ -38,11 +51,9 @@ Nothing is looked up unless you ask: `meridian` never checks for a newer
 release on its own. The checksum catches a broken download, not a compromised
 release; signing is not built yet.
 
-**What it is not: the way to install in a cloud.** A marketplace listing
-installs the chart and the deployment's own wizard does the rest. Nothing here
-is required for that, and anything this makes convenient is possible without
-it. See `spec/the-cli.md` in meridian-design for what this is for and what it
-deliberately leaves alone.
+**What it is not: the only way in.** The chart installs with plain `helm`, and
+the deployment's own wizard does the rest; nothing here is required for that,
+and anything this makes convenient is possible without it.
 
 ## doctor
 
@@ -91,8 +102,9 @@ ingress:
 
 ```
 meridian up --id DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0P --host meridian.firm.example -f ingress.yaml
-``` Answer the wizard's dashboard
-address with it. Where there is no controller, or with `--no-ingress`, `up`
+```
+
+Answer the wizard's dashboard address with it. Where there is no controller, or with `--no-ingress`, `up`
 forwards a local port instead (`--port`, default 8443) and holds the forward
 until you stop it.
 
@@ -182,6 +194,12 @@ meridian plugin list                     # versions uploaded, and what is launch
 meridian plugin launch my-plugin 0.1.0 --instance my-plugin
 meridian plugin stop my-plugin
 ```
+
+`plugin new` writes a working plugin: its code and page, a `Dockerfile`,
+`pyproject.toml`, and `AGENTS.md`, which teaches any coding agent the live
+loop below. `CLAUDE.md` and the `develop-live` skill lead Claude Code to the
+same text. Commit them with the plugin; `.dockerignore` keeps them out of its
+image.
 
 `launch` shows the roles and tags the version asks for and runs it only once
 you approve them; `--yes` approves for a script that has already read them.
