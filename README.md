@@ -51,9 +51,8 @@ Nothing is looked up unless you ask: `meridian` never checks for a newer
 release on its own. The checksum catches a broken download, not a compromised
 release; signing is not built yet.
 
-**What it is not: the only way in.** The chart installs with plain `helm`, and
-the deployment's own wizard does the rest; nothing here is required for that,
-and anything this makes convenient is possible without it.
+`meridian` is the way to install a deployment: `doctor` checks, `up` installs
+and opens the wizard, and the deployment's own wizard does the rest.
 
 ## doctor
 
@@ -114,8 +113,8 @@ install choice, made here or in a sandbox's own values, and never switched on
 from the dashboard. It is what `plugin dev` needs; a firm's own deployment
 never has it.
 
-It drives your own `helm` and `kubectl` and prints the command it used, so you
-can do the same by hand. It embeds no Helm library: the chart is what says what
+It drives your own `helm` and `kubectl` and prints the command it used, so
+you can see exactly what it did. It embeds no Helm library: the chart is what says what
 runs, and a second renderer is a second source of truth.
 
 ### Answering from a file
