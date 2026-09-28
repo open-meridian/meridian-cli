@@ -68,6 +68,7 @@ git-ignored, since it is this session's, not the plugin's.
 
 | `event` | Means |
 |---|---|
+| `seeded` | The live folder was filled from the plugin's image, the first time it runs live |
 | `sent` | This process sent a change; `revision` is the number it was given |
 | `synced` | The sidecar wrote it |
 | `restarted` | The plugin's process started on that revision |
