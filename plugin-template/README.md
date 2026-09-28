@@ -17,6 +17,7 @@ running in about a second:
 
     meridian plugin dev --instance reference-plugin
 
-`CLAUDE.md` and the `develop-live` skill under `.claude/` teach Claude Code
-the same loop. Commit them with the plugin, so whoever works on it next has
-them too; `.dockerignore` keeps them out of its image.
+`AGENTS.md` teaches any coding agent the same loop; `CLAUDE.md` and the
+`develop-live` skill under `.claude/` lead Claude Code to it. Commit them with
+the plugin, so whoever works on it next has them too; `.dockerignore` keeps
+them out of its image.

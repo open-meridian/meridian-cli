@@ -122,7 +122,7 @@ fn a_name_is_one_every_place_it_goes_accepts() {
 }
 
 #[test]
-fn a_new_plugin_commits_claudes_shared_files_and_keeps_all_of_them_out_of_its_image() {
+fn a_new_plugin_commits_the_agents_shared_files_and_keeps_all_of_them_out_of_its_image() {
     let scratch = Scratch::new("claude");
     let into = scratch.0.join("meridian-snaptrade");
     scaffold("meridian-snaptrade", &into).expect("scaffolded");
@@ -130,6 +130,7 @@ fn a_new_plugin_commits_claudes_shared_files_and_keeps_all_of_them_out_of_its_im
     let files = every_file(&into);
     for written in [
         ".gitignore",
+        "AGENTS.md",
         "CLAUDE.md",
         ".claude/skills/develop-live/SKILL.md",
     ] {
@@ -156,31 +157,52 @@ fn a_new_plugin_commits_claudes_shared_files_and_keeps_all_of_them_out_of_its_im
             "{ignored}: {gitignore:?}"
         );
     }
-    for shared in ["CLAUDE.md", ".claude", ".claude/", ".claude/skills/"] {
+    for shared in [
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".claude",
+        ".claude/",
+        ".claude/skills/",
+    ] {
         assert!(
             !gitignore.iter().any(|l| l == shared),
             "{shared} is committed: {gitignore:?}"
         );
     }
     let dockerignore = lines(".dockerignore");
-    for ignored in ["CLAUDE.md", "CLAUDE.local.md", ".claude", ".meridian"] {
+    for ignored in [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "CLAUDE.local.md",
+        ".claude",
+        ".meridian",
+    ] {
         assert!(
             dockerignore.iter().any(|l| l == ignored),
             "{ignored}: {dockerignore:?}"
         );
     }
 
-    // And what they teach is about this plugin, not the template.
+    // What they teach is about this plugin, not the template, and it is
+    // taught once: AGENTS.md holds the loop, and Claude's files lead to it.
+    let agents = std::fs::read_to_string(into.join("AGENTS.md")).unwrap();
+    assert!(
+        agents.contains("meridian plugin dev --instance meridian-snaptrade"),
+        "{agents}"
+    );
+    assert!(agents.contains("src/meridian_snaptrade/"), "{agents}");
     let skill = std::fs::read_to_string(into.join(".claude/skills/develop-live/SKILL.md")).unwrap();
     assert!(skill.starts_with("---\nname: develop-live\n"), "{skill}");
-    assert!(skill.contains("meridian plugin dev --instance meridian-snaptrade"));
-    assert!(!skill.contains("reference-plugin") && !skill.contains("reference_plugin"));
+    assert!(skill.contains("AGENTS.md"), "{skill}");
     let claude = std::fs::read_to_string(into.join("CLAUDE.md")).unwrap();
-    assert!(claude.contains("src/meridian_snaptrade/"), "{claude}");
+    assert!(claude.contains("@AGENTS.md"), "{claude}");
+    for file in [&agents, &skill, &claude] {
+        assert!(!file.contains("reference-plugin") && !file.contains("reference_plugin"));
+    }
 }
 
 #[test]
-fn plugin_dev_sends_none_of_claudes_files() {
+fn plugin_dev_sends_none_of_the_agents_files() {
     let scratch = Scratch::new("claude-live");
     let into = scratch.0.join("meridian-snaptrade");
     scaffold("meridian-snaptrade", &into).expect("scaffolded");
@@ -190,6 +212,7 @@ fn plugin_dev_sends_none_of_claudes_files() {
     let sent = crate::live::scan(&into, &crate::live::Ignored::of(&into));
     assert!(
         sent.keys().all(|path| !path.contains("CLAUDE")
+            && !path.contains("AGENTS")
             && !path.starts_with(".claude")
             && !path.starts_with(".meridian")),
         "{:?}",

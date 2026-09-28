@@ -18,7 +18,8 @@ mod tests;
 
 /// The template, file by file, as it sits in `plugin-template/`. A test fails
 /// if a file there is missing from this list, so a new one cannot be dropped.
-const TEMPLATE: [(&str, &str); 10] = [
+const TEMPLATE: [(&str, &str); 11] = [
+    ("AGENTS.md", include_str!("../plugin-template/AGENTS.md")),
     (
         ".claude/skills/develop-live/SKILL.md",
         include_str!("../plugin-template/.claude/skills/develop-live/SKILL.md"),
@@ -134,8 +135,9 @@ pub fn next_steps(name: &str, into: &Path) -> String {
          \n\
          \x20 meridian plugin dev --instance {name}\n\
          \n\
-         CLAUDE.md and the develop-live skill in .claude/ teach Claude Code that loop.\n\
-         Commit them with the plugin, so whoever works on it next has them too.\n",
+         AGENTS.md teaches your coding agent that loop, whichever agent it is;\n\
+         CLAUDE.md and the develop-live skill lead Claude Code to it. Commit them\n\
+         with the plugin, so whoever works on it next has them too.\n",
         into = into.display()
     )
 }
