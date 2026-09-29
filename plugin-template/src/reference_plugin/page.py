@@ -10,6 +10,18 @@ and offers one action that writes for them: opening an empty holdings
 statement, sent with `acting_for` so the sidecar decides whether they may.
 Replace it with your plugin's own pages; keep reading the caller the same way.
 
+Built on the kit (AGENTS.md says how): the dashboard serves Open Meridian's UI
+kit at /.meridian/ui/<version>/ on this plugin's own host, and the page links
+its stylesheet and script, uses its classes and its components, and writes no
+colour and no theme code of its own. The dashboard's frame draws the plugin's
+name and the person; the page draws only its content.
+
+Where the kit is not served (a dashboard that does not serve it yet, or the
+page opened some other way) the page still works, unstyled: the table is in
+the HTML inside <om-grid>, which a browser shows as it is until the kit's grid
+replaces it; the grid's data sits beside it as JSON, read only once the grid
+is defined; and the action is a plain form. Nothing waits on the kit.
+
 The standard library's server, so the plugin needs nothing its base image
 does not already have. A framework on ASGI can use `meridian.CallerMiddleware`
 instead.
@@ -20,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import html
 import http.server
+import json
 import threading
 import time
 import uuid
@@ -29,28 +42,83 @@ import meridian
 
 TITLE = "Reference plugin"
 
+# The kit's version this page was built against. The dashboard serves the
+# deployment's; pinning one keeps the page as it was built.
+KIT = "/.meridian/ui/0.1.0/"
 
-def render(caller: meridian.Caller, notice: str = "") -> str:
-    rows = "".join(
-        "<tr><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-            html.escape(held.tag),
-            html.escape(", ".join(sorted(held.read)) or "none"),
-            html.escape(", ".join(sorted(held.write)) or "none"),
-        )
+# The grid's columns and rows, set by the page's script once the kit has
+# defined the grid. Without the kit it never is, and the table stays.
+_GRID = """
+customElements.whenDefined("om-grid").then(() => {
+  const grid = document.getElementById("access");
+  grid.columns = [
+    { key: "tag", label: "Tag", type: "code" },
+    { key: "read", label: "Read" },
+    { key: "write", label: "Write" },
+  ];
+  grid.setRows(JSON.parse(document.getElementById("access-rows").textContent));
+});
+"""
+
+
+def _script_json(value: object) -> str:
+    """JSON safe inside a <script> element: nothing in it can close the element."""
+    text = json.dumps(value)
+    return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
+def render(caller: meridian.Caller, notice: str = "", refused: bool = False) -> str:
+    rows = [
+        {
+            "tag": held.tag,
+            "read": ", ".join(sorted(held.read)) or "none",
+            "write": ", ".join(sorted(held.write)) or "none",
+        }
         for held in caller.access
+    ]
+    cells = [[html.escape(row[k]) for k in ("tag", "read", "write")] for row in rows]
+    fallback = "".join(
+        f"<tr><td><code>{tag}</code></td><td>{read}</td><td>{write}</td></tr>"
+        for tag, read, write in cells
     )
-    said = f"<p><strong>{html.escape(notice)}</strong></p>" if notice else ""
+    if not fallback:
+        fallback = '<tr><td colspan="3">Nothing is granted to you here.</td></tr>'
+    said = (
+        f'<div class="notice {"bad" if refused else "good"}" role="status">'
+        f"{html.escape(notice)}</div>"
+        if notice
+        else ""
+    )
     return (
-        f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        f"<title>{TITLE}</title></head><body>"
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>{TITLE}</title>"
+        f'<link rel="stylesheet" href="{KIT}meridian.css">'
+        f'<script src="{KIT}meridian.js"></script>'
+        "</head><body>"
+        '<main class="page">'
+        '<header class="page-head"><div>'
         f"<h1>{TITLE}</h1>"
         f"<p>Signed in as <strong>{html.escape(caller.display_name)}</strong>.</p>"
-        f"<h2>What you may see here</h2>"
-        f"<table><tr><th>Tag</th><th>Read</th><th>Write</th></tr>{rows}</table>"
+        "</div>"
+        '<div class="actions"><form class="inline" method="post" action="/statement">'
+        '<button class="primary">Open an empty statement for me</button></form></div>'
+        "</header>"
         f"{said}"
-        f'<form method="post" action="/statement">'
-        f"<button>Open an empty statement for me</button></form>"
-        f"</body></html>"
+        '<section class="panel">'
+        '<div class="panel-body"><h2>What you may see here</h2>'
+        '<p class="muted">Accounts, tag by tag, that you may read or write here.</p>'
+        "</div>"
+        '<om-grid id="access" row-key="tag" caption="What you may see here"'
+        ' empty="Nothing is granted to you here.">'
+        "<table><thead><tr><th>Tag</th><th>Read</th><th>Write</th></tr></thead>"
+        f"<tbody>{fallback}</tbody></table>"
+        "</om-grid>"
+        f'<script type="application/json" id="access-rows">{_script_json(rows)}</script>'
+        "</section>"
+        "</main>"
+        f'<script type="module">{_GRID}</script>'
+        "</body></html>"
     )
 
 
@@ -99,10 +167,10 @@ def serve(plugin: meridian.Plugin, loop: asyncio.AbstractEventLoop, port: int) -
             )
             try:
                 opened = asyncio.run_coroutine_threadsafe(opening, loop).result(timeout=15)
-                notice = f"Opened statement {opened.statement_id} for you."
+                said = f"Opened statement {opened.statement_id} for you."
+                self._send(200, render(caller, said))
             except meridian.MeridianError as refused:
-                notice = f"Refused: {refused}"
-            self._send(200, render(caller, notice))
+                self._send(200, render(caller, f"Refused: {refused}", refused=True))
 
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             pass

@@ -9,4 +9,5 @@ The loop is in `AGENTS.md`, at the plugin's root, shared with every coding
 agent so the two never drift. Read it and follow it: `plugin dev --json` in
 the background with its output under `.meridian/`, a save's revision to
 `ready`, the check that answers what you changed, and a release the person
-approves.
+approves. A change to a page is built with the plugin UI kit, as its
+"Building its pages" section says.

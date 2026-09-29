@@ -6,14 +6,135 @@ and subscribe to comes from the roles `pyproject.toml` declares under
 `[tool.meridian]`, once a deployment admin approves them.
 
 - `src/reference_plugin/__main__.py` connects to the sidecar and serves the
-  page; `src/reference_plugin/page.py` is the page.
+  page; `src/reference_plugin/page.py` is the page, built on the plugin UI
+  kit (below).
 - A save changes what the plugin does, never what it is allowed to do. Roles,
   tags and dependencies take a new version, which a person approves.
 
 This file is for any coding agent working on the plugin, and is committed with
-it for whoever works on it next. `CLAUDE.md` and the `develop-live` skill lead
-Claude Code here rather than repeating it. `.dockerignore` keeps all of them
-out of the image and the live instance.
+it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the
+`develop-live` skill lead Claude Code here rather than repeating it.
+`.dockerignore` keeps all of them out of the image and the live instance.
+
+## Building its pages: the kit
+
+Build every page with Open Meridian's plugin UI kit, and nothing else for its
+look. Then it looks like the rest of the platform, follows each person's
+colour scheme, light or dark, and their market-direction convention, and
+needs no design work. The kit is plain CSS and web components: it works from
+plain HTML, as `page.py` writes it, and from React, Vue or Svelte alike.
+
+**Link it**, in `<head>`, from the path the dashboard serves it at on this
+plugin's own host. The version is the one `page.py`'s `KIT` names:
+
+```html
+<link rel="stylesheet" href="/.meridian/ui/0.1.0/meridian.css">
+<script src="/.meridian/ui/0.1.0/meridian.js"></script>
+```
+
+Never copy the kit into the plugin, and never load it, or anything else for
+the page, from another origin or a CDN.
+
+**Which component for what:**
+
+| For | Use |
+|---|---|
+| A table of records | `<om-grid row-key="…">`: set `columns`, then `setRows(rows)`; `upsert(rows)` replaces rows by key in place; figures sort exactly |
+| A stream: thousands of rows, many changes a second | `<om-grid high-rate>`: only the rows in view are drawn, only changed cells are touched, and they flash up or down; `freeze-sort` stops rows jumping while streaming |
+| Live data from the plugin's server | `<om-live src="events" snapshot="snapshot.json" for="grid-id">`: follows server-sent events in sequence, and reads the snapshot again after a gap or a reconnect, so nothing is missed |
+| The date the figures are as of | `<om-asof>` |
+| Choosing an instrument | `<om-instrument-picker src="…" asof="…">`, searching through the plugin's own server |
+| A time series | `<om-chart type="line">` (or `bar`), `series` set in script |
+| Several views on one page, resizable and rearrangeable | `<om-panels layout-id="…">`, a `data-panel` child per view; each person's arrangement is remembered |
+| Everything else | The kit's classes: `.page`, `.page-head`, `.panel` and `.panel-body`, `.tiles`, `.tabs`, `.field`, `.filters`, `.notice`, `.badge`, `button.primary` and `.danger`, `table` and `.num`, `.empty-state` |
+
+Set a component's data (`columns`, `rows`, `series`) as properties, in a
+`customElements.whenDefined(...)` callback. The kit's README
+(open-meridian/meridian-ui) documents every component, attribute and event.
+
+**Colour.** Only the kit's custom properties, never a hex, `rgb()`, `hsl()` or
+a colour's name: not in a stylesheet, an inline style, an SVG or a script. A
+person chooses their scheme and their deployment's administrator may add
+schemes; a raw colour is one no scheme can change and no contrast check has
+seen. Prefer a class to a property, and a property to anything else:
+
+- surfaces `--page`, `--card`, `--hover`; text `--ink`, `--ink-soft`,
+  `--ink-faint`; edges `--line`, `--line-soft`, `--line-strong`
+- `--accent` and `--accent-wash`; `--primary` and `--primary-ink`
+- status, which never changes meaning: `--good`, `--danger`, `--warn-ink`,
+  `--violet`, each with its `-wash`
+- **market direction:** `--buy` for a buy, a rise or a gain, and `--sell` for a
+  sell, a fall or a loss, with `--buy-wash` and `--sell-wash`. Never green and
+  red, and never `--good` and `--danger`, for a price move: where a person
+  reads red as up (China, Japan, Korea, Taiwan) the kit swaps buy and sell for
+  them. In markup, `.buy-ink` and `.sell-ink`, `.badge.buy` and `.badge.sell`;
+  in a grid, a column's `tone: "sign"`.
+
+Spacing, radii, shadows and type are the kit's too: `var(--space-1)` to
+`var(--space-10)`, `var(--radius)`, `var(--shadow)`, `var(--sans)`,
+`var(--mono)`.
+
+**No chrome, no theme code.** The dashboard frames the page and draws the
+plugin's name, the way back to the dashboard and the person. The page draws
+only its content, inside `<main class="page">`: no header bar, navigation,
+logo, sign-in or sign-out, and no light and dark switch. The kit applies the
+person's theme, which the frame hands it, with no code of the page's.
+
+**Money is exact.** Send prices and quantities to the page as decimal strings
+and show them as sent; never `parseFloat` one. The grid sorts them exactly.
+
+**The kit's rules, which a page keeps too:** no raw colour; no custom
+property the kit does not define, other than the page's own layout ones; the
+page reaches only its own origin, the plugin's server, which proxies anything
+further; figures are strings, never floats.
+
+**Where the kit is not served.** Until every dashboard serves `/.meridian/ui/`,
+build pages that work without it, as `page.py` does: put a plain `<table>`
+inside `<om-grid>` (a browser shows it as it is, and the kit's grid replaces
+it), set components' data only once they are defined, and make actions plain
+forms. Without the kit the page is unstyled, but everything on it works.
+
+A short page, whole:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Positions</title>
+  <link rel="stylesheet" href="/.meridian/ui/0.1.0/meridian.css">
+  <script src="/.meridian/ui/0.1.0/meridian.js"></script>
+</head>
+<body>
+  <main class="page">
+    <header class="page-head">
+      <div><h1>Positions</h1><p>Every account you may read here.</p></div>
+      <div class="actions"><om-live src="events" snapshot="positions.json" for="positions"></om-live></div>
+    </header>
+    <section class="panel">
+      <om-grid id="positions" row-key="position_id" high-rate sort="market_value:desc" caption="Positions">
+        <table><tr><th>Instrument</th><th>Quantity</th><th>Market value</th></tr></table>
+      </om-grid>
+    </section>
+  </main>
+  <script type="module">
+    customElements.whenDefined("om-grid").then(() => {
+      document.getElementById("positions").columns = [
+        { key: "symbol", label: "Instrument" },
+        { key: "quantity", label: "Quantity", type: "decimal", group: true },
+        { key: "market_value", label: "Market value", type: "decimal", group: true },
+        { key: "day_pnl", label: "Day P&L", type: "decimal", group: true, tone: "sign" },
+      ];
+    });
+  </script>
+</body>
+</html>
+```
+
+The plugin's server answers `positions.json` with `{ "sequence": "41", "rows":
+[…] }` and `events` as server-sent events, each `id: <sequence>` and `data:
+{ "rows": […] }` carrying whole records; `om-live` feeds them to the grid.
 
 ## Developing it live
 
@@ -29,8 +150,9 @@ theirs.
 
 - `meridian --version` is 0.1.3 or later. Older ones have no `plugin dev`: the
   person runs `meridian upgrade`.
-- The person has run `meridian connect <address>`. You cannot do it for them:
-  it signs in through their browser. `meridian plugin list` says whether the
+- The person has run `meridian connect` (with the address, for a deployment
+  not on this machine). You cannot do it for them: it signs in through their
+  browser. `meridian plugin list` says whether the
   session is there: it lists the catalogue, or exits **3**. Whenever any
   command exits 3, the session is missing or has lapsed. Stop, tell the person
   to run the `meridian connect` the command printed, and carry on once they
