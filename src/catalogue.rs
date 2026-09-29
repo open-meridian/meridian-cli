@@ -13,8 +13,10 @@
 //! image's digest, and the conductor records the version. What a plugin may
 //! do is its roles', from that metadata; nothing here writes a grant.
 //!
-//! Launch shows the roles and tags a version declares and asks before
-//! sending them as approved: the approval is the person's (W8.3).
+//! Launch shows the roles a version declares and asks before sending them as
+//! approved: the approval is the person's (W8.3). A plugin declares no tags
+//! (decisions/026), and a pyproject.toml that still does is refused here,
+//! before anything is built or sent.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -27,12 +29,11 @@ pub struct Metadata {
     pub name: String,
     pub version: String,
     pub roles: Vec<String>,
-    pub tags: Vec<String>,
     pub interface: bool,
     pub sdk_version: String,
 }
 
-/// A host label, a letter first: a plugin's name, a role, a tag, an instance.
+/// A host label, a letter first: a plugin's name, a role, an instance.
 pub fn is_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     (1..=63).contains(&bytes.len())
@@ -95,9 +96,17 @@ pub fn metadata(pyproject: &str) -> Result<Metadata, String> {
         .ok_or(
             "pyproject.toml has no [tool.meridian]: what the plugin declares for its deployment",
         )?;
+    if meridian.contains_key("tags") {
+        return Err(
+            "[tool.meridian] declares `tags`, and a plugin declares none: a person's access \
+             to a plugin is read or write, the same for every plugin, granted in the \
+             deployment's access groups (decisions/026). Remove the `tags` line from \
+             pyproject.toml"
+                .into(),
+        );
+    }
     let metadata = Metadata {
         roles: list(meridian, "roles")?,
-        tags: list(meridian, "tags")?,
         interface: meridian
             .get("interface")
             .and_then(|v| v.as_bool())
@@ -115,9 +124,9 @@ pub fn metadata(pyproject: &str) -> Result<Metadata, String> {
     if metadata.version.is_empty() {
         return Err("[project] has no version".into());
     }
-    for part in metadata.roles.iter().chain(&metadata.tags) {
-        if !is_name(part) {
-            return Err(format!("`{part}` is not a role or a tag's form"));
+    for role in &metadata.roles {
+        if !is_name(role) {
+            return Err(format!("`{role}` is not a role's form"));
         }
     }
     Ok(metadata)
@@ -422,7 +431,7 @@ async fn record(
         .body(
             serde_json::json!({
                 "name": metadata.name, "version": metadata.version, "roles": metadata.roles,
-                "tags": metadata.tags, "interface": metadata.interface,
+                "interface": metadata.interface,
                 "sdk_version": metadata.sdk_version, "image_digest": digest,
             })
             .to_string(),
@@ -482,11 +491,10 @@ pub fn listed(catalogue: &serde_json::Value) -> String {
     }
     for v in &versions {
         out.push_str(&format!(
-            "  {} {}  roles: {}  tags: {}  page: {}  SDK {}\n",
+            "  {} {}  roles: {}  page: {}  SDK {}\n",
             v["name"].as_str().unwrap_or_default(),
             v["version"].as_str().unwrap_or_default(),
             names(&v["roles"]),
-            names(&v["tags"]),
             if v["interface"].as_bool().unwrap_or(false) {
                 "yes"
             } else {
@@ -521,12 +529,8 @@ pub fn listed(catalogue: &serde_json::Value) -> String {
     out
 }
 
-/// A recorded version's roles and tags, which a launch approves.
-pub fn declared(
-    catalogue: &serde_json::Value,
-    name: &str,
-    version: &str,
-) -> Option<(Vec<String>, Vec<String>)> {
+/// A recorded version's roles, which a launch approves.
+pub fn declared(catalogue: &serde_json::Value, name: &str, version: &str) -> Option<Vec<String>> {
     let strings = |value: &serde_json::Value| -> Vec<String> {
         value
             .as_array()
@@ -535,10 +539,10 @@ pub fn declared(
             .filter_map(|v| v.as_str().map(String::from))
             .collect()
     };
-    catalogue["versions"].as_array()?.iter().find_map(|v| {
-        (v["name"] == name && v["version"] == version)
-            .then(|| (strings(&v["roles"]), strings(&v["tags"])))
-    })
+    catalogue["versions"]
+        .as_array()?
+        .iter()
+        .find_map(|v| (v["name"] == name && v["version"] == version).then(|| strings(&v["roles"])))
 }
 
 async fn post(
@@ -570,7 +574,6 @@ pub struct Launch<'a> {
     pub version: &'a str,
     pub instance: &'a str,
     pub roles: &'a [String],
-    pub tags: &'a [String],
     pub live: bool,
 }
 
@@ -585,7 +588,7 @@ pub async fn launch(
         "/terminal/plugins/launch",
         serde_json::json!({ "name": asked.name, "version": asked.version,
                             "instance_id": asked.instance, "approved_roles": asked.roles,
-                            "approved_tags": asked.tags, "live": asked.live }),
+                            "live": asked.live }),
     )
     .await
 }

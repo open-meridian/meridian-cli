@@ -5,8 +5,10 @@ verified who is asking before forwarding the request, and says so in one
 `Meridian-Caller` header, which `meridian.Caller` reads. Nothing here checks a
 signature, holds a key or keeps a session -- that is the point.
 
-It shows who is asking and what they may see through this plugin, tag by tag,
-and offers one action that writes for them: opening an empty holdings
+It shows who is asking and the accounts they may read or write through this
+plugin -- a person's access to a plugin is read or write, the same for every
+plugin, and a plugin names no parts of itself -- and offers one action that
+writes for them: opening an empty holdings
 statement, sent with `acting_for` so the sidecar decides whether they may.
 Replace it with your plugin's own pages; keep reading the caller the same way.
 
@@ -52,9 +54,8 @@ _GRID = """
 customElements.whenDefined("om-grid").then(() => {
   const grid = document.getElementById("access");
   grid.columns = [
-    { key: "tag", label: "Tag", type: "code" },
-    { key: "read", label: "Read" },
-    { key: "write", label: "Write" },
+    { key: "account", label: "Account", type: "code" },
+    { key: "may", label: "You may" },
   ];
   grid.setRows(JSON.parse(document.getElementById("access-rows").textContent));
 });
@@ -68,21 +69,18 @@ def _script_json(value: object) -> str:
 
 
 def render(caller: meridian.Caller, notice: str = "", refused: bool = False) -> str:
+    # Every account the person may read, and whether they may write it too:
+    # write includes read, so the read set holds them all.
     rows = [
-        {
-            "tag": held.tag,
-            "read": ", ".join(sorted(held.read)) or "none",
-            "write": ", ".join(sorted(held.write)) or "none",
-        }
-        for held in caller.access
+        {"account": account, "may": "read and write" if caller.may_write(account) else "read"}
+        for account in sorted(caller.read | caller.write)
     ]
-    cells = [[html.escape(row[k]) for k in ("tag", "read", "write")] for row in rows]
+    cells = [[html.escape(row[k]) for k in ("account", "may")] for row in rows]
     fallback = "".join(
-        f"<tr><td><code>{tag}</code></td><td>{read}</td><td>{write}</td></tr>"
-        for tag, read, write in cells
+        f"<tr><td><code>{account}</code></td><td>{may}</td></tr>" for account, may in cells
     )
     if not fallback:
-        fallback = '<tr><td colspan="3">Nothing is granted to you here.</td></tr>'
+        fallback = '<tr><td colspan="2">Nothing is granted to you here.</td></tr>'
     said = (
         f'<div class="notice {"bad" if refused else "good"}" role="status">'
         f"{html.escape(notice)}</div>"
@@ -107,11 +105,11 @@ def render(caller: meridian.Caller, notice: str = "", refused: bool = False) -> 
         f"{said}"
         '<section class="panel">'
         '<div class="panel-body"><h2>What you may see here</h2>'
-        '<p class="muted">Accounts, tag by tag, that you may read or write here.</p>'
+        '<p class="muted">The accounts you may read here, and those you may write.</p>'
         "</div>"
-        '<om-grid id="access" row-key="tag" caption="What you may see here"'
+        '<om-grid id="access" row-key="account" caption="What you may see here"'
         ' empty="Nothing is granted to you here.">'
-        "<table><thead><tr><th>Tag</th><th>Read</th><th>Write</th></tr></thead>"
+        "<table><thead><tr><th>Account</th><th>You may</th></tr></thead>"
         f"<tbody>{fallback}</tbody></table>"
         "</om-grid>"
         f'<script type="application/json" id="access-rows">{_script_json(rows)}</script>'

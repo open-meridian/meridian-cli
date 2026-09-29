@@ -31,7 +31,7 @@ meridian -- bringing a Meridian deployment up
   meridian plugin upload     build the plugin here and put it in the deployment's catalogue
   meridian plugin list       the catalogue: versions uploaded, and what is launched
   meridian plugin launch <name> <version> --instance <id>
-                             run a version, once you approve the roles and tags it asks for
+                             run a version, once you approve the roles it asks for
   meridian plugin stop <id>  stop a launched instance
   meridian plugin dev --instance <id>
                              run the plugin here live on a development deployment,
@@ -471,9 +471,9 @@ async fn approval(
     version: &str,
     instance: &str,
     live: bool,
-) -> Result<(Vec<String>, Vec<String>), String> {
+) -> Result<Vec<String>, String> {
     let held = catalogue::catalogue(address, session).await?;
-    let (roles, tags) = catalogue::declared(&held, name, version).ok_or(format!(
+    let roles = catalogue::declared(&held, name, version).ok_or(format!(
         "{name} {version} is not in {address}'s catalogue: `meridian plugin list` shows what is"
     ))?;
     let listed = |names: &[String]| {
@@ -485,7 +485,6 @@ async fn approval(
     };
     eprintln!("{name} {version} asks for");
     eprintln!("  roles: {}", listed(&roles));
-    eprintln!("  tags:  {}", listed(&tags));
     let how = if live { "live " } else { "" };
     if !arguments.set("--yes") && !approved(&format!("Launch it {how}as {instance}, with these?")) {
         return Err(
@@ -493,7 +492,7 @@ async fn approval(
                 .into(),
         );
     }
-    Ok((roles, tags))
+    Ok(roles)
 }
 
 async fn launched(
@@ -505,19 +504,17 @@ async fn launched(
     instance: &str,
     live: bool,
 ) -> Result<String, String> {
-    let (roles, tags) =
-        approval(arguments, address, session, name, version, instance, live).await?;
+    let roles = approval(arguments, address, session, name, version, instance, live).await?;
     let asked = catalogue::Launch {
         name,
         version,
         instance,
         roles: &roles,
-        tags: &tags,
         live,
     };
     catalogue::launch(address, session, &asked).await?;
     // A deployment admin opens any plugin's page; anybody else, one they
-    // are granted a part of (spec/deployment-dashboard-and-access, ruling 19).
+    // hold access on (spec/deployment-dashboard-and-access, ruling 19).
     Ok(format!(
         "Launched {instance}: {name} {version}.\nIts page, if it serves one: {address}/plugins/{instance}\n"
     ))
@@ -763,7 +760,7 @@ async fn release(
                 classified(address, said)
             }
         })?;
-    let (roles, tags) = approval(arguments, address, session, name, version, instance, false)
+    let roles = approval(arguments, address, session, name, version, instance, false)
         .await
         .map_err(|said| classified(address, said))?;
     let held = catalogue::catalogue(address, session)
@@ -784,7 +781,6 @@ async fn release(
         version,
         instance,
         roles: &roles,
-        tags: &tags,
         live: false,
     };
     catalogue::launch(address, session, &asked)

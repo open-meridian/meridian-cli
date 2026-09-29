@@ -261,7 +261,7 @@ loop below. `CLAUDE.md` and the `develop-live` skill lead Claude Code to the
 same text. Commit them with the plugin; `.dockerignore` keeps them out of its
 image.
 
-`launch` shows the roles and tags the version asks for and runs it only once
+`launch` shows the roles the version asks for and runs it only once
 you approve them; `--yes` approves for a script that has already read them.
 Its page is on its own name, `http://my-plugin.plugins.meridian.localhost/`,
 opened from the dashboard's home.

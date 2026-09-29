@@ -11,7 +11,6 @@ fn the_templates_pyproject_is_metadata() {
             name: "reference-plugin".into(),
             version: "0.1.0".into(),
             roles: vec![],
-            tags: vec![],
             interface: true,
             sdk_version: "0.5.0".into(),
         }
@@ -19,18 +18,30 @@ fn the_templates_pyproject_is_metadata() {
 }
 
 #[test]
-fn roles_and_tags_are_read_and_held_to_their_form() {
-    let with = TEMPLATE
-        .replace("roles = []", "roles = [\"custody\"]")
-        .replace("tags = []", "tags = [\"positions\", \"orders\"]");
+fn roles_are_read_and_held_to_their_form() {
+    let with = TEMPLATE.replace("roles = []", "roles = [\"custody\", \"reporting\"]");
     let held = metadata(&with).unwrap();
-    assert_eq!(held.roles, ["custody"]);
-    assert_eq!(held.tags, ["positions", "orders"]);
+    assert_eq!(held.roles, ["custody", "reporting"]);
 
-    let refused = metadata(&TEMPLATE.replace("tags = []", "tags = [\"Positions\"]")).unwrap_err();
-    assert!(refused.contains("`Positions`"), "{refused}");
+    let refused = metadata(&TEMPLATE.replace("roles = []", "roles = [\"Custody\"]")).unwrap_err();
+    assert!(refused.contains("`Custody`"), "{refused}");
     let refused = metadata(&TEMPLATE.replace("roles = []", "roles = \"custody\"")).unwrap_err();
     assert!(refused.contains("roles is not a list"), "{refused}");
+}
+
+#[test]
+fn a_pyproject_declaring_tags_is_refused_citing_the_decision() {
+    // decisions/026: a plugin declares no tags. One made from an older
+    // template still says `tags = []`; empty or not, it is a declaration.
+    assert!(!TEMPLATE.contains("tags"), "the template declares none");
+    for tags in ["tags = []", "tags = [\"holdings\"]"] {
+        let declaring = TEMPLATE.replace("roles = []", &format!("roles = []\n{tags}"));
+        let refused = metadata(&declaring).unwrap_err();
+        assert!(
+            refused.contains("declares `tags`") && refused.contains("decisions/026"),
+            "{refused}"
+        );
+    }
 }
 
 #[test]
@@ -194,20 +205,20 @@ fn an_upload_goes_where_the_dashboard_said_with_its_digest() {
 fn a_launch_approves_what_the_version_declared() {
     let held = serde_json::json!({
         "versions": [
-            {"name": "p", "version": "0.1.0", "roles": ["custody"], "tags": ["t"]},
-            {"name": "p", "version": "0.2.0", "roles": [], "tags": []},
+            {"name": "p", "version": "0.1.0", "roles": ["custody"]},
+            {"name": "p", "version": "0.2.0", "roles": []},
         ],
         "launches": [{"instance_id": "p", "name": "p", "version": "0.1.0",
                       "state": "failed", "failure": "no image"}],
     });
     assert_eq!(
         declared(&held, "p", "0.1.0"),
-        Some((vec!["custody".to_string()], vec!["t".to_string()]))
+        Some(vec!["custody".to_string()])
     );
     assert_eq!(declared(&held, "p", "0.3.0"), None);
     let said = listed(&held);
-    assert!(said.contains("p 0.1.0  roles: custody  tags: t"), "{said}");
-    assert!(said.contains("p 0.2.0  roles: none  tags: none"), "{said}");
+    assert!(said.contains("p 0.1.0  roles: custody  page: no"), "{said}");
+    assert!(said.contains("p 0.2.0  roles: none  page: no"), "{said}");
     assert!(said.contains("p  p 0.1.0  failed: no image"), "{said}");
 }
 

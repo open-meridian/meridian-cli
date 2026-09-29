@@ -8,8 +8,14 @@ and subscribe to comes from the roles `pyproject.toml` declares under
 - `src/reference_plugin/__main__.py` connects to the sidecar and serves the
   page; `src/reference_plugin/page.py` is the page, built on the plugin UI
   kit (below).
-- A save changes what the plugin does, never what it is allowed to do. Roles,
-  tags and dependencies take a new version, which a person approves.
+- A save changes what the plugin does, never what it is allowed to do. Roles
+  and dependencies take a new version, which a person approves.
+- Who may use it is not the plugin's to say. A person's access to a plugin is
+  `read` or `write`, granted in the deployment's access groups, the same for
+  every plugin; `meridian.Caller` tells the page what the person asking may
+  read (`caller.read`, `caller.may_read`) and write (`caller.write`,
+  `caller.may_write`). Declare no `tags`: a plugin has none, and
+  `meridian plugin upload` refuses a `pyproject.toml` that names them.
 
 This file is for any coding agent working on the plugin, and is committed with
 it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the
@@ -166,7 +172,7 @@ The instance is called `reference-plugin` below. Use whatever the person
 wants it called, and the same name in every command.
 
 **The first time an instance is launched, the person approves what it asks
-for.** Show them the `roles` and `tags` in `pyproject.toml`'s `[tool.meridian]`
+for.** Show them the `roles` in `pyproject.toml`'s `[tool.meridian]`
 and ask. Only once they say yes, pass `--yes`; never pass it to get past a
 question they have not answered. An instance that is live already asks
 nothing.
@@ -231,7 +237,7 @@ browser and gives the same page every time.
 ### What a save cannot change
 
 - **What it is allowed to do.** A `refused` event is its grants working, not a
-  bug to code around. Adding a role or tag to `pyproject.toml` changes nothing
+  bug to code around. Adding a role to `pyproject.toml` changes nothing
   live: it takes a new version, and a person approves it.
 - **Its dependencies.** The live code runs on the image the instance was
   launched from. A new package in `pyproject.toml` needs a new version.
@@ -245,7 +251,7 @@ When the person is satisfied:
 
 1. Run the plugin's own tests, if it has any, and fix what fails.
 2. Raise `version` in `pyproject.toml`. A version is never replaced.
-3. Show the person the roles and tags again, and get their yes.
+3. Show the person the roles again, and get their yes.
 4. Run `meridian plugin dev --release --instance reference-plugin --yes`.
 
 That uploads this directory as that version and runs it in place of the live

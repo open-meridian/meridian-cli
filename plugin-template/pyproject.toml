@@ -26,7 +26,5 @@ where = ["src"]
 # -- and its grants are theirs. None, as here, is a plugin admitted with no
 # topics.
 roles = []
-# Its own names for its parts, which people are granted at read or write.
-tags = []
 # Whether it serves a page through its sidecar.
 interface = true

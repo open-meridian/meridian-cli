@@ -127,7 +127,7 @@ pub fn next_steps(name: &str, into: &Path) -> String {
          \x20 meridian plugin launch {name} 0.1.0 --instance {name}\n\
          \n\
          Upload builds its image here and puts it in the catalogue of the deployment\n\
-         `meridian connect` signed you in to; launch shows the roles and tags its\n\
+         `meridian connect` signed you in to; launch shows the roles its\n\
          pyproject.toml asks for, and runs it once you approve them. It reaches its\n\
          sidecar and nothing else.\n\
          \n\
