@@ -23,6 +23,8 @@ use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 
+use crate::live::Failed;
+
 /// What a plugin says about itself, from its pyproject.toml.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Metadata {
@@ -229,25 +231,28 @@ pub fn upload_url(address: &str, location: &str, digest: &str) -> String {
     format!("{joined}{glue}digest={digest}")
 }
 
-fn client() -> Result<reqwest::Client, String> {
+fn client() -> Result<reqwest::Client, Failed> {
     reqwest::Client::builder()
         // Long enough for a layer of a few hundred megabytes on a slow link.
         .timeout(Duration::from_secs(900))
         .redirect(reqwest::redirect::Policy::none())
         .default_headers(crate::release::naming_this_version())
         .build()
-        .map_err(|failed| failed.to_string())
+        .map_err(|failed| Failed::Refused(failed.to_string()))
 }
 
-fn said(status: reqwest::StatusCode, body: &str) -> String {
-    if let Some(refused) = crate::release::version_refused(status, body) {
-        return refused;
+/// What the dashboard refused, said as live.rs says it: a missing or lapsed
+/// session (401, on any `/terminal/` path, the registry's included) apart
+/// from everything else, and anything else after what was being done.
+fn refused(address: &str, doing: &str, status: reqwest::StatusCode, body: &str) -> Failed {
+    match crate::live::refusal(address, status, body) {
+        Failed::Refused(said) if !doing.is_empty() => Failed::Refused(format!("{doing}: {said}")),
+        other => other,
     }
-    let reason = serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v["error"].as_str().map(String::from))
-        .unwrap_or_else(|| body.trim().to_string());
-    format!("{status}: {reason}")
+}
+
+fn unreachable(address: &str, failed: reqwest::Error) -> Failed {
+    Failed::Refused(format!("could not reach {address}: {failed}"))
 }
 
 /// Run a command, saying what it was when it fails.
@@ -264,7 +269,7 @@ async fn docker(args: &[&str]) -> Result<(), String> {
 }
 
 /// Build, push and record: the version's digest once recorded.
-pub async fn upload(address: &str, session: &str, dir: &Path) -> Result<String, String> {
+pub async fn upload(address: &str, session: &str, dir: &Path) -> Result<String, Failed> {
     let pyproject = std::fs::read_to_string(dir.join("pyproject.toml"))
         .map_err(|failed| format!("{} has no pyproject.toml: {failed}", dir.display()))?;
     let metadata = metadata(&pyproject)?;
@@ -288,7 +293,9 @@ pub async fn upload(address: &str, session: &str, dir: &Path) -> Result<String, 
         .await
         .map_err(|failed| format!("tar could not be run: {failed}"))?;
     if !unpacked.success() {
-        return Err("the saved image could not be unpacked".into());
+        return Err(Failed::Refused(
+            "the saved image could not be unpacked".into(),
+        ));
     }
     let pushed = push(address, session, &metadata, &image(&scratch)?).await;
     let _ = std::fs::remove_dir_all(&scratch);
@@ -302,19 +309,25 @@ async fn push(
     session: &str,
     metadata: &Metadata,
     image: &Image,
-) -> Result<String, String> {
+) -> Result<String, Failed> {
     let http = client()?;
     let plugins = format!("{address}/terminal/registry/v2/plugins");
     let repository = format!("{plugins}/{}", metadata.name);
+    // A blob is held or not; a session the dashboard no longer knows is
+    // neither, and is said as what it is rather than sent for.
     let holds = |url: String| {
         let http = http.clone();
         async move {
-            http.head(url)
+            let answer = http
+                .head(url)
                 .bearer_auth(session)
                 .send()
                 .await
-                .map(|answer| answer.status().is_success())
-                .map_err(|failed| format!("could not reach {address}: {failed}"))
+                .map_err(|failed| unreachable(address, failed))?;
+            if answer.status() == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(refused(address, "", answer.status(), ""));
+            }
+            Ok(answer.status().is_success())
         }
     };
     let others = others(address, session, &metadata.name).await;
@@ -338,7 +351,7 @@ async fn push(
             .bearer_auth(session)
             .send()
             .await
-            .map_err(|failed| format!("could not reach {address}: {failed}"))?;
+            .map_err(|failed| unreachable(address, failed))?;
         let status = started.status();
         // Mounted: linked into this repository, nothing sent. A registry that
         // will not mount opens an upload instead, which is sent as ever.
@@ -352,14 +365,16 @@ async fn push(
             .and_then(|v| v.to_str().ok())
             .map(String::from);
         let Some(location) = location.filter(|_| status.is_success()) else {
-            return Err(format!(
-                "the registry did not start an upload: {}",
-                said(status, &started.text().await.unwrap_or_default())
+            return Err(refused(
+                address,
+                "the registry did not start an upload",
+                status,
+                &started.text().await.unwrap_or_default(),
             ));
         };
         let bytes = tokio::fs::read(path)
             .await
-            .map_err(|failed| failed.to_string())?;
+            .map_err(|failed| Failed::Refused(failed.to_string()))?;
         let size = bytes.len();
         let sent = http
             .put(upload_url(address, &location, digest))
@@ -368,12 +383,14 @@ async fn push(
             .body(bytes)
             .send()
             .await
-            .map_err(|failed| format!("could not reach {address}: {failed}"))?;
+            .map_err(|failed| unreachable(address, failed))?;
         let status = sent.status();
         if !status.is_success() {
-            return Err(format!(
-                "{digest} was not taken: {}",
-                said(status, &sent.text().await.unwrap_or_default())
+            return Err(refused(
+                address,
+                &format!("{digest} was not taken"),
+                status,
+                &sent.text().await.unwrap_or_default(),
             ));
         }
         eprintln!("  {digest}: sent, {size} bytes");
@@ -385,12 +402,14 @@ async fn push(
         .body(image.manifest.clone())
         .send()
         .await
-        .map_err(|failed| format!("could not reach {address}: {failed}"))?;
+        .map_err(|failed| unreachable(address, failed))?;
     let status = named.status();
     if !status.is_success() {
-        return Err(format!(
-            "the manifest was not taken: {}",
-            said(status, &named.text().await.unwrap_or_default())
+        return Err(refused(
+            address,
+            "the manifest was not taken",
+            status,
+            &named.text().await.unwrap_or_default(),
         ));
     }
     Ok(image.digest.clone())
@@ -423,7 +442,7 @@ async fn record(
     session: &str,
     metadata: &Metadata,
     digest: &str,
-) -> Result<(), String> {
+) -> Result<(), Failed> {
     let answer = client()?
         .post(format!("{address}/terminal/plugins"))
         .bearer_auth(session)
@@ -438,32 +457,34 @@ async fn record(
         )
         .send()
         .await
-        .map_err(|failed| format!("could not reach {address}: {failed}"))?;
+        .map_err(|failed| unreachable(address, failed))?;
     let status = answer.status();
     let body = answer.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!(
-            "the version was not recorded: {}",
-            said(status, &body)
+        return Err(refused(
+            address,
+            "the version was not recorded",
+            status,
+            &body,
         ));
     }
     Ok(())
 }
 
 /// The catalogue, as the dashboard answers it.
-pub async fn catalogue(address: &str, session: &str) -> Result<serde_json::Value, String> {
+pub async fn catalogue(address: &str, session: &str) -> Result<serde_json::Value, Failed> {
     let answer = client()?
         .get(format!("{address}/terminal/plugins"))
         .bearer_auth(session)
         .send()
         .await
-        .map_err(|failed| format!("could not reach {address}: {failed}"))?;
+        .map_err(|failed| unreachable(address, failed))?;
     let status = answer.status();
     let body = answer.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(said(status, &body));
+        return Err(refused(address, "", status, &body));
     }
-    serde_json::from_str(&body).map_err(|failed| failed.to_string())
+    serde_json::from_str(&body).map_err(|failed| Failed::Refused(failed.to_string()))
 }
 
 /// The catalogue, for a person to read.
@@ -550,7 +571,7 @@ async fn post(
     session: &str,
     path: &str,
     body: serde_json::Value,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, Failed> {
     let answer = client()?
         .post(format!("{address}{path}"))
         .bearer_auth(session)
@@ -558,13 +579,13 @@ async fn post(
         .body(body.to_string())
         .send()
         .await
-        .map_err(|failed| format!("could not reach {address}: {failed}"))?;
+        .map_err(|failed| unreachable(address, failed))?;
     let status = answer.status();
     let text = answer.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(said(status, &text));
+        return Err(refused(address, "", status, &text));
     }
-    serde_json::from_str(&text).map_err(|failed| failed.to_string())
+    serde_json::from_str(&text).map_err(|failed| Failed::Refused(failed.to_string()))
 }
 
 /// What a launch asks for: a recorded version, the instance it runs as, what
@@ -581,7 +602,7 @@ pub async fn launch(
     address: &str,
     session: &str,
     asked: &Launch<'_>,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, Failed> {
     post(
         address,
         session,
@@ -597,7 +618,7 @@ pub async fn stop(
     address: &str,
     session: &str,
     instance: &str,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, Failed> {
     post(
         address,
         session,

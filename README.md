@@ -14,6 +14,7 @@ meridian upgrade-deployment  # move it to a newer chart, in place, after checkin
 meridian connect [<address>] # sign in to a deployment (default: the local one), and keep the session
 meridian sign-out            # end that session, here and at the deployment
 meridian plugin new <name>   # start a plugin from the SDK's reference plugin
+meridian plugin check        # hold it to the framework's rules: pages, settings, SDK, tests
 meridian plugin upload       # build it and put it in the deployment's catalogue
 meridian plugin list         # versions uploaded, and what is launched
 meridian plugin launch …     # run a version, once you approve what it asks for
@@ -26,8 +27,8 @@ meridian upgrade             # replace this binary with the latest release
 meridian uninstall           # end every session it holds, and remove it
 ```
 
-Every command exits non-zero on failure, and `plugin dev`, `logs`, `events` and
-`open` take `--json` for scripts and AI agents.
+Every command exits non-zero on failure, and `plugin check`, `dev`, `logs`,
+`events` and `open` take `--json` for scripts and AI agents.
 
 ## Install
 

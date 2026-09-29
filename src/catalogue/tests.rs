@@ -234,3 +234,187 @@ fn a_blob_another_plugin_holds_is_mounted_from_its_repository() {
          /blobs/uploads/?mount=sha256:ab&from=plugins/reference-plugin"
     );
 }
+
+/// A dashboard stand-in on loopback: each request answered by `answer`, from
+/// its method and path, and the paths asked for kept in order.
+async fn dashboard(
+    answer: fn(&str, &str) -> (u16, &'static str),
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = asked.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let kept = kept.clone();
+            tokio::spawn(async move {
+                let mut read = Vec::new();
+                let mut chunk = [0u8; 8192];
+                // The head, then as much body as it says there is.
+                let (head_end, length) = loop {
+                    let n = stream.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    read.extend_from_slice(&chunk[..n]);
+                    if let Some(end) = read.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&read[..end]).to_lowercase();
+                        let length = head
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length:"))
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        break (end + 4, length);
+                    }
+                };
+                while read.len() < head_end + length {
+                    let n = stream.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    read.extend_from_slice(&chunk[..n]);
+                }
+                let head = String::from_utf8_lossy(&read[..head_end]).to_string();
+                let mut first = head.lines().next().unwrap_or_default().split(' ');
+                let method = first.next().unwrap_or_default().to_string();
+                let path = first.next().unwrap_or_default().to_string();
+                kept.lock().unwrap().push(format!("{method} {path}"));
+                let (status, body) = answer(&method, &path);
+                let reply = format!(
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n\
+                     content-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    if method == "HEAD" { "" } else { body }
+                );
+                let _ = stream.write_all(reply.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+    (address, asked)
+}
+
+/// What the dashboard answers every `/terminal/` path with when it holds no
+/// such session: here, the one after it restarted.
+const NO_SESSION: &str = r#"{"error":"invalid_token","reason":"unknown"}"#;
+
+fn a_plugin() -> Metadata {
+    metadata(TEMPLATE).unwrap()
+}
+
+#[tokio::test]
+async fn an_upload_on_a_session_the_dashboard_lost_is_the_session_and_exits_3() {
+    // As reported: after a dashboard restart, the registry proxy answered the
+    // upload's start with 401, and upload said "the registry did not start an
+    // upload: 401 Unauthorized: invalid_token" and exited 1.
+    let (address, asked) = dashboard(|method, path| match method {
+        "HEAD" => (404, ""),
+        _ if path.starts_with("/terminal/") => (401, NO_SESSION),
+        _ => (404, "{}"),
+    })
+    .await;
+    let dir = scratch("lapsed-upload");
+    layout(&dir, false);
+    let failed = push(&address, "stale", &a_plugin(), &image(&dir).unwrap())
+        .await
+        .unwrap_err();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(failed.code(), 3, "{failed:?}");
+    assert_eq!(
+        failed.said(),
+        format!(
+            "{address} does not know your session; it may have restarted: \
+             `meridian connect {address}` to sign in again"
+        )
+    );
+    let asked = asked.lock().unwrap().clone();
+    assert!(
+        asked.iter().any(|line| line
+            .starts_with("POST /terminal/registry/v2/plugins/reference-plugin/blobs/uploads/")),
+        "{asked:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_lapsed_session_is_seen_on_the_first_look_at_the_registry() {
+    // A HEAD has no body to say why; its 401 is the session all the same, and
+    // nothing is sent after it.
+    let (address, asked) = dashboard(|_, _| (401, NO_SESSION)).await;
+    let dir = scratch("lapsed-head");
+    layout(&dir, false);
+    let failed = push(&address, "stale", &a_plugin(), &image(&dir).unwrap())
+        .await
+        .unwrap_err();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(failed.code(), 3, "{failed:?}");
+    assert!(
+        failed
+            .said()
+            .ends_with(&format!("`meridian connect {address}` to sign in again")),
+        "{failed:?}"
+    );
+    let asked = asked.lock().unwrap().clone();
+    assert!(
+        asked
+            .iter()
+            .all(|line| line.starts_with("HEAD ") || line.starts_with("GET /terminal/plugins")),
+        "{asked:?}"
+    );
+}
+
+#[tokio::test]
+async fn every_catalogue_call_says_a_lapsed_session_as_the_session() {
+    let (address, _) =
+        dashboard(|_, _| (401, r#"{"error":"invalid_token","reason":"lapsed"}"#)).await;
+    let lapsed = format!(
+        "your session with {address} lapsed: `meridian connect {address}` to sign in again"
+    );
+    let failed = catalogue(&address, "stale").await.unwrap_err();
+    assert_eq!(failed, Failed::Session(lapsed.clone()));
+    let failed = record(&address, "stale", &a_plugin(), "sha256:ab")
+        .await
+        .unwrap_err();
+    assert_eq!(failed, Failed::Session(lapsed.clone()));
+    let failed = stop(&address, "stale", "reference-plugin")
+        .await
+        .unwrap_err();
+    assert_eq!(failed, Failed::Session(lapsed.clone()));
+    let asked = Launch {
+        name: "reference-plugin",
+        version: "0.1.0",
+        instance: "reference-plugin",
+        roles: &[],
+        live: false,
+    };
+    let failed = launch(&address, "stale", &asked).await.unwrap_err();
+    assert_eq!(failed, Failed::Session(lapsed));
+}
+
+#[tokio::test]
+async fn anything_else_the_registry_refuses_is_a_refusal_after_what_was_being_done() {
+    let (address, _) = dashboard(|method, _| match method {
+        "HEAD" => (404, ""),
+        _ => (503, r#"{"error":"the registry is not reachable"}"#),
+    })
+    .await;
+    let dir = scratch("registry-down");
+    layout(&dir, false);
+    let failed = push(&address, "live", &a_plugin(), &image(&dir).unwrap())
+        .await
+        .unwrap_err();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        failed,
+        Failed::Refused(
+            "the registry did not start an upload: 503 Service Unavailable: \
+             the registry is not reachable"
+                .into()
+        )
+    );
+}

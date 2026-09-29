@@ -120,6 +120,35 @@ fn a_lapsed_session_is_said_apart_with_what_to_run() {
 }
 
 #[test]
+fn the_dashboards_missing_session_is_said_by_its_reason_with_connect() {
+    let local = "http://meridian.localhost";
+    for (reason, why) in [
+        ("lapsed", format!("your session with {local} lapsed")),
+        ("ended", format!("your session with {local} was ended")),
+        (
+            "unknown",
+            format!("{local} does not know your session; it may have restarted"),
+        ),
+    ] {
+        let body = format!(r#"{{"error":"invalid_token","reason":"{reason}"}}"#);
+        let failed = refusal(local, reqwest::StatusCode::UNAUTHORIZED, &body);
+        assert_eq!(
+            failed,
+            Failed::Session(format!("{why}: `meridian connect` to sign in again"))
+        );
+        assert_eq!(failed.code(), 3);
+    }
+    // A 401 with nothing to say why is the session all the same.
+    let bare = refusal(local, reqwest::StatusCode::UNAUTHORIZED, "");
+    assert_eq!(bare.code(), 3);
+    assert!(
+        bare.said().ends_with("`meridian connect` to sign in again"),
+        "{}",
+        bare.said()
+    );
+}
+
+#[test]
 fn each_event_is_reported_once_whatever_the_polls_return() {
     let said = serde_json::json!({ "revision": 2, "events": [
         { "revision": 1, "event": "synced", "at": 1.0, "by": "sidecar", "files": 2, "deleted": 0 },

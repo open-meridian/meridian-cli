@@ -101,16 +101,22 @@ pub async fn cluster(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
             Ok(said) if said.trim() == "yes" => {
                 Finding::Fine(format!("this account may create {resource} in {namespace}"))
             }
-            Ok(_) => Finding::Stops {
-                what: format!("this account may not create {resource} in {namespace}"),
-                fix: format!(
-                    "Ask for rights to {what} in {namespace}, or install into a namespace you \
-                     administer."
-                ),
-            },
-            Err(failed) => Finding::Unknown {
+            // kubectl says "no" and exits 1, so a refusal arrives as either.
+            Ok(said) | Err(Failure::Said(said)) if said.trim().starts_with("no") => {
+                Finding::Stops {
+                    what: format!("this account may not create {resource} in {namespace}"),
+                    fix: format!(
+                        "Ask for the right to create {resource} in {namespace}, to {what}, or \
+                         install into a namespace you administer."
+                    ),
+                }
+            }
+            other => Finding::Unknown {
                 what: format!("whether this account may create {resource} is unknown"),
-                why: failed.to_string(),
+                why: match other {
+                    Ok(said) => said,
+                    Err(failed) => failed.to_string(),
+                },
             },
         });
     }

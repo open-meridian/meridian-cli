@@ -5,6 +5,7 @@
 //! convenient is possible without it (spec/the-cli, requirement 16).
 
 mod catalogue;
+mod check;
 mod connect;
 mod doctor;
 mod down;
@@ -28,6 +29,8 @@ meridian -- bringing a Meridian deployment up
                              move a running deployment to a newer chart, in place,
                              after checking it can; not this binary
   meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>
+  meridian plugin check      hold the plugin here to the framework's rules: its pages,
+                             settings, SDK use, [tool.meridian], tests and shape
   meridian plugin upload     build the plugin here and put it in the deployment's catalogue
   meridian plugin list       the catalogue: versions uploaded, and what is launched
   meridian plugin launch <name> <version> --instance <id>
@@ -87,6 +90,12 @@ up:
 plugin new:
       --into <dir>          where to write it (default: ./<name>). Never somewhere
                             that already exists
+
+plugin check: needs no deployment. Exits 0 when every rule holds, 1 when one does
+not, each failure with its file, line and what to write instead
+      --dir <dir>           the plugin's directory (default: .)
+      --run-tests           run its tests too, with pytest
+      --json                one JSON object on stdout
 
 plugin upload, list, launch, stop, dev, logs, events, open: through the session
 `meridian connect` keeps. They exit 0 when done, 1 when refused or failed, 2 when
@@ -174,8 +183,9 @@ const TAKES_A_VALUE: [&str; 21] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 10] = [
+const SWITCHES: [&str; 11] = [
     "--no-doctor",
+    "--run-tests",
     "--delete-namespace",
     "--json",
     "--follow",
@@ -337,6 +347,9 @@ async fn main() {
 /// spec's, and not built yet.
 async fn plugin_command(arguments: &Arguments) -> i32 {
     let words: Vec<&str> = arguments.words.iter().map(String::as_str).collect();
+    if words.first() == Some(&"check") {
+        return check_command(arguments, &words);
+    }
     if let Some(&verb) = words.first() {
         if matches!(verb, "upload" | "list" | "launch" | "stop") {
             return catalogue_command(arguments, &words).await;
@@ -363,9 +376,38 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
             }
         }
         _ => {
-            eprintln!("meridian: plugin takes `new <name>`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events` or `open`\n\n{USAGE}");
+            eprintln!("meridian: plugin takes `new <name>`, `check`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events` or `open`\n\n{USAGE}");
             2
         }
+    }
+}
+
+/// `meridian plugin check`: the plugin in --dir held to the framework's
+/// rules (decisions/025). It needs no session: it reads the directory.
+fn check_command(arguments: &Arguments, words: &[&str]) -> i32 {
+    if words.len() != 1 {
+        eprintln!(
+            "meridian plugin check: takes no words; --dir names the plugin's directory\n\n{USAGE}"
+        );
+        return 2;
+    }
+    let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
+    let report = match check::check(&dir, arguments.set("--run-tests")) {
+        Ok(report) => report,
+        Err(refusal) => {
+            eprintln!("meridian plugin check: {refusal}");
+            return 2;
+        }
+    };
+    if arguments.set("--json") {
+        println!("{}", check::json(&report));
+    } else {
+        print!("{}", check::text(&report));
+    }
+    if report.passed() {
+        0
+    } else {
+        1
     }
 }
 
@@ -454,8 +496,7 @@ async fn catalogue_command(arguments: &Arguments, words: &[&str]) -> i32 {
             print!("{said}");
             0
         }
-        Err(refusal) => {
-            let failed = classified(address, refusal);
+        Err(failed) => {
             eprintln!("meridian plugin {}: {}", words[0], failed.said());
             failed.code()
         }
@@ -471,7 +512,7 @@ async fn approval(
     version: &str,
     instance: &str,
     live: bool,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, live::Failed> {
     let held = catalogue::catalogue(address, session).await?;
     let roles = catalogue::declared(&held, name, version).ok_or(format!(
         "{name} {version} is not in {address}'s catalogue: `meridian plugin list` shows what is"
@@ -487,10 +528,10 @@ async fn approval(
     eprintln!("  roles: {}", listed(&roles));
     let how = if live { "live " } else { "" };
     if !arguments.set("--yes") && !approved(&format!("Launch it {how}as {instance}, with these?")) {
-        return Err(
+        return Err(live::Failed::Refused(
             "not approved, so not launched. Where there is no terminal to ask at, --yes approves"
                 .into(),
-        );
+        ));
     }
     Ok(roles)
 }
@@ -503,7 +544,7 @@ async fn launched(
     version: &str,
     instance: &str,
     live: bool,
-) -> Result<String, String> {
+) -> Result<String, live::Failed> {
     let roles = approval(arguments, address, session, name, version, instance, live).await?;
     let asked = catalogue::Launch {
         name,
@@ -521,17 +562,6 @@ async fn launched(
 }
 
 // ── The live loop (spec/live-plugin-development, requirements 10 to 14) ──
-
-/// A catalogue command's refusal, told apart when it is the session.
-fn classified(address: &str, said: String) -> live::Failed {
-    if said.starts_with("401") {
-        return live::Failed::Session(format!(
-            "{said}: `{}` to sign in again",
-            connect::command_for(address)
-        ));
-    }
-    live::Failed::Refused(said)
-}
 
 async fn live_command(arguments: &Arguments, words: &[&str]) -> i32 {
     let verb = words[0];
@@ -612,9 +642,7 @@ async fn develop(
     let metadata = catalogue::metadata(&pyproject)?;
     let (name, version) = (metadata.name.as_str(), metadata.version.as_str());
 
-    let held = catalogue::catalogue(address, session)
-        .await
-        .map_err(|said| classified(address, said))?;
+    let held = catalogue::catalogue(address, session).await?;
     let running = held["launches"]
         .as_array()
         .into_iter()
@@ -643,13 +671,9 @@ async fn develop(
                     dir.display()
                 );
             } else {
-                catalogue::upload(address, session, &dir)
-                    .await
-                    .map_err(|said| classified(address, said))?;
+                catalogue::upload(address, session, &dir).await?;
             }
-            let said = launched(arguments, address, session, name, version, instance, true)
-                .await
-                .map_err(|said| classified(address, said))?;
+            let said = launched(arguments, address, session, name, version, instance, true).await?;
             eprint!("{said}");
         }
     }
@@ -748,33 +772,27 @@ async fn release(
         .map_err(|failed| format!("{} has no pyproject.toml: {failed}", dir.display()))?;
     let metadata = catalogue::metadata(&pyproject)?;
     let (name, version) = (metadata.name.as_str(), metadata.version.as_str());
-    let digest = catalogue::upload(address, session, &dir)
-        .await
-        .map_err(|said| {
-            if said.contains("recorded already") {
-                live::Failed::Refused(format!(
-                    "{name} {version} is recorded already, and a version is never replaced: \
+    let digest =
+        catalogue::upload(address, session, &dir)
+            .await
+            .map_err(|failed| match failed {
+                live::Failed::Refused(said) if said.contains("recorded already") => {
+                    live::Failed::Refused(format!(
+                        "{name} {version} is recorded already, and a version is never replaced: \
                      raise the version in pyproject.toml, then release again"
-                ))
-            } else {
-                classified(address, said)
-            }
-        })?;
-    let roles = approval(arguments, address, session, name, version, instance, false)
-        .await
-        .map_err(|said| classified(address, said))?;
-    let held = catalogue::catalogue(address, session)
-        .await
-        .map_err(|said| classified(address, said))?;
+                    ))
+                }
+                other => other,
+            })?;
+    let roles = approval(arguments, address, session, name, version, instance, false).await?;
+    let held = catalogue::catalogue(address, session).await?;
     let running = held["launches"]
         .as_array()
         .into_iter()
         .flatten()
         .any(|launch| launch["instance_id"] == instance && launch["state"] == "launched");
     if running {
-        catalogue::stop(address, session, instance)
-            .await
-            .map_err(|said| classified(address, said))?;
+        catalogue::stop(address, session, instance).await?;
     }
     let asked = catalogue::Launch {
         name,
@@ -783,9 +801,7 @@ async fn release(
         roles: &roles,
         live: false,
     };
-    catalogue::launch(address, session, &asked)
-        .await
-        .map_err(|said| classified(address, said))?;
+    catalogue::launch(address, session, &asked).await?;
     if json {
         println!(
             "{}",
@@ -1500,6 +1516,15 @@ mod tests {
         assert_eq!(arguments.value("--timeout", "--timeout"), Some("15m"));
         assert!(arguments.set("--yes"));
         assert!(parse(said("upgrade-deployment 0.1.182")).is_err());
+    }
+
+    #[test]
+    fn plugin_check_takes_its_directory_and_whether_to_run_the_tests() {
+        let check = parse(said("plugin check --dir ./p --run-tests --json")).unwrap();
+        assert_eq!(check.words, ["check"]);
+        assert_eq!(check.value("--dir", "--dir"), Some("./p"));
+        assert!(check.set("--run-tests") && check.set("--json"));
+        assert!(parse(said("plugin check --run-test")).is_err());
     }
 
     #[test]

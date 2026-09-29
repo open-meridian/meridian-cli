@@ -140,6 +140,71 @@ async fn rights_are_asked_of_the_cluster_rather_than_assumed() {
 }
 
 #[tokio::test]
+async fn a_refusal_kubectl_exits_with_is_a_stop_naming_the_right_not_unknown() {
+    // kubectl auth can-i answers "no" on stdout and exits 1, so the refusal
+    // arrives as a failed command. It is an answer, and the answer is no.
+    let machine = Fake::default()
+        .running(
+            "kubectl cluster-info",
+            Ok("Kubernetes control plane is running"),
+        )
+        .running(
+            "kubectl auth can-i create deployments -n meridian",
+            Ok("yes"),
+        )
+        .running("kubectl auth can-i create secrets -n meridian", Ok("yes"))
+        .running("kubectl auth can-i create jobs -n meridian", Err("no"));
+
+    let findings = checks::cluster(&machine, "meridian").await;
+
+    let stopping: Vec<String> = findings
+        .iter()
+        .filter(|finding| finding.stops())
+        .map(|finding| format!("{finding}"))
+        .collect();
+    assert_eq!(stopping.len(), 1, "{findings:?}");
+    assert!(
+        stopping[0].contains("may not create jobs in meridian"),
+        "{stopping:?}"
+    );
+    assert!(
+        stopping[0].contains("the right to create jobs"),
+        "{stopping:?}"
+    );
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::Unknown { .. })),
+        "{findings:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_can_i_that_could_not_ask_is_unknown_rather_than_a_refusal() {
+    let machine = Fake::default()
+        .running(
+            "kubectl cluster-info",
+            Ok("Kubernetes control plane is running"),
+        )
+        .running(
+            "kubectl auth can-i create deployments -n meridian",
+            Err("error: the server doesn't have a resource type"),
+        )
+        .running("kubectl auth can-i create secrets -n meridian", Ok("yes"))
+        .running("kubectl auth can-i create jobs -n meridian", Ok("yes"));
+
+    let findings = checks::cluster(&machine, "meridian").await;
+
+    assert!(!findings.iter().any(Finding::stops), "{findings:?}");
+    assert!(
+        findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::Unknown { .. })),
+        "{findings:?}"
+    );
+}
+
+#[tokio::test]
 async fn no_cluster_is_one_finding_and_not_four() {
     // A person with no cluster does not need to be told three more times.
     let machine = Fake::default().running("kubectl cluster-info", Err("connection refused"));

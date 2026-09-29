@@ -977,6 +977,7 @@ dependencies = [
  "base64 0.22.1",
  "meridian-conductor",
  "rand 0.8.8",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

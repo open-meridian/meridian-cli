@@ -70,20 +70,34 @@ fn client() -> Result<reqwest::Client, Failed> {
 }
 
 /// What a refusal said, and which kind it is.
+///
+/// The dashboard answers any `/terminal/` path, its registry's included,
+/// with 401 and `{"error":"invalid_token","reason":…}` when it holds no such
+/// session: lapsed, ended, or unknown to it, as after it restarted. Each is
+/// the same fix, signing in again, so each is said as the session, with the
+/// command that does it.
 pub fn refusal(address: &str, status: reqwest::StatusCode, body: &str) -> Failed {
     if let Some(refused) = crate::release::version_refused(status, body) {
         return Failed::Refused(refused);
     }
-    let reason = serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v["error"].as_str().map(String::from))
-        .unwrap_or_else(|| body.trim().to_string());
+    let said = serde_json::from_str::<serde_json::Value>(body).ok();
     if status == reqwest::StatusCode::UNAUTHORIZED {
+        let why = match said.as_ref().and_then(|v| v["reason"].as_str()) {
+            Some("lapsed") => format!("your session with {address} lapsed"),
+            Some("ended") => format!("your session with {address} was ended"),
+            Some("unknown") => {
+                format!("{address} does not know your session; it may have restarted")
+            }
+            _ => format!("{address} did not accept your session"),
+        };
         return Failed::Session(format!(
-            "{reason}: `{}` to sign in again",
+            "{why}: `{}` to sign in again",
             crate::connect::command_for(address)
         ));
     }
+    let reason = said
+        .and_then(|v| v["error"].as_str().map(String::from))
+        .unwrap_or_else(|| body.trim().to_string());
     Failed::Refused(format!("{status}: {reason}"))
 }
 
