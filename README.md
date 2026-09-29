@@ -10,7 +10,7 @@ meridian doctor              # can this machine and this cluster run a deploymen
 meridian up                  # install the chart, then open the wizard
 meridian up --params f.yaml  # the same, answered from a file
 meridian down                # uninstall it, keeping its namespace unless asked
-meridian connect <address>   # sign in to a deployment, and keep the session
+meridian connect [<address>] # sign in to a deployment (default: the local one), and keep the session
 meridian sign-out            # end that session, here and at the deployment
 meridian plugin new <name>   # start a plugin from the SDK's reference plugin
 meridian plugin upload       # build it and put it in the deployment's catalogue
@@ -177,7 +177,7 @@ Not to be confused with `meridian uninstall`, which removes this CLI.
 ## connect and plugins
 
 ```
-meridian connect http://meridian.localhost
+meridian connect
 ```
 
 Signs in to the deployment in your browser, however it signs people in, and
@@ -213,7 +213,7 @@ sidecar and the same grants.
 
 ```
 meridian up --id DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0P --development
-meridian connect http://meridian.localhost
+meridian connect
 meridian plugin new my-plugin && cd my-plugin
 meridian plugin dev --instance my-plugin
 ```
