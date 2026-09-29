@@ -80,7 +80,8 @@ pub fn refusal(address: &str, status: reqwest::StatusCode, body: &str) -> Failed
         .unwrap_or_else(|| body.trim().to_string());
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Failed::Session(format!(
-            "{reason}: `meridian connect {address}` to sign in again"
+            "{reason}: `{}` to sign in again",
+            crate::connect::command_for(address)
         ));
     }
     Failed::Refused(format!("{status}: {reason}"))

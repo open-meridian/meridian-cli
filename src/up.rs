@@ -82,6 +82,10 @@ pub fn check_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The name `up` gives a deployment when told none, which every browser sends
+/// to this machine. `connect` given no address signs in to it.
+pub const LOCAL_HOST: &str = "meridian.localhost";
+
 /// The address a name is reached at through the Ingress: plain HTTP for a
 /// name under `.localhost`, which never leaves this machine, and HTTPS for any
 /// other, since the chart serves plain HTTP only to a local install.

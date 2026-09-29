@@ -87,6 +87,16 @@ pub fn address(given: &str) -> Result<String, String> {
     }
 }
 
+/// The `meridian connect` to run for an address: bare for the local install,
+/// which is what `connect` given no address signs in to.
+pub fn command_for(address: &str) -> String {
+    if address == crate::up::address_of(crate::up::LOCAL_HOST) {
+        "meridian connect".to_string()
+    } else {
+        format!("meridian connect {address}")
+    }
+}
+
 /// Percent-encoding for a query or a form, keeping only what needs none.
 fn encoded(value: &str) -> String {
     value

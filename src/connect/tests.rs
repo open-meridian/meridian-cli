@@ -216,3 +216,12 @@ fn plain_http_is_for_this_machine_alone_including_names_under_localhost() {
         assert!(address(remote).is_err(), "{remote}");
     }
 }
+
+#[test]
+fn the_command_to_run_is_bare_for_the_local_install() {
+    assert_eq!(command_for("http://meridian.localhost"), "meridian connect");
+    assert_eq!(
+        command_for("https://meridian.firm.example"),
+        "meridian connect https://meridian.firm.example"
+    );
+}

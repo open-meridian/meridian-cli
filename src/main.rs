@@ -39,7 +39,9 @@ meridian -- bringing a Meridian deployment up
                              ready, crashed, refused, each with its revision
   meridian plugin open --instance <id>
                              a link to a plugin's page that one browser opens once
-  meridian connect <address> sign in to a deployment's dashboard, and keep the session
+  meridian connect [<address>]
+                             sign in to a deployment's dashboard, and keep the session
+                             (default: http://meridian.localhost, the local install)
   meridian sign-out [<address>]
                              end that session, here and at the deployment
   meridian upgrade           replace this binary with the latest release
@@ -355,12 +357,16 @@ fn held_session(arguments: &Arguments) -> Result<sessions::Held, String> {
     if let Some(given) = arguments.value("--deployment", "--deployment") {
         let address = connect::address(given)?;
         return sessions::read(&within, &address).ok_or(format!(
-            "not connected to {address}: `meridian connect {address}` first"
+            "not connected to {address}: `{}` first",
+            connect::command_for(&address)
         ));
     }
     let mut every = sessions::all(&within);
     match every.len() {
-        0 => Err("not connected to a deployment: `meridian connect <address>` first".into()),
+        0 => Err(
+            "not connected to a deployment: `meridian connect` first, with the address if it is not this machine's"
+                .into(),
+        ),
         1 => Ok(every.remove(0)),
         _ => Err(format!(
             "connected to more than one deployment; say which with --deployment: {}",
@@ -504,7 +510,8 @@ async fn launched(
 fn classified(address: &str, said: String) -> live::Failed {
     if said.starts_with("401") {
         return live::Failed::Session(format!(
-            "{said}: `meridian connect {address}` to sign in again"
+            "{said}: `{}` to sign in again",
+            connect::command_for(address)
         ));
     }
     live::Failed::Refused(said)
@@ -911,13 +918,25 @@ async fn down_command(arguments: &Arguments, namespace: &str) -> i32 {
     }
 }
 
-/// `meridian connect <address>`: W6.13 from this side.
+/// The address `connect` signs in to: the one given, or with none, the
+/// deployment `meridian up` installs on this machine by default.
+fn connect_address(words: &[String]) -> Option<String> {
+    match words {
+        [] => Some(up::address_of(up::LOCAL_HOST)),
+        [given] => Some(given.clone()),
+        _ => None,
+    }
+}
+
+/// `meridian connect [<address>]`: W6.13 from this side.
 async fn connect_command(arguments: &Arguments) -> i32 {
-    let [given] = arguments.words.as_slice() else {
-        eprintln!("meridian: connect takes the dashboard's address\n\n{USAGE}");
+    let Some(given) = connect_address(&arguments.words) else {
+        eprintln!(
+            "meridian: connect takes one dashboard address, or none for this machine's\n\n{USAGE}"
+        );
         return 2;
     };
-    let address = match connect::address(given) {
+    let address = match connect::address(&given) {
         Ok(address) => address,
         Err(refusal) => {
             eprintln!("meridian connect: {refusal}");
@@ -1233,7 +1252,7 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
         false => Some(
             arguments
                 .value("--host", "--host")
-                .unwrap_or("meridian.localhost")
+                .unwrap_or(up::LOCAL_HOST)
                 .to_string(),
         ),
     };
@@ -1272,7 +1291,7 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::parse;
+    use super::{connect_address, parse};
 
     fn said(line: &str) -> Vec<String> {
         line.split_whitespace().map(String::from).collect()
@@ -1344,6 +1363,19 @@ mod tests {
             ["https://dash.firm.example"]
         );
         assert!(parse(said("sign-out")).unwrap().words.is_empty());
+    }
+
+    #[test]
+    fn connect_with_no_address_signs_in_to_the_local_install() {
+        assert_eq!(
+            connect_address(&[]).as_deref(),
+            Some("http://meridian.localhost")
+        );
+        assert_eq!(
+            connect_address(&["https://dash.firm.example".into()]).as_deref(),
+            Some("https://dash.firm.example")
+        );
+        assert_eq!(connect_address(&["a".into(), "b".into()]), None);
     }
 
     #[test]
