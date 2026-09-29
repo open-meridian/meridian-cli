@@ -49,7 +49,7 @@ pub async fn helm(machine: &dyn Machine) -> Finding {
 }
 
 /// `v3.16.2+g1234` and the other shapes Helm prints.
-fn version(said: &str) -> Option<(u32, u32)> {
+pub fn version(said: &str) -> Option<(u32, u32)> {
     let digits: String = said
         .trim()
         .trim_start_matches('v')

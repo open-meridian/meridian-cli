@@ -10,6 +10,7 @@ meridian doctor              # can this machine and this cluster run a deploymen
 meridian up                  # install the chart, then open the wizard
 meridian up --params f.yaml  # the same, answered from a file
 meridian down                # uninstall it, keeping its namespace unless asked
+meridian upgrade-deployment  # move it to a newer chart, in place, after checking it can
 meridian connect [<address>] # sign in to a deployment (default: the local one), and keep the session
 meridian sign-out            # end that session, here and at the deployment
 meridian plugin new <name>   # start a plugin from the SDK's reference plugin
@@ -173,6 +174,49 @@ what revokes its key. A session this machine held with it is forgotten. It
 never touches the cluster itself.
 
 Not to be confused with `meridian uninstall`, which removes this CLI.
+
+## upgrade-deployment
+
+```
+meridian upgrade-deployment
+meridian upgrade-deployment --chart-version 0.1.182 --yes
+```
+
+Moves a running deployment to a newer version of its chart, in place, with
+your own cluster rights: nothing in a deployment holds a right to change the
+cluster, and an upgrade is the widest change there is. Not `meridian upgrade`,
+which replaces this binary.
+
+It checks first and changes nothing if a check fails: the cluster reachable
+and your rights in the namespace, Helm 3.14 or newer, the release `deployed`
+(a `failed` or `pending` one is refused with how to recover it), the version
+published and not older than the installed one. At that version already, it
+says so and exits 0. Whether the upgrade is within the skip policy, and whether
+every plugin's runtime floor is met, are printed as `unknown`: neither is
+built yet, because nothing is there to check against.
+
+Then it shows the release, the version and image it is on and the ones it
+moves to, and the `helm upgrade` it will run, and asks; `--yes` answers for a
+script. It applies the new chart's defaults with the deployment's own values
+over them:
+
+```
+helm upgrade meridian oci://ghcr.io/open-meridian/charts/meridian-runtime --version 0.1.182 \
+  --namespace meridian --reset-then-reuse-values --timeout 10m
+```
+
+Never `--reuse-values`, which keeps the old chart's image tag, so every pod
+restarts on the old image; and not `--wait`, which charts up to 0.1.182 fail on
+their own hook. It waits itself, up to `--timeout`, for the new revision's
+migration Job, every Deployment and StatefulSet to roll out, and every pod on
+the image its template names. Then it deletes the finished Jobs of earlier
+revisions, found by the release's label, and reports each component's image
+and readiness and every container that restarted during the upgrade, with the
+reason Kubernetes gives.
+
+It never prints the deployment's values, which hold its enrolment code; the one
+thing it reads from them is `image`. The same steps from a firm's own pipeline
+-- plain Helm, Flux or Argo CD -- are in the docs' *Upgrade a deployment*.
 
 ## connect and plugins
 

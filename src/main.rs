@@ -14,6 +14,7 @@ mod plugin;
 mod release;
 mod sessions;
 mod up;
+mod upgrade_deployment;
 
 use doctor::Intended;
 
@@ -23,6 +24,9 @@ meridian -- bringing a Meridian deployment up
   meridian doctor            can this machine and this cluster run a deployment?
   meridian up                install the chart, and open this deployment's wizard
   meridian down              uninstall it; --delete-namespace removes its namespace too
+  meridian upgrade-deployment
+                             move a running deployment to a newer chart, in place,
+                             after checking it can; not this binary
   meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>
   meridian plugin upload     build the plugin here and put it in the deployment's catalogue
   meridian plugin list       the catalogue: versions uploaded, and what is launched
@@ -44,7 +48,8 @@ meridian -- bringing a Meridian deployment up
                              (default: http://meridian.localhost, the local install)
   meridian sign-out [<address>]
                              end that session, here and at the deployment
-  meridian upgrade           replace this binary with the latest release
+  meridian upgrade           replace this binary with the latest release; not a
+                             deployment, which is upgrade-deployment
   meridian uninstall         end every session this holds, and remove it
   meridian --version         which release this is
 
@@ -108,7 +113,18 @@ down: nothing is asked, since saying down is the decision
                             deployment brought and the deployment's own key. Never
                             the cluster itself
 
-upgrade:
+upgrade-deployment: checks first, and changes nothing if a check fails; then shows
+what it will do and asks
+      --release <name>      the Helm release (default: meridian)
+      --chart <ref>         the chart it was installed from (default: the published one)
+      --chart-version <v>   the version to move to (default: the latest published).
+                            Never an older one
+      --timeout <d>         how long to wait for the migration and for every
+                            component on the new image (default: 10m)
+      --yes                 upgrade without being asked. For a script that has read
+                            what it will do
+
+upgrade: this binary, not a deployment
       --to <version>        a named release instead of the latest, older or newer.
                             Nothing is looked up unless asked: this never checks
                             for a newer release on its own
@@ -303,6 +319,9 @@ async fn main() {
         "connect" => std::process::exit(connect_command(&arguments).await),
         "sign-out" => std::process::exit(sign_out_command(&arguments).await),
         "upgrade" => std::process::exit(upgrade_command(&arguments).await),
+        "upgrade-deployment" => {
+            std::process::exit(upgrade_deployment_command(&arguments, &intended.namespace).await)
+        }
         "uninstall" => std::process::exit(uninstall_command(&arguments).await),
         "--version" | "version" => println!("{}", release::version_line()),
         "-h" | "--help" | "help" | "" => print!("{USAGE}"),
@@ -918,6 +937,63 @@ async fn down_command(arguments: &Arguments, namespace: &str) -> i32 {
     }
 }
 
+/// `meridian upgrade-deployment`: a running deployment moved to a newer chart
+/// (task kernel/upgrading-a-deployment-in-place). Not `upgrade`, which
+/// replaces this binary.
+async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i32 {
+    use upgrade_deployment::run;
+    let timeout = arguments.value("--timeout", "--timeout").unwrap_or("10m");
+    let Some(waited) = upgrade_deployment::duration(timeout) else {
+        eprintln!(
+            "meridian upgrade-deployment: --timeout takes a duration as Helm writes one: 10m, 90s, 1h30m"
+        );
+        return 2;
+    };
+    let asked = upgrade_deployment::Asked {
+        release: arguments
+            .value("--release", "--release")
+            .unwrap_or("meridian")
+            .into(),
+        namespace: namespace.into(),
+        chart: arguments
+            .value("--chart", "--chart")
+            .unwrap_or("oci://ghcr.io/open-meridian/charts/meridian-runtime")
+            .into(),
+        chart_version: arguments
+            .value("--chart-version", "--chart-version")
+            .map(String::from),
+        timeout: timeout.into(),
+    };
+    let mut say = |line: &str| println!("{line}");
+    let plan = match run::check(&machine::ThisMachine, &asked, &mut say).await {
+        run::Checked::Refused => return 1,
+        run::Checked::Current(said) => {
+            println!("\n{said}");
+            return 0;
+        }
+        run::Checked::Upgrade(plan) => plan,
+    };
+    println!("\n{}", upgrade_deployment::plan_text(&asked, &plan));
+    if !arguments.set("--yes") && !approved("Upgrade it?") {
+        eprintln!("meridian upgrade-deployment: not approved, so nothing was changed. Where there is no terminal to ask at, --yes approves");
+        return 1;
+    }
+    let pace = run::Pace {
+        poll: std::time::Duration::from_secs(2),
+        timeout: waited,
+    };
+    match run::apply(&machine::ThisMachine, &asked, &plan, &pace, &mut say).await {
+        Ok(report) => {
+            print!("{}", upgrade_deployment::report_text(&asked, &report));
+            0
+        }
+        Err(refusal) => {
+            eprintln!("\nmeridian upgrade-deployment: {refusal}");
+            1
+        }
+    }
+}
+
 /// The address `connect` signs in to: the one given, or with none, the
 /// deployment `meridian up` installs on this machine by default.
 fn connect_address(words: &[String]) -> Option<String> {
@@ -1392,6 +1468,24 @@ mod tests {
         );
         assert!(launch.set("--yes"));
         assert!(parse(said("plugin upload --dir")).is_err());
+    }
+
+    #[test]
+    fn upgrade_deployment_names_its_release_version_and_wait() {
+        let arguments = parse(said(
+            "upgrade-deployment --release trial -n firm --chart-version 0.1.182 --timeout 15m --yes",
+        ))
+        .unwrap();
+        assert_eq!(arguments.command, "upgrade-deployment");
+        assert_eq!(arguments.value("--release", "--release"), Some("trial"));
+        assert_eq!(arguments.value("--namespace", "-n"), Some("firm"));
+        assert_eq!(
+            arguments.value("--chart-version", "--chart-version"),
+            Some("0.1.182")
+        );
+        assert_eq!(arguments.value("--timeout", "--timeout"), Some("15m"));
+        assert!(arguments.set("--yes"));
+        assert!(parse(said("upgrade-deployment 0.1.182")).is_err());
     }
 
     #[test]
