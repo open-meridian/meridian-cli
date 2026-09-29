@@ -17,6 +17,12 @@ running in about a second:
 
     meridian plugin dev --instance reference-plugin
 
+Hold it to the rules every Meridian plugin is built to, and run its tests,
+with `meridian` 0.1.15 or later; its CI runs the same:
+
+    pip install -e . pytest
+    meridian plugin check --run-tests
+
 Its page is built on Open Meridian's plugin UI kit, which the dashboard
 serves on the plugin's own host at `/.meridian/ui/`: the platform's look, and
 each person's colour scheme, with no design work. Where the kit is not served

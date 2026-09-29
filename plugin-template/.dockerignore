@@ -9,3 +9,7 @@ AGENTS.md
 CLAUDE.md
 CLAUDE.local.md
 .meridian
+# The tests and the CI that runs them: checked before an upload, never run in
+# the image.
+tests
+.github

@@ -22,6 +22,36 @@ it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the
 `develop-live` skill lead Claude Code here rather than repeating it.
 `.dockerignore` keeps all of them out of the image and the live instance.
 
+## Checking it: `meridian plugin check`
+
+Whatever in this file can be decided from the text is checked, not only
+said: `meridian plugin check` holds the plugin to the rules every Meridian
+plugin is built to (the template's
+shape, `[tool.meridian]`, the kit linked and no raw colour, nothing from
+another origin, settings declared rather than read from the environment, no
+secret logged or put in a page, the deployment reached only through the SDK,
+and tests). It needs no deployment and no session, and changes nothing. It
+came in `meridian` 0.1.15; with an older one, the person runs
+`meridian upgrade`.
+
+- **Run `meridian plugin check` after each change.** Exit 0: every rule
+  holds. Exit 1: at least one does not. Each failure names the rule, the file
+  and line, and what to write instead: fix each one as it says, then run it
+  again, until it exits 0. Never work around a rule; if one seems wrong for
+  this plugin, tell the person.
+- **`meridian plugin check --run-tests`** also runs the tests under `tests/`
+  with pytest, in the plugin's `.venv` if it has one, otherwise with the
+  `python3` on the PATH, which needs the plugin and pytest installed
+  (`pip install -e . pytest`). `tests/test_page.py` tests the page and the
+  operation it sends against a stand-in for the sidecar; replace its tests as
+  you replace the page, and add one for each page and each operation.
+- The plugin's CI (`.github/workflows/check.yaml`) runs the same
+  `meridian plugin check --run-tests` on every push.
+
+What the check cannot decide stays advice, below: which component fits, the
+page's layout, custom properties the kit does not define, figures as strings,
+and names.
+
 ## Building its pages: the kit
 
 Build every page with Open Meridian's plugin UI kit, and nothing else for its
@@ -154,8 +184,8 @@ theirs.
 
 ### Before starting
 
-- `meridian --version` is 0.1.3 or later. Older ones have no `plugin dev`: the
-  person runs `meridian upgrade`.
+- `meridian --version` is 0.1.15 or later. Older ones have no `plugin check`,
+  and before 0.1.3 no `plugin dev`: the person runs `meridian upgrade`.
 - The person has run `meridian connect` (with the address, for a deployment
   not on this machine). You cannot do it for them: it signs in through their
   browser. `meridian plugin list` says whether the
@@ -249,7 +279,8 @@ round it.
 
 When the person is satisfied:
 
-1. Run the plugin's own tests, if it has any, and fix what fails.
+1. Run `meridian plugin check --run-tests`, and fix what fails until it
+   exits 0.
 2. Raise `version` in `pyproject.toml`. A version is never replaced.
 3. Show the person the roles again, and get their yes.
 4. Run `meridian plugin dev --release --instance reference-plugin --yes`.

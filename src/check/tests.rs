@@ -21,7 +21,7 @@ impl Scaffolded {
         Scaffolded(dir)
     }
 
-    /// The same, with a test in it, which the template does not have yet.
+    /// The same, its test replaced by one that needs no SDK to run.
     fn tested(label: &str) -> Self {
         let plugin = Self::new(label);
         plugin.write(
@@ -91,19 +91,19 @@ fn page_py() -> String {
 }
 
 #[test]
-fn a_freshly_scaffolded_plugin_breaks_no_rule_but_the_tests_it_lacks() {
+fn a_freshly_scaffolded_plugin_breaks_no_rule() {
     let plugin = Scaffolded::new("fresh");
     let report = plugin.check();
-
-    // The template has no tests yet (meridian-python's template/, vendored
-    // here). Every other rule holds for it, and once it has tests, all do.
-    let has_tests = plugin.path("tests").exists();
-    let expected: Vec<&str> = if has_tests {
-        vec![]
-    } else {
-        vec!["tests-exist"]
-    };
-    assert_eq!(failed_rules(&report), expected, "{}", text(&report));
+    assert!(
+        plugin.path("tests").exists(),
+        "the template ships its tests"
+    );
+    assert_eq!(
+        failed_rules(&report),
+        Vec::<&str>::new(),
+        "{}",
+        text(&report)
+    );
 }
 
 #[test]
@@ -140,10 +140,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.6.0", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.6.1", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.6.0",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.6.1",
         ),
         (
             "tool-meridian",
@@ -283,6 +283,7 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
 fn a_plugin_breaking_every_rule_is_told_each_with_its_place_and_its_fix() {
     let plugin = Scaffolded::new("broken");
     std::fs::remove_file(plugin.path("AGENTS.md")).unwrap();
+    std::fs::remove_dir_all(plugin.path("tests")).unwrap();
     plugin.replace(
         "pyproject.toml",
         "roles = []",
