@@ -22,6 +22,7 @@
 //! The one thing read from them is `image`.
 
 pub mod run;
+pub mod watch;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -203,6 +204,22 @@ pub struct Workload {
     pub ready: u64,
     /// Why its rollout is not finished, or None when it is.
     pub unfinished: Option<String>,
+    /// A Deployment's ReplicaSet for its current template: the one whose
+    /// revision is the Deployment's. None where the listing holds none.
+    pub current: Option<String>,
+}
+
+impl Workload {
+    /// Whether a pod is one of its own: its selector matches, and no Job runs
+    /// it.
+    fn owns(&self, pod: &Pod) -> bool {
+        pod.job.is_none()
+            && !self.selector.is_empty()
+            && self
+                .selector
+                .iter()
+                .all(|(name, value)| pod.labels.get(name) == Some(value))
+    }
 }
 
 fn number(value: &serde_json::Value) -> u64 {
@@ -232,16 +249,47 @@ fn images(containers: &serde_json::Value) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// From `kubectl get deployments,statefulsets -o json`.
-pub fn workloads(listed: &str) -> Vec<Workload> {
-    let listed: serde_json::Value = serde_json::from_str(listed).unwrap_or_default();
-    listed["items"]
+/// What Kubernetes numbers a Deployment's templates by, on the Deployment and
+/// on each ReplicaSet it made.
+const REVISION: &str = "deployment.kubernetes.io/revision";
+
+/// The name of the first owner of one kind that a resource names.
+fn owner<'a>(item: &'a serde_json::Value, kind: &str) -> Option<&'a str> {
+    item["metadata"]["ownerReferences"]
         .as_array()
         .into_iter()
         .flatten()
+        .find(|owner| owner["kind"] == kind)
+        .and_then(|owner| owner["name"].as_str())
+}
+
+/// From `kubectl get deployments,statefulsets,replicasets -o json`. The
+/// ReplicaSets are read only for which is each Deployment's current one.
+pub fn workloads(listed: &str) -> Vec<Workload> {
+    let listed: serde_json::Value = serde_json::from_str(listed).unwrap_or_default();
+    let items = listed["items"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let sets: Vec<(&str, &str, &str)> = items
+        .iter()
+        .filter(|item| item["kind"] == "ReplicaSet")
+        .filter_map(|set| {
+            Some((
+                owner(set, "Deployment")?,
+                set["metadata"]["annotations"][REVISION].as_str()?,
+                set["metadata"]["name"].as_str()?,
+            ))
+        })
+        .collect();
+    items
+        .iter()
+        .filter(|item| item["kind"] == "Deployment" || item["kind"] == "StatefulSet")
         .map(|item| {
             let kind = item["kind"].as_str().unwrap_or_default().to_lowercase();
             let name = item["metadata"]["name"].as_str().unwrap_or_default();
+            let revision = item["metadata"]["annotations"][REVISION].as_str();
+            let current = sets
+                .iter()
+                .find(|(owner, set, _)| *owner == name && Some(*set) == revision)
+                .map(|(_, _, set)| set.to_string());
             let (spec, status) = (&item["spec"], &item["status"]);
             let wanted = spec["replicas"].as_u64().unwrap_or(1);
             let ready = number(&status["readyReplicas"]);
@@ -278,6 +326,7 @@ pub fn workloads(listed: &str) -> Vec<Workload> {
                 wanted,
                 ready,
                 unfinished,
+                current,
             }
         })
         .collect()
@@ -299,8 +348,14 @@ pub struct Container {
 pub struct Pod {
     pub name: String,
     pub labels: BTreeMap<String, String>,
+    /// `Pending`, `Running`, `Succeeded`, `Failed` or `Unknown`.
+    pub phase: String,
+    /// Being deleted: still there, and serving until it is gone.
+    pub terminating: bool,
     /// The Job that runs it, for a Job's pod.
     pub job: Option<String>,
+    /// The ReplicaSet that made it, for a Deployment's pod.
+    pub replica_set: Option<String>,
     pub images: BTreeMap<String, String>,
     pub init: Vec<Container>,
     pub containers: Vec<Container>,
@@ -339,25 +394,22 @@ pub fn pods(listed: &str) -> Vec<Pod> {
         .as_array()
         .into_iter()
         .flatten()
-        .map(|item| {
-            let job = item["metadata"]["ownerReferences"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|owner| owner["kind"] == "Job")
-                .and_then(|owner| owner["name"].as_str())
-                .map(String::from);
-            Pod {
-                name: item["metadata"]["name"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string(),
-                labels: strings(&item["metadata"]["labels"]),
-                job,
-                images: images(&item["spec"]["containers"]),
-                init: containers(&item["status"]["initContainerStatuses"]),
-                containers: containers(&item["status"]["containerStatuses"]),
-            }
+        .map(|item| Pod {
+            name: item["metadata"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            labels: strings(&item["metadata"]["labels"]),
+            phase: item["status"]["phase"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            terminating: !item["metadata"]["deletionTimestamp"].is_null(),
+            job: owner(item, "Job").map(String::from),
+            replica_set: owner(item, "ReplicaSet").map(String::from),
+            images: images(&item["spec"]["containers"]),
+            init: containers(&item["status"]["initContainerStatuses"]),
+            containers: containers(&item["status"]["containerStatuses"]),
         })
         .collect()
 }
@@ -559,6 +611,8 @@ pub struct Plan {
     pub from_images: Vec<String>,
     pub to: Chart,
     pub to_image: String,
+    /// Pods left over from a restart, which the cleanup removes.
+    pub left_over: Vec<String>,
 }
 
 /// The same command, as somebody would type it.
@@ -584,16 +638,36 @@ pub fn helm_arguments(asked: &Asked, plan: &Plan) -> Vec<String> {
     .collect()
 }
 
+/// `1 pod`, `7 pods`.
+fn counted(count: usize, what: &str) -> String {
+    match count {
+        1 => format!("1 {what}"),
+        _ => format!("{count} {what}s"),
+    }
+}
+
 pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
     let from_images = match plan.from_images.as_slice() {
         [] => "no runtime image found running".to_string(),
         images => images.join(", "),
     };
+    // Asked for with the rest, so the one answer covers removing them.
+    let left_over = match plan.left_over.as_slice() {
+        [] => String::new(),
+        pods => format!(
+            "\n\x20 Then it will remove {} left over from a restart, which serve nothing:\n{}",
+            counted(pods.len(), "pod"),
+            pods.iter()
+                .map(|pod| format!("    pod/{pod}\n"))
+                .collect::<String>()
+        ),
+    };
     format!(
         "Upgrading {release} in {namespace}:\n\
          \x20 from  {chart} {from} (revision {revision}), running {from_images}\n\
          \x20 to    {chart} {to}, running {to_image}\n\n\
-         \x20 helm {command}\n",
+         \x20 helm {command}\n\
+         {left_over}",
         release = asked.release,
         namespace = asked.namespace,
         chart = plan.to.name,
@@ -625,6 +699,40 @@ fn stuck(pod: &Pod) -> Option<String> {
         })
 }
 
+/// Pods left over from a restart: stopped for good, `Succeeded` or `Failed`,
+/// and made by a ReplicaSet their Deployment has since replaced. A node that
+/// restarts leaves one for each pod it ran (Rancher Desktop left seven, on
+/// images two releases old, under an upgrade from 0.1.184 to 0.1.189), and
+/// nothing restarts or removes them. They serve nothing, so they are not
+/// waited for, and the cleanup removes them. A pod still Pending, Running or
+/// terminating is not one: it is waited for.
+///
+/// A launched plugin's Deployment carries the release's labels as the chart's
+/// own do, so its pods are found the same way.
+pub fn left_by_a_restart(workloads: &[Workload], pods: &[Pod]) -> Vec<String> {
+    pods.iter()
+        .filter(|pod| matches!(pod.phase.as_str(), "Succeeded" | "Failed"))
+        .filter(|pod| {
+            let Some(made_by) = &pod.replica_set else {
+                return false;
+            };
+            workloads.iter().any(|workload| {
+                workload.owns(pod)
+                    && workload
+                        .current
+                        .as_ref()
+                        .is_some_and(|current| current != made_by)
+            })
+        })
+        .map(|pod| pod.name.clone())
+        .collect()
+}
+
+/// `ghcr.io/open-meridian/meridian-runtime:9c5d480` as `meridian-runtime:9c5d480`.
+fn short(image: &str) -> &str {
+    image.rsplit_once('/').map_or(image, |(_, last)| last)
+}
+
 /// Where the wait stands: what is still waited for, each with why, or that
 /// the migration failed. Empty `waiting` is done.
 #[derive(Debug, Default)]
@@ -632,10 +740,20 @@ pub struct Progress {
     pub waiting: Vec<String>,
     /// The failed migration Job's name.
     pub failed: Option<String>,
+    /// This revision's migration has not finished.
+    pub migrating: bool,
+    /// Of every workload, how many have nothing left to wait for.
+    pub ready: (usize, usize),
+    /// What is waited on first, and why, in a few words: the one line a
+    /// person watching reads.
+    pub now: Option<String>,
+    /// Pods left over from a restart, which are not waited for.
+    pub left_over: Vec<String>,
 }
 
 pub fn progress(revision: u64, jobs: &[Job], workloads: &[Workload], pods: &[Pod]) -> Progress {
     let mut progress = Progress::default();
+    let mut the_migration = None;
 
     // Absent once Helm has returned is a chart that ran it as a hook, which
     // Helm waited for and removes when it succeeds; or a chart with none.
@@ -647,40 +765,60 @@ pub fn progress(revision: u64, jobs: &[Job], workloads: &[Workload], pods: &[Pod
                 let why = pods
                     .iter()
                     .filter(|pod| pod.job.as_deref() == Some(job.name.as_str()))
-                    .find_map(stuck)
-                    .map(|why| format!(": {why}"))
-                    .unwrap_or_default();
-                progress
-                    .waiting
-                    .push(format!("the migration, job/{}{why}", job.name));
+                    .find_map(stuck);
+                progress.waiting.push(format!(
+                    "the migration, job/{}{}",
+                    job.name,
+                    why.as_ref()
+                        .map(|why| format!(": {why}"))
+                        .unwrap_or_default()
+                ));
+                progress.migrating = true;
+                the_migration = Some(format!(
+                    "the migration, job/{}: {}",
+                    job.name,
+                    why.as_deref().unwrap_or("running")
+                ));
             }
         }
     }
 
+    progress.left_over = left_by_a_restart(workloads, pods);
+    let mut settled = 0;
     for workload in workloads {
         let theirs: Vec<&Pod> = pods
             .iter()
-            .filter(|pod| pod.job.is_none())
-            .filter(|pod| {
-                !workload.selector.is_empty()
-                    && workload
-                        .selector
-                        .iter()
-                        .all(|(name, value)| pod.labels.get(name) == Some(value))
-            })
+            .filter(|pod| workload.owns(pod) && !progress.left_over.contains(&pod.name))
             .collect();
         if let Some(why) = &workload.unfinished {
             let stuck = theirs
                 .iter()
-                .find_map(|pod| stuck(pod).map(|why| format!("; pod/{} {why}", pod.name)))
-                .unwrap_or_default();
-            progress
-                .waiting
-                .push(format!("{}: {why}{stuck}", workload.name));
+                .find_map(|pod| stuck(pod).map(|why| (&pod.name, why)));
+            progress.waiting.push(format!(
+                "{}: {why}{}",
+                workload.name,
+                stuck
+                    .as_ref()
+                    .map(|(pod, why)| format!("; pod/{pod} {why}"))
+                    .unwrap_or_default()
+            ));
+            // A component that starts before its migration exits and is
+            // restarted, so while that runs, the migration is the reason.
+            if progress.now.is_none() {
+                let component = &workload.component;
+                progress.now = Some(match &stuck {
+                    _ if progress.migrating => {
+                        format!("{component}: {why}, waiting for its migration")
+                    }
+                    Some((pod, stuck)) => format!("{component}: {why}; pod/{pod}: {stuck}"),
+                    None => format!("{component}: {why}"),
+                });
+            }
             continue;
         }
         // Rolled out is not yet every pod on the new image: an old one may
         // still be terminating, and it is still serving until it is gone.
+        let before = progress.waiting.len();
         for pod in theirs {
             let old: Vec<&String> = pod
                 .images
@@ -698,9 +836,26 @@ pub fn progress(revision: u64, jobs: &[Job], workloads: &[Workload], pods: &[Pod
                         .collect::<Vec<_>>()
                         .join(", ")
                 ));
+                if progress.now.is_none() {
+                    progress.now = Some(format!(
+                        "{}: pod/{} still on {}{}",
+                        workload.component,
+                        pod.name,
+                        old.iter()
+                            .map(|image| short(image))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        if pod.terminating { ", terminating" } else { "" }
+                    ));
+                }
             }
         }
+        if progress.waiting.len() == before {
+            settled += 1;
+        }
     }
+    progress.ready = (settled, workloads.len());
+    progress.now = progress.now.or(the_migration);
     progress
 }
 
@@ -786,7 +941,10 @@ pub struct Report {
     pub restarted: Vec<String>,
     pub cleaned: Vec<String>,
     pub left: Vec<String>,
-    pub not_cleaned: Option<String>,
+    /// Pods left over from a restart, removed.
+    pub removed: Vec<String>,
+    /// Each removal that failed, and how to make it.
+    pub not_cleaned: Vec<String>,
 }
 
 pub fn report_text(asked: &Asked, report: &Report) -> String {
@@ -833,7 +991,19 @@ pub fn report_text(asked: &Asked, report: &Report) -> String {
                 .join(", ")
         )),
     }
-    if let Some(why) = &report.not_cleaned {
+    if !report.removed.is_empty() {
+        said.push_str(&format!(
+            "Removed {} left over from a restart: {}\n",
+            counted(report.removed.len(), "pod"),
+            report
+                .removed
+                .iter()
+                .map(|pod| format!("pod/{pod}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    for why in &report.not_cleaned {
         said.push_str(&format!("Not cleaned up: {why}\n"));
     }
     for job in &report.left {

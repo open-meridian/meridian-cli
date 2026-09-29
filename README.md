@@ -214,6 +214,23 @@ revisions, found by the release's label, and reports each component's image
 and readiness and every container that restarted during the upgrade, with the
 reason Kubernetes gives.
 
+A pod left over from a restart is not waited for: one stopped for good,
+`Succeeded` or `Failed`, and made by a ReplicaSet its Deployment has since
+replaced. A node restart leaves one for each pod it ran, on whatever image it
+had, and it never changes, so waiting for it would last until the timeout.
+Pods of a launched plugin carry the release's labels and are treated the same.
+The plan names them, the one confirmation covers removing them, and the cleanup
+deletes them by name with the Jobs. A pod still pending, running or
+terminating on the old image is waited for.
+
+While it works it shows where it is. On a terminal, a block redrawn in place:
+each step (checks, plan and confirmation, apply, migration, components,
+cleanup) pending, in progress, done or failed, with its time; the total time;
+the components ready, as a count and a bar; and what it waits on now, and why.
+Piped or in CI, a line as each step starts and ends, and every 20 seconds one
+saying what it still waits for, so a log never looks stalled. `NO_COLOR` turns
+the colour off. The report at the end is the same either way.
+
 It never prints the deployment's values, which hold its enrolment code; the one
 thing it reads from them is `image`. The same steps from a firm's own pipeline
 -- plain Helm, Flux or Argo CD -- are in the docs' *Upgrade a deployment*.

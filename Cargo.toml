@@ -31,4 +31,5 @@ rand = "0.8"
 sha2 = "0.10"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# test-util: a paused clock, so a wait of minutes is tested in no time.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }

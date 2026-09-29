@@ -5,6 +5,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::run::{apply, check, Checked, Pace};
+use super::watch::{render, Board, Log, Mark, Step};
 use super::*;
 use crate::doctor::{Answered, Failure, Machine};
 
@@ -95,7 +96,7 @@ const SHOW_LATEST: &str = "helm show chart oci://ghcr.io/open-meridian/charts/me
 const SHOW_VALUES: &str =
     "helm show values oci://ghcr.io/open-meridian/charts/meridian-runtime --version 0.1.182";
 const OWN_VALUES: &str = "helm get values meridian --namespace meridian -o json";
-const WORKLOADS: &str = "kubectl get deployments,statefulsets -n meridian -l app.kubernetes.io/instance=meridian -o json";
+const WORKLOADS: &str = "kubectl get deployments,statefulsets,replicasets -n meridian -l app.kubernetes.io/instance=meridian -o json";
 const PODS: &str = "kubectl get pods -n meridian -l app.kubernetes.io/instance=meridian -o json";
 const JOBS: &str = "kubectl get jobs -n meridian -l app.kubernetes.io/instance=meridian -o json";
 const UPGRADE: &str = "helm upgrade meridian oci://ghcr.io/open-meridian/charts/meridian-runtime --version 0.1.182 --namespace meridian --reset-then-reuse-values --timeout 10m";
@@ -512,7 +513,7 @@ async fn planned(stand: &Stand) -> Plan {
     })
     .await
     {
-        Checked::Upgrade(plan) => plan,
+        Checked::Upgrade(plan) => *plan,
         _ => panic!("refused: {said:?}"),
     }
 }
@@ -523,6 +524,13 @@ async fn planned(stand: &Stand) -> Plan {
 fn upgrading() -> Stand {
     let old = |component| deployment(component, "845bd06", 1, 1);
     let new = |component| deployment(component, "9c5d480", 1, 1);
+    let before = || {
+        items(vec![
+            pod("conductor-old", "conductor", &format!("{REPO}:845bd06"), 0),
+            pod("launcher-old", "launcher", &format!("{REPO}:845bd06"), 0),
+            pod("database-0", "database", "postgres:16-alpine", 2),
+        ])
+    };
     healthy()
         .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
         .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
@@ -537,14 +545,9 @@ fn upgrading() -> Stand {
             ]),
         )
         .json(WORKLOADS, items(vec![new("conductor"), new("launcher"), database()]))
-        .json(
-            PODS,
-            items(vec![
-                pod("conductor-old", "conductor", &format!("{REPO}:845bd06"), 0),
-                pod("launcher-old", "launcher", &format!("{REPO}:845bd06"), 0),
-                pod("database-0", "database", "postgres:16-alpine", 2),
-            ]),
-        )
+        // Read for the plan, then before the upgrade, then while waiting.
+        .json(PODS, before())
+        .json(PODS, before())
         .json(
             PODS,
             items(vec![
@@ -859,4 +862,409 @@ fn a_pod_on_the_old_image_is_waited_for_after_its_rollout_says_done() {
             "deployment/meridian-meridian-runtime-street: pod/street-old still runs {REPO}:845bd06"
         )]
     );
+}
+
+// ── Pods left over from a restart ────────────────────────────────────────
+
+/// A Deployment at a template revision, as Kubernetes annotates it.
+fn at_revision(mut workload: serde_json::Value, revision: &str) -> serde_json::Value {
+    workload["metadata"]["annotations"] = json!({ "deployment.kubernetes.io/revision": revision });
+    workload
+}
+
+/// One of a Deployment's ReplicaSets, `<deployment>-<hash>`, at a revision.
+fn replica_set(deployment: &str, hash: &str, revision: &str) -> serde_json::Value {
+    json!({
+        "kind": "ReplicaSet",
+        "metadata": { "name": format!("{deployment}-{hash}"),
+                      "annotations": { "deployment.kubernetes.io/revision": revision },
+                      "ownerReferences": [ { "kind": "Deployment", "name": deployment } ] }
+    })
+}
+
+/// A pod made by a ReplicaSet, in a phase.
+fn made_by(mut pod: serde_json::Value, set: &str, phase: &str) -> serde_json::Value {
+    pod["metadata"]["ownerReferences"] = json!([{ "kind": "ReplicaSet", "name": set }]);
+    pod["status"]["phase"] = json!(phase);
+    pod
+}
+
+const STREET: &str = "meridian-meridian-runtime-street";
+const PLUGIN: &str = "meridian-meridian-runtime-plugin-ref";
+
+/// A plugin the launcher launched: its Deployment carries the release's
+/// labels, as the chart's plugin template gives every one.
+fn plugin(tag: &str) -> serde_json::Value {
+    let labels = json!({ "app.kubernetes.io/instance": "meridian",
+                         "meridian.dev/component": "sidecar", "meridian.dev/instance": "ref",
+                         "meridian.dev/launched": "true" });
+    json!({
+        "kind": "Deployment",
+        "metadata": { "name": PLUGIN, "generation": 1, "labels": labels,
+                      "annotations": { "deployment.kubernetes.io/revision": "2" } },
+        "spec": {
+            "replicas": 1,
+            "selector": { "matchLabels": { "app.kubernetes.io/instance": "meridian",
+                                           "meridian.dev/instance": "ref" } },
+            "template": { "spec": { "containers": [
+                { "name": "sidecar", "image": format!("{REPO}:{tag}") },
+                { "name": "plugin", "image": "ghcr.io/example/ref-plugin:0.1.0" } ] } }
+        },
+        "status": { "observedGeneration": 1, "replicas": 1, "updatedReplicas": 1,
+                    "readyReplicas": 1, "availableReplicas": 1 }
+    })
+}
+
+fn plugin_pod(name: &str, tag: &str) -> serde_json::Value {
+    json!({
+        "metadata": { "name": name, "labels": { "app.kubernetes.io/instance": "meridian",
+                                                "meridian.dev/component": "sidecar",
+                                                "meridian.dev/instance": "ref" } },
+        "spec": { "containers": [ { "name": "sidecar", "image": format!("{REPO}:{tag}") },
+                                  { "name": "plugin", "image": "ghcr.io/example/ref-plugin:0.1.0" } ] },
+        "status": { "containerStatuses": [] }
+    })
+}
+
+/// 0.1.180 to 0.1.182 on a cluster whose node restarted before it: the
+/// street and a launched plugin each left a pod `Failed` or `Succeeded`, on
+/// an image two releases old, from a ReplicaSet since replaced.
+fn restarted_before_the_upgrade() -> Stand {
+    let street = |hash: &str, suffix: &str, tag: &str, phase: &str| {
+        made_by(
+            pod(
+                &format!("{STREET}-{hash}-{suffix}"),
+                "street",
+                &format!("{REPO}:{tag}"),
+                0,
+            ),
+            &format!("{STREET}-{hash}"),
+            phase,
+        )
+    };
+    let dead_plugin = made_by(
+        plugin_pod(&format!("{PLUGIN}-7a1-dead"), "461c0a3"),
+        &format!("{PLUGIN}-7a1"),
+        "Succeeded",
+    );
+    let plugin_now = made_by(
+        plugin_pod(&format!("{PLUGIN}-8b2-live"), "845bd06"),
+        &format!("{PLUGIN}-8b2"),
+        "Running",
+    );
+    let before = items(vec![
+        street("6c7", "live", "845bd06", "Running"),
+        street("5f6", "dead", "461c0a3", "Failed"),
+        dead_plugin.clone(),
+        plugin_now.clone(),
+    ]);
+    let sets = vec![
+        replica_set(STREET, "5f6", "1"),
+        replica_set(STREET, "6c7", "2"),
+        replica_set(PLUGIN, "7a1", "1"),
+        replica_set(PLUGIN, "8b2", "2"),
+    ];
+    let listed_before = [
+        vec![
+            at_revision(deployment("street", "845bd06", 1, 1), "2"),
+            plugin("845bd06"),
+        ],
+        sets.clone(),
+    ]
+    .concat();
+    let listed_after = [
+        vec![
+            at_revision(deployment("street", "9c5d480", 1, 1), "3"),
+            plugin("845bd06"),
+            replica_set(STREET, "9d8", "3"),
+        ],
+        sets,
+    ]
+    .concat();
+    healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
+        .json(WORKLOADS, items(listed_before))
+        .json(WORKLOADS, items(listed_after))
+        .json(PODS, before.clone())
+        .json(PODS, before)
+        .json(
+            PODS,
+            items(vec![
+                street("9d8", "live", "9c5d480", "Running"),
+                // Of the current ReplicaSet, on the new image: stopped, and
+                // kept for what it says, since it is not left over.
+                street("9d8", "evicted", "9c5d480", "Failed"),
+                street("5f6", "dead", "461c0a3", "Failed"),
+                dead_plugin,
+                plugin_now,
+            ]),
+        )
+        .json(JOBS, items(vec![job("meridian-meridian-runtime-migrate-8", Some("Complete"))]))
+        .answering(UPGRADE, Ok("upgraded"))
+        .answering(
+            &format!(
+                "kubectl delete pod -n meridian --ignore-not-found {STREET}-5f6-dead {PLUGIN}-7a1-dead"
+            ),
+            Ok("pod deleted"),
+        )
+}
+
+#[tokio::test]
+async fn pods_left_over_from_a_restart_are_not_waited_for_and_are_removed() {
+    let stand = restarted_before_the_upgrade();
+    let plan = planned(&stand).await;
+    let plan_said = plan_text(&asked(), &plan);
+    let mut said = Vec::new();
+
+    // Before, the wait counted them, and they never change: it waited out
+    // its timeout. A pace with none shows it no longer waits at all.
+    let report = apply(
+        &stand,
+        &asked(),
+        &plan,
+        &Pace {
+            poll: Duration::ZERO,
+            timeout: Duration::ZERO,
+        },
+        &mut |line: &str| said.push(line.to_string()),
+    )
+    .await
+    .unwrap_or_else(|failed| panic!("{failed}\n{said:?}"));
+
+    let dead = [format!("{STREET}-5f6-dead"), format!("{PLUGIN}-7a1-dead")];
+    // In the plan the person approves, so the approval covers removing them.
+    assert_eq!(plan.left_over, dead);
+    assert!(
+        plan_said.contains("Then it will remove 2 pods left over from a restart"),
+        "{plan_said}"
+    );
+    assert!(
+        plan_said.contains(&format!("    pod/{STREET}-5f6-dead\n")),
+        "{plan_said}"
+    );
+    let said = said.join("\n");
+    assert!(
+        said.contains(&format!(
+            "not waited for: pod/{STREET}-5f6-dead, left over from a restart"
+        )),
+        "{said}"
+    );
+    assert!(!said.contains("still runs"), "{said}");
+    assert_eq!(report.removed, dead);
+    assert!(stand.asked().contains(&format!(
+        "kubectl delete pod -n meridian --ignore-not-found {STREET}-5f6-dead {PLUGIN}-7a1-dead"
+    )));
+    let text = report_text(&asked(), &report);
+    assert!(
+        text.contains(&format!(
+            "Removed 2 pods left over from a restart: pod/{STREET}-5f6-dead, pod/{PLUGIN}-7a1-dead"
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_pending_or_terminating_old_pod_is_still_waited_for() {
+    let held = workloads(
+        &items(vec![
+            at_revision(deployment("street", "9c5d480", 1, 1), "3"),
+            replica_set(STREET, "6c7", "2"),
+            replica_set(STREET, "9d8", "3"),
+        ])
+        .to_string(),
+    );
+    let old = format!("{REPO}:845bd06");
+    let mut terminating = made_by(
+        pod("street-terminating", "street", &old, 0),
+        &format!("{STREET}-6c7"),
+        "Running",
+    );
+    terminating["metadata"]["deletionTimestamp"] = json!("2026-09-29T10:00:00Z");
+    let running = pods(
+        &items(vec![
+            made_by(
+                pod("street-new", "street", &format!("{REPO}:9c5d480"), 0),
+                &format!("{STREET}-9d8"),
+                "Running",
+            ),
+            terminating,
+            made_by(
+                pod("street-pending", "street", &old, 0),
+                &format!("{STREET}-6c7"),
+                "Pending",
+            ),
+            made_by(
+                pod("street-dead", "street", &old, 0),
+                &format!("{STREET}-6c7"),
+                "Failed",
+            ),
+        ])
+        .to_string(),
+    );
+
+    let now = progress(8, &[], &held, &running);
+
+    assert_eq!(
+        now.waiting,
+        [
+            format!("deployment/{STREET}: pod/street-terminating still runs {old}"),
+            format!("deployment/{STREET}: pod/street-pending still runs {old}"),
+        ]
+    );
+    assert_eq!(now.left_over, ["street-dead"]);
+    assert_eq!(now.ready, (0, 1));
+    assert_eq!(
+        now.now.as_deref(),
+        Some("street: pod/street-terminating still on meridian-runtime:845bd06, terminating")
+    );
+}
+
+#[test]
+fn without_its_replica_sets_no_pod_is_taken_for_left_over() {
+    // Where the listing holds no ReplicaSet, which one is current is not
+    // known, and a pod is waited for rather than removed on a guess.
+    let held = workloads(&items(vec![deployment("street", "9c5d480", 1, 1)]).to_string());
+    let running = pods(
+        &items(vec![made_by(
+            pod("street-dead", "street", &format!("{REPO}:845bd06"), 0),
+            &format!("{STREET}-6c7"),
+            "Failed",
+        )])
+        .to_string(),
+    );
+
+    assert!(left_by_a_restart(&held, &running).is_empty());
+}
+
+// ── What is watched ──────────────────────────────────────────────────────
+
+#[tokio::test(start_paused = true)]
+async fn off_a_terminal_it_says_what_it_waits_for_at_its_interval() {
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
+        .json(WORKLOADS, items(vec![deployment("street", "845bd06", 1, 1)]))
+        .json(WORKLOADS, items(vec![deployment("street", "9c5d480", 0, 1)]))
+        .json(
+            PODS,
+            items(vec![json!({
+                "metadata": { "name": "street-new", "labels": { "app.kubernetes.io/instance": "meridian",
+                                                                "meridian.dev/component": "street" } },
+                "spec": { "containers": [ { "name": "street", "image": format!("{REPO}:9c5d480") } ] },
+                "status": { "containerStatuses": [ { "name": "street", "restartCount": 0,
+                    "state": { "waiting": { "reason": "ContainerCreating" } } } ] }
+            })]),
+        )
+        .json(JOBS, items(vec![job("meridian-meridian-runtime-migrate-8", Some("Complete"))]))
+        .answering(UPGRADE, Ok("upgraded"));
+    let plan = planned(&stand).await;
+    let mut said = Vec::new();
+    let mut log = Log::new(Duration::from_secs(20), |line: &str| {
+        said.push(line.to_string())
+    });
+
+    // Time is paused, and moves only as the wait sleeps: seventy seconds of
+    // polls every two, in no time at all.
+    let failed = apply(
+        &stand,
+        &asked(),
+        &plan,
+        &Pace {
+            poll: Duration::from_secs(2),
+            timeout: Duration::from_secs(70),
+        },
+        &mut log,
+    )
+    .await
+    .expect_err("it never became ready");
+    drop(log);
+
+    assert!(failed.contains("still waiting for"), "{failed}");
+    let waited: Vec<&String> = said
+        .iter()
+        .filter(|line| line.contains("still waiting"))
+        .collect();
+    let now =
+        "0 of 1 components ready: street: 0 of 1 ready; pod/street-new: street ContainerCreating";
+    assert_eq!(
+        waited,
+        [
+            &format!("[20s] still waiting, {now}"),
+            &format!("[40s] still waiting, {now}"),
+            &format!("[1m 00s] still waiting, {now}"),
+        ],
+        "{said:#?}"
+    );
+    for step in [
+        "[0s] apply: started",
+        "[0s] apply: done in 0s",
+        "[0s] migration: done in 0s",
+        "[1m 10s] components: failed after 1m 10s",
+    ] {
+        assert!(said.iter().any(|line| line == step), "{step}: {said:#?}");
+    }
+}
+
+#[test]
+fn a_terminal_is_shown_each_step_the_components_ready_and_what_is_waited_on() {
+    let seconds = Duration::from_secs;
+    let board = Board {
+        title: "Upgrading meridian in meridian".into(),
+        elapsed: seconds(64),
+        steps: vec![
+            (Step::Checks, Mark::Done(seconds(3))),
+            (Step::Confirmation, Mark::Done(seconds(12))),
+            (Step::Apply, Mark::Done(seconds(8))),
+            (Step::Migration, Mark::Running(seconds(41))),
+            (Step::Components, Mark::Running(seconds(41))),
+            (Step::Cleanup, Mark::Pending),
+        ],
+        ready: Some((4, 7)),
+        now: Some("conductor: 0 of 1 ready, waiting for its migration".into()),
+    };
+
+    assert_eq!(
+        render(&board, 2, false),
+        [
+            "Upgrading meridian in meridian  1m 04s",
+            "  ✓ checks                     3s",
+            "  ✓ plan and confirmation     12s",
+            "  ✓ apply                      8s",
+            "  ⠹ migration                 41s",
+            "  ⠹ components                41s  ready 4 of 7  ███████████░░░░░░░░░",
+            "  · cleanup",
+            "  waiting on conductor: 0 of 1 ready, waiting for its migration",
+        ]
+    );
+    // The spinner turns with the frame; a failed step is marked as one.
+    let mut failed = board.clone();
+    failed.steps[4].1 = Mark::Failed(seconds(600));
+    failed.now = None;
+    let lines = render(&failed, 3, false);
+    assert_eq!(lines[4], "  ⠸ migration                 41s");
+    assert!(
+        lines[5].starts_with("  ✗ components            10m 00s  ready 4 of 7"),
+        "{lines:?}"
+    );
+    assert_eq!(lines.len(), 7, "{lines:?}");
+}
+
+#[test]
+fn colour_is_escape_codes_this_writes_and_no_color_turns_it_off() {
+    let board = Board {
+        title: "Upgrading meridian in meridian".into(),
+        elapsed: Duration::from_secs(3),
+        steps: vec![(Step::Checks, Mark::Done(Duration::from_secs(3)))],
+        ready: None,
+        now: None,
+    };
+
+    let coloured = render(&board, 0, true).join("\n");
+    assert!(coloured.contains("\x1b[32m✓\x1b[0m"), "{coloured:?}");
+    assert!(!render(&board, 0, false).join("\n").contains('\x1b'));
+
+    assert!(watch::colour(None));
+    assert!(watch::colour(Some("".into())));
+    assert!(!watch::colour(Some("1".into())));
 }

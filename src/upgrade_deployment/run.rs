@@ -3,19 +3,23 @@
 //! Everything here touches the world, through a `Machine` a test can be.
 //! What can be decided without touching it is in the parent module.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use tokio::time::Instant;
+
+use super::watch::{Step, Watch};
 use super::{
-    chart_of, direction, image_in, installed, jobs, leftovers, migration, plugin_floors, pods,
-    progress, release_finding, restarted, restarts, running_images, skip_policy, target_image,
-    workloads, Asked, Chart, Direction, Installed, JobState, Plan, Report, HELM_MINIMUM,
+    chart_of, direction, image_in, installed, jobs, left_by_a_restart, leftovers, migration,
+    plugin_floors, pods, progress, release_finding, restarted, restarts, running_images,
+    skip_policy, target_image, workloads, Asked, Chart, Direction, Installed, JobState, Plan,
+    Report, HELM_MINIMUM,
 };
 use crate::doctor::{checks, Failure, Finding, Machine};
 
 /// What the checks found.
 pub enum Checked {
     /// Every check passed: this is what would be done.
-    Upgrade(Plan),
+    Upgrade(Box<Plan>),
     /// Already at the target version: nothing to do, which is success.
     Current(String),
     /// A check stopped it, and nothing was changed.
@@ -166,15 +170,22 @@ async fn target(machine: &dyn Machine, asked: &Asked) -> Result<Chart, Finding> 
 
 /// Every check, said in the order made, and what would be done if they all
 /// pass. Nothing here changes anything.
-pub async fn check(machine: &dyn Machine, asked: &Asked, say: &mut dyn FnMut(&str)) -> Checked {
+pub async fn check(machine: &dyn Machine, asked: &Asked, watch: &mut dyn Watch) -> Checked {
+    watch.begin(Step::Checks);
+    let checked = checks_made(machine, asked, watch).await;
+    watch.end(Step::Checks, !matches!(checked, Checked::Refused));
+    checked
+}
+
+async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) -> Checked {
     let mut findings = vec![helm(machine).await];
     findings.extend(cluster(machine, &asked.namespace).await);
     let stopped = |findings: &[Finding]| findings.iter().any(Finding::stops);
-    let refuse = |findings: &[Finding], say: &mut dyn FnMut(&str)| {
+    let refuse = |findings: &[Finding], say: &mut dyn Watch| {
         for finding in findings {
-            say(&format!("{finding}"));
+            say.say(&format!("{finding}"));
         }
-        say("\nNothing was changed. Each check that stopped it says what to do above.");
+        say.say("\nNothing was changed. Each check that stopped it says what to do above.");
         Checked::Refused
     };
     if stopped(&findings) {
@@ -226,7 +237,7 @@ pub async fn check(machine: &dyn Machine, asked: &Asked, say: &mut dyn FnMut(&st
         }
         Direction::Current => {
             for finding in &findings {
-                say(&format!("{finding}"));
+                say.say(&format!("{finding}"));
             }
             return Checked::Current(format!(
                 "{} is at {} {} already; nothing to do.",
@@ -273,20 +284,29 @@ pub async fn check(machine: &dyn Machine, asked: &Asked, say: &mut dyn FnMut(&st
     let (to_image, pinned) = target_image(&charts, &own);
     findings.extend(pinned);
 
-    let running = kubectl_json(machine, asked, "deployments,statefulsets")
+    let running = kubectl_json(machine, asked, WORKLOADS)
         .await
         .map(|listed| workloads(&listed))
         .unwrap_or_default();
+    let held_pods = kubectl_json(machine, asked, "pods")
+        .await
+        .map(|listed| pods(&listed))
+        .unwrap_or_default();
     for finding in &findings {
-        say(&format!("{finding}"));
+        say.say(&format!("{finding}"));
     }
-    Checked::Upgrade(Plan {
+    Checked::Upgrade(Box::new(Plan {
         from_images: running_images(&running, &to_image),
+        left_over: left_by_a_restart(&running, &held_pods),
         from,
         to,
         to_image,
-    })
+    }))
 }
+
+/// The release's workloads, and the ReplicaSets that say which of a
+/// Deployment's pods are of its current template.
+const WORKLOADS: &str = "deployments,statefulsets,replicasets";
 
 async fn kubectl_json(machine: &dyn Machine, asked: &Asked, what: &str) -> Result<String, String> {
     machine
@@ -320,7 +340,7 @@ pub async fn apply(
     asked: &Asked,
     plan: &Plan,
     pace: &Pace,
-    say: &mut dyn FnMut(&str),
+    watch: &mut dyn Watch,
 ) -> Result<Report, String> {
     let (release, namespace) = (asked.release.as_str(), asked.namespace.as_str());
     // Before, so a restart is counted from here and not from a pod's birth.
@@ -332,7 +352,10 @@ pub async fn apply(
 
     let arguments = super::helm_arguments(asked, plan);
     let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-    machine.run("helm", &arguments).await.map_err(|failed| {
+    watch.begin(Step::Apply);
+    let applied = machine.run("helm", &arguments).await;
+    watch.end(Step::Apply, applied.is_ok());
+    applied.map_err(|failed| {
         format!(
             "helm refused the upgrade: {failed}\n`helm history {release} -n {namespace}` shows \
              the revision it left; `helm rollback {release} -n {namespace}` returns it to \
@@ -346,12 +369,14 @@ pub async fn apply(
         .flatten()
         .map(|now| now.revision)
         .unwrap_or(plan.from.revision + 1);
-    say(&format!(
+    watch.say(&format!(
         "Applied as revision {revision}. Waiting for the migration, then every component on its \
          new template (up to {}).",
         asked.timeout
     ));
 
+    watch.begin(Step::Migration);
+    watch.begin(Step::Components);
     let deadline = Instant::now() + pace.timeout;
     let mut said_waiting = std::collections::BTreeSet::new();
     let (held_jobs, held_workloads, held_pods) = loop {
@@ -361,7 +386,7 @@ pub async fn apply(
                 .unwrap_or_default(),
         );
         let held_workloads = workloads(
-            &kubectl_json(machine, asked, "deployments,statefulsets")
+            &kubectl_json(machine, asked, WORKLOADS)
                 .await
                 .unwrap_or_default(),
         );
@@ -371,6 +396,20 @@ pub async fn apply(
                 .unwrap_or_default(),
         );
         let now = progress(revision, &held_jobs, &held_workloads, &held_pods);
+        watch.waiting(&now);
+        // Said even when nothing else is waited for, so none goes unexplained.
+        for pod in &now.left_over {
+            let each = format!("pod/{pod}");
+            if !said_waiting.contains(&each) {
+                watch.say(&format!(
+                    "  not waited for: {each}, left over from a restart; removed at the end"
+                ));
+                said_waiting.insert(each);
+            }
+        }
+        if !now.migrating {
+            watch.end(Step::Migration, now.failed.is_none());
+        }
 
         if let Some(job) = now.failed {
             return Err(format!(
@@ -382,9 +421,12 @@ pub async fn apply(
             ));
         }
         if now.waiting.is_empty() {
+            watch.end(Step::Components, true);
             break (held_jobs, held_workloads, held_pods);
         }
         if Instant::now() >= deadline {
+            watch.end(Step::Migration, false);
+            watch.end(Step::Components, false);
             return Err(format!(
                 "after {}, still waiting for:\n  - {}\nRevision {revision} is applied and \
                  nothing was rolled back. `kubectl get pods -n {namespace} -l {}` shows where \
@@ -399,7 +441,7 @@ pub async fn apply(
         // Each said once, when it is first seen, not every poll.
         for each in now.waiting {
             if !said_waiting.contains(&each) {
-                say(&format!("  waiting: {each}"));
+                watch.say(&format!("  waiting: {each}"));
                 said_waiting.insert(each);
             }
         }
@@ -433,23 +475,31 @@ pub async fn apply(
         ..Report::default()
     };
 
-    // Only finished Jobs of this release's earlier revisions, found by its
-    // label. ReplicaSets are the chart's revisionHistoryLimit's.
+    // Only finished Jobs of this release's earlier revisions, and only pods
+    // left over from a restart, each found by its label. ReplicaSets are the
+    // chart's revisionHistoryLimit's.
+    watch.begin(Step::Cleanup);
     let (finished, running) = leftovers(&held_jobs, revision);
     report.left = running;
-    if !finished.is_empty() {
-        let mut arguments = vec!["delete", "job", "-n", namespace, "--ignore-not-found"];
-        arguments.extend(finished.iter().map(String::as_str));
+    let dead = left_by_a_restart(&held_workloads, &held_pods);
+    for (kind, names, done) in [
+        ("job", finished, &mut report.cleaned),
+        ("pod", dead, &mut report.removed),
+    ] {
+        if names.is_empty() {
+            continue;
+        }
+        let mut arguments = vec!["delete", kind, "-n", namespace, "--ignore-not-found"];
+        arguments.extend(names.iter().map(String::as_str));
         match machine.run("kubectl", &arguments).await {
-            Ok(_) => report.cleaned = finished,
-            Err(failed) => {
-                report.not_cleaned = Some(format!(
-                    "{failed}. The upgrade itself is done; `kubectl delete job -n {namespace} {}` \
-                     removes them.",
-                    finished.join(" ")
-                ))
-            }
+            Ok(_) => *done = names,
+            Err(failed) => report.not_cleaned.push(format!(
+                "{failed}. The upgrade itself is done; `kubectl delete {kind} -n {namespace} {}` \
+                 removes them.",
+                names.join(" ")
+            )),
         }
     }
+    watch.end(Step::Cleanup, report.not_cleaned.is_empty());
     Ok(report)
 }

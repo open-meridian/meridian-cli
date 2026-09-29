@@ -941,7 +941,7 @@ async fn down_command(arguments: &Arguments, namespace: &str) -> i32 {
 /// (task kernel/upgrading-a-deployment-in-place). Not `upgrade`, which
 /// replaces this binary.
 async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i32 {
-    use upgrade_deployment::run;
+    use upgrade_deployment::{run, watch};
     let timeout = arguments.value("--timeout", "--timeout").unwrap_or("10m");
     let Some(waited) = upgrade_deployment::duration(timeout) else {
         eprintln!(
@@ -964,17 +964,33 @@ async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i
             .map(String::from),
         timeout: timeout.into(),
     };
-    let mut say = |line: &str| println!("{line}");
-    let plan = match run::check(&machine::ThisMachine, &asked, &mut say).await {
-        run::Checked::Refused => return 1,
+    // The steps as they go: a block redrawn in place on a terminal, and
+    // lines anywhere else.
+    let mut watch = watch::to_stdout(format!(
+        "Upgrading {} in {}",
+        asked.release, asked.namespace
+    ));
+    let plan = match run::check(&machine::ThisMachine, &asked, watch.as_mut()).await {
+        run::Checked::Refused => {
+            watch.finish();
+            return 1;
+        }
         run::Checked::Current(said) => {
+            watch.finish();
             println!("\n{said}");
             return 0;
         }
         run::Checked::Upgrade(plan) => plan,
     };
-    println!("\n{}", upgrade_deployment::plan_text(&asked, &plan));
-    if !arguments.set("--yes") && !approved("Upgrade it?") {
+    watch.begin(watch::Step::Confirmation);
+    watch.say(&format!(
+        "\n{}",
+        upgrade_deployment::plan_text(&asked, &plan)
+    ));
+    let yes = arguments.set("--yes") || approved("Upgrade it?");
+    watch.end(watch::Step::Confirmation, yes);
+    if !yes {
+        watch.finish();
         eprintln!("meridian upgrade-deployment: not approved, so nothing was changed. Where there is no terminal to ask at, --yes approves");
         return 1;
     }
@@ -982,7 +998,9 @@ async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i
         poll: std::time::Duration::from_secs(2),
         timeout: waited,
     };
-    match run::apply(&machine::ThisMachine, &asked, &plan, &pace, &mut say).await {
+    let applied = run::apply(&machine::ThisMachine, &asked, &plan, &pace, watch.as_mut()).await;
+    watch.finish();
+    match applied {
         Ok(report) => {
             print!("{}", upgrade_deployment::report_text(&asked, &report));
             0
