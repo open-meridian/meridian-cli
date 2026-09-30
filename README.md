@@ -3,7 +3,10 @@
 The command line for [Open Meridian](https://open-meridian.com), the
 open-source OEMS: it brings a deployment up where you have a terminal, and
 works with one that is already running. The whole install, step by step, is
-meridian-core's [INSTALL.md](https://github.com/open-meridian/meridian-core/blob/main/INSTALL.md).
+meridian-core's [INSTALL.md](https://github.com/open-meridian/meridian-core/blob/main/INSTALL.md),
+and every command and flag is in the
+[command line reference](https://open-meridian.dev/api/cli/). This is release
+0.1.19.
 
 ```
 meridian doctor              # can this machine and this cluster run a deployment?
@@ -62,8 +65,16 @@ and opens the wizard, and the deployment's own wizard does the rest.
 Answers whether this machine and this cluster can run a deployment, each answer
 naming the fix rather than the symptom: a reachable cluster and the rights to
 install into a namespace, Helm present and recent enough, a storage class for
-the deployment's key, the image pullable from here, the platform reachable, and
-the clock within the tolerance a signed assertion allows.
+the deployment's key, no node short of disk, the image pullable from here, the
+platform reachable, and the clock within the tolerance a signed assertion
+allows.
+
+A node under disk pressure stops it: Kubernetes evicts that node's pods and
+schedules none there. Free disk under 20%, or 10 GiB where that is more, is
+worth knowing; on a local VM, Docker's build cache is often most of it
+(`docker builder prune -a`). A launched plugin still on a sidecar the
+deployment no longer runs is named too, with the stop and launch that move
+it.
 
 The clock is the one nobody can check in their head. Assertions are time-bound,
 and a skewed clock fails authentication in a way that looks exactly like a bad
@@ -190,9 +201,10 @@ cluster, and an upgrade is the widest change there is. Not `meridian upgrade`,
 which replaces this binary.
 
 It checks first and changes nothing if a check fails: the cluster reachable
-and your rights in the namespace, Helm 3.14 or newer, the release `deployed`
-(a `failed` or `pending` one is refused with how to recover it), the version
-published and not older than the installed one. At that version already, it
+and your rights in the namespace, Helm 3.14 or newer, no node under disk
+pressure (low free disk is only reported), the release `deployed` (a `failed`
+or `pending` one is refused with how to recover it), the version published and
+not older than the installed one. At that version already, it
 says so and exits 0. Whether the upgrade is within the skip policy, and whether
 every plugin's runtime floor is met, are printed as `unknown`: neither is
 built yet, because nothing is there to check against.
@@ -214,7 +226,10 @@ migration Job, every Deployment and StatefulSet to roll out, and every pod on
 the image its template names. Then it deletes the finished Jobs of earlier
 revisions, found by the release's label, and reports each component's image
 and readiness and every container that restarted during the upgrade, with the
-reason Kubernetes gives.
+reason Kubernetes gives. Last, it names each launched plugin left on a sidecar
+the deployment no longer runs, or launched while the rollout was under way,
+with the `plugin stop` and `plugin launch` (or `plugin dev`) that move it. It
+relaunches nothing itself.
 
 A pod left over from a restart is not waited for: one stopped for good,
 `Succeeded` or `Failed`, and made by a ReplicaSet its Deployment has since
@@ -358,7 +373,18 @@ make ci-local
 ```
 
 The host needs Docker and nothing else: the toolchain is pinned inside
-`Dockerfile.rust`, exactly as in meridian-core.
+`Dockerfile.rust`, exactly as in meridian-core. `make install-hooks` makes
+`git push` run it first.
+
+## Releasing
+
+A version tag, `v<version>` (the version in `Cargo.toml`), publishes a release: one
+binary per target (macOS and Linux, each on x86_64 and arm64), each with its
+`.sha256`, which `install.sh` and `meridian upgrade` fetch. Nothing is
+published from a push to `main`. `plugin new`'s template is vendored from
+meridian-python's `template/` at a pinned commit (`make vendor-template`;
+`check-vendored-template` fails when it drifts), so a release carries the SDK
+version the new plugin pins: 0.7.1 from 0.1.18.
 
 ## Licence
 
