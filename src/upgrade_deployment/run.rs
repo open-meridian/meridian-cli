@@ -118,6 +118,29 @@ async fn cluster(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
     findings
 }
 
+/// The nodes' disk, as `doctor` reads it, with what an upgrade adds to it:
+/// every new image is pulled onto a node, so a node already short of disk is
+/// made shorter, and the new pods are scheduled nowhere.
+async fn disk(machine: &dyn Machine) -> Vec<Finding> {
+    const PULLS: &str = "An upgrade pulls the new version's images onto the node, which takes \
+                         more of the disk it is short of.";
+    checks::disk(machine)
+        .await
+        .into_iter()
+        .map(|finding| match finding {
+            Finding::Stops { what, fix } => Finding::Stops {
+                what,
+                fix: format!("{PULLS} {fix}"),
+            },
+            Finding::Worth { what, why } => Finding::Worth {
+                what,
+                why: format!("{PULLS} {why}"),
+            },
+            other => other,
+        })
+        .collect()
+}
+
 async fn release(machine: &dyn Machine, asked: &Asked) -> Result<Option<Installed>, String> {
     let filter = format!("^{}$", asked.release);
     // Every status an upgrade must refuse as well as the one it proceeds
@@ -188,6 +211,10 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         say.say("\nNothing was changed. Each check that stopped it says what to do above.");
         Checked::Refused
     };
+    if stopped(&findings) {
+        return refuse(&findings, say);
+    }
+    findings.extend(disk(machine).await);
     if stopped(&findings) {
         return refuse(&findings, say);
     }

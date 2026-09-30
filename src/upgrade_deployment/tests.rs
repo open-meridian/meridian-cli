@@ -99,6 +99,9 @@ const OWN_VALUES: &str = "helm get values meridian --namespace meridian -o json"
 const WORKLOADS: &str = "kubectl get deployments,statefulsets,replicasets -n meridian -l app.kubernetes.io/instance=meridian -o json";
 const PODS: &str = "kubectl get pods -n meridian -l app.kubernetes.io/instance=meridian -o json";
 const JOBS: &str = "kubectl get jobs -n meridian -l app.kubernetes.io/instance=meridian -o json";
+const NODES: &str = "kubectl get nodes -o json";
+const SUMMARY: &str = "kubectl get --raw /api/v1/nodes/node-1/proxy/stats/summary";
+const GIB: u64 = 1 << 30;
 const UPGRADE: &str = "helm upgrade meridian oci://ghcr.io/open-meridian/charts/meridian-runtime --version 0.1.182 --namespace meridian --reset-then-reuse-values --timeout 10m";
 
 fn asked() -> Asked {
@@ -195,6 +198,25 @@ fn job_pod(job: &str, waiting: &str) -> serde_json::Value {
     })
 }
 
+/// One node, under disk pressure or not.
+fn nodes(pressure: bool) -> serde_json::Value {
+    json!({ "items": [ {
+        "metadata": { "name": "node-1" },
+        "spec": if pressure {
+            json!({ "taints": [ { "key": "node.kubernetes.io/disk-pressure", "effect": "NoSchedule" } ] })
+        } else { json!({}) },
+        "status": { "conditions": [
+            { "type": "DiskPressure", "status": if pressure { "True" } else { "False" } }
+        ] }
+    } ] })
+}
+
+/// Its kubelet's summary: one disk, shared by the node and its images.
+fn disk(free_gib: u64, capacity_gib: u64) -> serde_json::Value {
+    let fs = json!({ "availableBytes": free_gib * GIB, "capacityBytes": capacity_gib * GIB });
+    json!({ "node": { "fs": fs, "runtime": { "imageFs": fs } }, "pods": [] })
+}
+
 /// A healthy deployment of 0.1.180, answering every check.
 fn healthy() -> Stand {
     Stand::default()
@@ -203,6 +225,8 @@ fn healthy() -> Stand {
         .answering("kubectl auth can-i patch deployments -n meridian", Ok("yes"))
         .answering("kubectl auth can-i create jobs -n meridian", Ok("yes"))
         .answering("kubectl auth can-i delete jobs -n meridian", Ok("yes"))
+        .json(NODES, nodes(false))
+        .json(SUMMARY, disk(62, 98))
         .answering(SHOW_LATEST, Ok(&shown("0.1.182", "9c5d480")))
         .answering(
             SHOW_VALUES,
@@ -322,6 +346,88 @@ async fn a_right_the_cluster_refuses_stops_it() {
 
     assert!(matches!(checked, Checked::Refused));
     assert!(said.join("\n").contains("may not delete jobs"), "{said:?}");
+}
+
+#[tokio::test]
+async fn a_node_under_disk_pressure_refuses_it_before_the_release_is_read() {
+    // Pulling the new images onto a node that is already evicting its pods
+    // makes it worse, and the new pods would be scheduled nowhere.
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .instead(NODES, Ok(&nodes(true).to_string()));
+    let mut said = Vec::new();
+
+    let checked = check(&stand, &asked(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await;
+
+    assert!(matches!(checked, Checked::Refused));
+    let said = said.join("\n");
+    assert!(
+        said.contains("stops    node node-1 is under disk pressure"),
+        "{said}"
+    );
+    assert!(said.contains("pulls the new version's images"), "{said}");
+    assert!(said.contains("taint to lift"), "{said}");
+    assert!(said.contains("Nothing was changed"), "{said}");
+    assert!(
+        !stand.asked().contains(&LIST.to_string()),
+        "{:?}",
+        stand.asked()
+    );
+    assert!(
+        !stand.asked().contains(&SUMMARY.to_string()),
+        "{:?}",
+        stand.asked()
+    );
+    assert!(!stand.changed_anything(), "{:?}", stand.asked());
+}
+
+#[tokio::test]
+async fn low_free_disk_is_said_and_does_not_refuse_it() {
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .instead(SUMMARY, Ok(&disk(15, 98).to_string()));
+    let mut said = Vec::new();
+
+    let checked = check(&stand, &asked(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await;
+
+    assert!(matches!(checked, Checked::Upgrade(_)), "{said:?}");
+    let said = said.join("\n");
+    assert!(
+        said.contains("worth    node node-1 has 15.0 GiB of 98.0 GiB disk free (15%)"),
+        "{said}"
+    );
+    assert!(said.contains("pulls the new version's images"), "{said}");
+}
+
+#[tokio::test]
+async fn free_disk_it_may_not_read_is_unknown_and_does_not_refuse_it() {
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .instead(
+            SUMMARY,
+            Err("Error from server (Forbidden): nodes \"node-1\" is forbidden"),
+        );
+    let mut said = Vec::new();
+
+    let checked = check(&stand, &asked(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await;
+
+    assert!(matches!(checked, Checked::Upgrade(_)), "{said:?}");
+    let said = said.join("\n");
+    assert!(said.contains("unknown  free disk on node node-1"), "{said}");
+    assert!(said.contains("nodes/proxy"), "{said}");
+    assert!(
+        said.contains("ok       node node-1 is not under disk pressure"),
+        "{said}"
+    );
 }
 
 #[tokio::test]

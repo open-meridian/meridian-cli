@@ -278,3 +278,278 @@ pub async fn platform(machine: &dyn Machine, platform: &str) -> Vec<Finding> {
     });
     findings
 }
+
+/// The taint the kubelet puts on a node whose free disk has fallen below its
+/// eviction threshold, beside the `DiskPressure` condition it sets.
+const DISK_PRESSURE_TAINT: &str = "node.kubernetes.io/disk-pressure";
+
+const GIB: u64 = 1 << 30;
+
+/// Free disk under the larger of these two is worth saying.
+///
+/// The kubelet's default hard eviction is `nodefs.available<10%` and
+/// `imagefs.available<15%`, and on a single disk, as a local VM has, the
+/// higher one is the one met first: the node that evicted a deployment on
+/// 2026-09-30 was 86% full. Warning below 20% free comes five points before
+/// that, which is a build or an image pull of room, and ten before the
+/// kubelet's own disk runs out. On a small disk five points is less than one
+/// pull, so the line is never under 10 GiB.
+const DISK_WARN_PERCENT: u64 = 20;
+const DISK_WARN_FLOOR: u64 = 10 * GIB;
+
+/// Below how many bytes free a disk of this size is worth saying.
+pub fn disk_line(capacity: u64) -> u64 {
+    (capacity / 100 * DISK_WARN_PERCENT).max(DISK_WARN_FLOOR)
+}
+
+fn gib(bytes: u64) -> String {
+    format!("{:.1} GiB", bytes as f64 / GIB as f64)
+}
+
+/// What freeing disk on a node usually means, said once for both findings.
+const FREE_DISK: &str = "On a local VM, such as Rancher Desktop's, Docker's build cache is \
+                         often most of it: `docker builder prune -a`.";
+
+/// A node as far as its disk goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Node {
+    pub name: String,
+    /// What says it is under disk pressure: its condition, its taint, or
+    /// both. Empty when neither does.
+    pub pressure: Vec<String>,
+}
+
+/// From `kubectl get nodes -o json`. None when it is not a node list.
+pub fn nodes(listed: &str) -> Option<Vec<Node>> {
+    let listed: serde_json::Value = serde_json::from_str(listed.trim()).ok()?;
+    let items = listed["items"].as_array()?;
+    Some(
+        items
+            .iter()
+            .map(|node| {
+                let mut pressure = Vec::new();
+                let pressed = node["status"]["conditions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|each| each["type"] == "DiskPressure" && each["status"] == "True");
+                if pressed {
+                    pressure.push("DiskPressure=True".to_string());
+                }
+                let tainted = node["spec"]["taints"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|taint| taint["key"] == DISK_PRESSURE_TAINT);
+                if tainted {
+                    pressure.push(format!("tainted {DISK_PRESSURE_TAINT}"));
+                }
+                Node {
+                    name: node["metadata"]["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    pressure,
+                }
+            })
+            .collect(),
+    )
+}
+
+/// One of a node's filesystems, as its kubelet states it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Space {
+    /// `disk`, or `image disk` where images are kept on a disk of their own.
+    pub which: &'static str,
+    pub free: u64,
+    pub capacity: u64,
+}
+
+impl Space {
+    pub fn low(&self) -> bool {
+        self.free < disk_line(self.capacity)
+    }
+
+    fn percent(&self) -> u64 {
+        self.free.saturating_mul(100) / self.capacity.max(1)
+    }
+
+    fn said(&self) -> String {
+        format!(
+            "{} of {} {} free ({}%)",
+            gib(self.free),
+            gib(self.capacity),
+            self.which,
+            self.percent()
+        )
+    }
+}
+
+/// The node's own filesystem and its image filesystem, from the kubelet's
+/// stats summary. They are one disk when they state the same size, as on a
+/// local VM, and said once. Nothing about the node's pods is read.
+pub fn spaces(summary: &str) -> Vec<Space> {
+    let summary: serde_json::Value = serde_json::from_str(summary.trim()).unwrap_or_default();
+    let read = |fs: &serde_json::Value, which| {
+        let capacity = fs["capacityBytes"].as_u64().filter(|bytes| *bytes > 0)?;
+        Some(Space {
+            which,
+            free: fs["availableBytes"].as_u64()?,
+            capacity,
+        })
+    };
+    let node = read(&summary["node"]["fs"], "disk");
+    let images = read(&summary["node"]["runtime"]["imageFs"], "image disk");
+    match (node, images) {
+        (Some(node), Some(images)) if node.capacity == images.capacity => vec![Space {
+            free: node.free.min(images.free),
+            ..node
+        }],
+        (node, images) => node.into_iter().chain(images).collect(),
+    }
+}
+
+/// Why a question about nodes could not be answered, saying `refused` when
+/// the cluster refused this account the right: nodes are asked about
+/// cluster-wide, and a namespace's administrator may not hold that.
+fn not_answered(failed: Failure, refused: &str) -> String {
+    match failed {
+        Failure::Said(said) if said.contains("Forbidden") || said.contains("forbidden") => {
+            refused.to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
+/// "node a", or "nodes a, b".
+fn named(names: &[String]) -> String {
+    match names {
+        [one] => format!("node {one}"),
+        many => format!("nodes {}", many.join(", ")),
+    }
+}
+
+/// Whether the cluster's nodes have the disk to keep a deployment running.
+///
+/// A node short of disk is found by Kubernetes first: the kubelet sets
+/// `DiskPressure`, taints the node, evicts its pods and schedules none onto
+/// it, and the deployment is gone with nothing said beforehand. This says it
+/// beforehand, from the node's free disk as its kubelet states it through
+/// the API server, which needs the right to get `nodes/proxy`. Without that
+/// right the free disk is unknown, and the pressure itself, which needs only
+/// the right to list nodes, is still read.
+pub async fn disk(machine: &dyn Machine) -> Vec<Finding> {
+    let unknown = |why: String| {
+        vec![Finding::Unknown {
+            what: "whether the cluster's nodes are short of disk is unknown".into(),
+            why,
+        }]
+    };
+    let listed = match machine
+        .run("kubectl", &["get", "nodes", "-o", "json"])
+        .await
+    {
+        Ok(listed) => listed,
+        Err(failed) => {
+            return unknown(not_answered(
+                failed,
+                "this account may not list nodes, which is a cluster-wide right",
+            ))
+        }
+    };
+    let nodes = match nodes(&listed) {
+        Some(nodes) if !nodes.is_empty() => nodes,
+        Some(_) => return unknown("`kubectl get nodes` listed none".into()),
+        None => {
+            return unknown("`kubectl get nodes -o json` said something that is not a list".into())
+        }
+    };
+
+    let mut findings: Vec<Finding> = nodes
+        .iter()
+        .filter(|node| !node.pressure.is_empty())
+        .map(|node| Finding::Stops {
+            what: format!(
+                "node {} is under disk pressure ({})",
+                node.name,
+                node.pressure.join(", ")
+            ),
+            fix: format!(
+                "Kubernetes evicts a node's pods when it runs short of disk and schedules none \
+                 onto it until it recovers, so a deployment there stops and its pods wait as \
+                 Pending. Free disk on the node. {FREE_DISK} Then wait a few minutes for the \
+                 taint to lift; the pods come back by themselves."
+            ),
+        })
+        .collect();
+    if findings.is_empty() {
+        findings.push(Finding::Fine(match nodes.as_slice() {
+            [one] => format!("node {} is not under disk pressure", one.name),
+            many => format!("none of the {} nodes is under disk pressure", many.len()),
+        }));
+    }
+
+    // Each node not already stopped for, asked of its kubelet.
+    let mut roomy: Vec<(String, Space)> = Vec::new();
+    let mut unread: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for node in nodes.iter().filter(|node| node.pressure.is_empty()) {
+        let path = format!("/api/v1/nodes/{}/proxy/stats/summary", node.name);
+        let spaces = match machine.run("kubectl", &["get", "--raw", &path]).await {
+            Ok(summary) => spaces(&summary),
+            Err(failed) => {
+                unread
+                    .entry(not_answered(
+                        failed,
+                        "this account may not get nodes/proxy, a cluster-wide right, which is \
+                         how a node's free disk is asked of its kubelet. Disk pressure was read \
+                         without it.",
+                    ))
+                    .or_default()
+                    .push(node.name.clone());
+                continue;
+            }
+        };
+        if spaces.is_empty() {
+            unread
+                .entry("its kubelet's summary stated no size for its disk".into())
+                .or_default()
+                .push(node.name.clone());
+            continue;
+        }
+        let low: Vec<&Space> = spaces.iter().filter(|space| space.low()).collect();
+        for space in &low {
+            findings.push(Finding::Worth {
+                what: format!("node {} has {}", node.name, space.said()),
+                why: format!(
+                    "Kubernetes starts evicting a node's pods when its free disk falls below \
+                     10% (15% for images), and this warns below {}: 20% of it, or 10 GiB where \
+                     that is more. Free some before then. {FREE_DISK}",
+                    gib(disk_line(space.capacity))
+                ),
+            });
+        }
+        if low.is_empty() {
+            if let Some(least) = spaces.into_iter().min_by_key(Space::percent) {
+                roomy.push((node.name.clone(), least));
+            }
+        }
+    }
+    if let Some((name, least)) = roomy.iter().min_by_key(|(_, space)| space.percent()) {
+        findings.push(Finding::Fine(if roomy.len() == 1 {
+            format!("node {name} has {}", least.said())
+        } else {
+            format!(
+                "{} nodes have room; the least is node {name}, with {}",
+                roomy.len(),
+                least.said()
+            )
+        }));
+    }
+    for (why, names) in unread {
+        findings.push(Finding::Unknown {
+            what: format!("free disk on {} is unknown", named(&names)),
+            why,
+        });
+    }
+    findings
+}

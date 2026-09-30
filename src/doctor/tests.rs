@@ -377,3 +377,298 @@ fn the_verdict_exits_non_zero_only_when_something_stops_it() {
     assert_eq!(code, 1);
     assert!(said.contains("1 thing(s) would stop an install"), "{said}");
 }
+
+// ── The nodes' disk ─────────────────────────────────────────────────────────
+
+const NODES: &str = "kubectl get nodes -o json";
+const SUMMARY: &str = "kubectl get --raw /api/v1/nodes/lima-rancher-desktop/proxy/stats/summary";
+const GIB: u64 = 1 << 30;
+
+/// A node as `kubectl get nodes -o json` lists it, with the parts the check
+/// reads: its conditions and its taints.
+fn node(name: &str, pressure: bool, tainted: bool) -> serde_json::Value {
+    let taints = if tainted {
+        serde_json::json!([{ "key": "node.kubernetes.io/disk-pressure", "effect": "NoSchedule" }])
+    } else {
+        serde_json::Value::Null
+    };
+    serde_json::json!({
+        "metadata": { "name": name },
+        "spec": { "taints": taints },
+        "status": {
+            "capacity": { "ephemeral-storage": "102625208Ki" },
+            "allocatable": { "ephemeral-storage": "99833802265" },
+            "conditions": [
+                { "type": "MemoryPressure", "status": "False" },
+                { "type": "DiskPressure", "status": if pressure { "True" } else { "False" } },
+                { "type": "Ready", "status": "True" }
+            ]
+        }
+    })
+}
+
+fn listing(nodes: Vec<serde_json::Value>) -> String {
+    serde_json::json!({ "kind": "List", "items": nodes }).to_string()
+}
+
+/// The kubelet's summary, as far as the check reads it: the node's disk and
+/// its image disk, in bytes. The pods it also lists are left out.
+fn summary(free: u64, capacity: u64, image_free: u64, image_capacity: u64) -> String {
+    serde_json::json!({
+        "node": {
+            "nodeName": "lima-rancher-desktop",
+            "fs": { "availableBytes": free, "capacityBytes": capacity, "usedBytes": capacity - free },
+            "runtime": { "imageFs": { "availableBytes": image_free, "capacityBytes": image_capacity } }
+        },
+        "pods": []
+    })
+    .to_string()
+}
+
+/// One disk shared by the node and its images, as on a local VM.
+fn one_disk(free: u64, capacity: u64) -> String {
+    summary(free, capacity, free, capacity)
+}
+
+fn one_node(pressure: bool, tainted: bool) -> Fake {
+    Fake::default().running(
+        NODES,
+        Ok(&listing(vec![node(
+            "lima-rancher-desktop",
+            pressure,
+            tainted,
+        )])),
+    )
+}
+
+#[tokio::test]
+async fn a_node_under_disk_pressure_stops_and_says_what_it_does_and_what_to_free() {
+    // 2026-09-30: the VM was 86% full, the kubelet set DiskPressure, and every
+    // pod of the deployment was evicted with nothing said beforehand.
+    let machine = one_node(true, true);
+
+    let findings = checks::disk(&machine).await;
+
+    let stopping: Vec<String> = findings
+        .iter()
+        .filter(|finding| finding.stops())
+        .map(|finding| format!("{finding}"))
+        .collect();
+    assert_eq!(stopping.len(), 1, "{findings:?}");
+    let said = &stopping[0];
+    assert!(
+        said.contains("node lima-rancher-desktop is under disk pressure"),
+        "{said}"
+    );
+    assert!(said.contains("DiskPressure=True"), "{said}");
+    assert!(said.contains("evicts"), "{said}");
+    assert!(said.contains("schedules none"), "{said}");
+    assert!(said.contains("build cache"), "{said}");
+    assert!(said.contains("taint to lift"), "{said}");
+    // Its free disk is not asked for: the stop says all there is to say.
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::Unknown { .. })),
+        "{findings:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_taint_alone_is_disk_pressure_too() {
+    let machine = one_node(false, true);
+
+    let findings = checks::disk(&machine).await;
+
+    let stopping = findings
+        .iter()
+        .find(|finding| finding.stops())
+        .expect("stopped");
+    assert!(
+        format!("{stopping}").contains("tainted node.kubernetes.io/disk-pressure"),
+        "{stopping}"
+    );
+}
+
+#[tokio::test]
+async fn low_free_disk_is_worth_saying_before_kubernetes_acts_on_it() {
+    // 81% full: under the 20% line, and above the kubelet's 15% for images.
+    let machine = one_node(false, false).running(SUMMARY, Ok(&one_disk(19 * GIB, 100 * GIB)));
+
+    let findings = checks::disk(&machine).await;
+
+    assert!(!findings.iter().any(Finding::stops), "{findings:?}");
+    let worth: Vec<String> = findings
+        .iter()
+        .filter(|finding| matches!(finding, Finding::Worth { .. }))
+        .map(|finding| format!("{finding}"))
+        .collect();
+    // One disk shared by the node and its images is said once.
+    assert_eq!(worth.len(), 1, "{findings:?}");
+    assert!(
+        worth[0].contains("19.0 GiB of 100.0 GiB disk free (19%)"),
+        "{worth:?}"
+    );
+    assert!(worth[0].contains("below 20.0 GiB"), "{worth:?}");
+    assert!(worth[0].contains("docker builder prune"), "{worth:?}");
+}
+
+#[tokio::test]
+async fn a_small_disk_is_warned_at_ten_gibibytes_rather_than_a_fifth() {
+    // 30% of 20 GiB is 6 GiB, which is less than one pull of room.
+    let machine = one_node(false, false).running(SUMMARY, Ok(&one_disk(6 * GIB, 20 * GIB)));
+
+    let findings = checks::disk(&machine).await;
+
+    assert!(
+        findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::Worth { .. })),
+        "{findings:?}"
+    );
+    assert_eq!(checks::disk_line(20 * GIB), 10 * GIB);
+    assert_eq!(checks::disk_line(100 * GIB), 20 * GIB);
+}
+
+#[tokio::test]
+async fn an_image_disk_of_its_own_is_read_on_its_own() {
+    // The node's disk has room and the images' does not.
+    let machine = one_node(false, false).running(
+        SUMMARY,
+        Ok(&summary(80 * GIB, 100 * GIB, 30 * GIB, 200 * GIB)),
+    );
+
+    let findings = checks::disk(&machine).await;
+
+    let worth: Vec<String> = findings
+        .iter()
+        .filter(|finding| matches!(finding, Finding::Worth { .. }))
+        .map(|finding| format!("{finding}"))
+        .collect();
+    assert_eq!(worth.len(), 1, "{findings:?}");
+    assert!(worth[0].contains("image disk free (15%)"), "{worth:?}");
+}
+
+#[tokio::test]
+async fn plenty_of_disk_is_ok() {
+    let machine = one_node(false, false).running(SUMMARY, Ok(&one_disk(62 * GIB, 98 * GIB)));
+
+    let findings = checks::disk(&machine).await;
+
+    assert!(
+        findings
+            .iter()
+            .all(|finding| matches!(finding, Finding::Fine(_))),
+        "{findings:?}"
+    );
+    let said: Vec<String> = findings
+        .iter()
+        .map(|finding| format!("{finding}"))
+        .collect();
+    assert!(
+        said.iter()
+            .any(|line| line.contains("not under disk pressure")),
+        "{said:?}"
+    );
+    assert!(
+        said.iter()
+            .any(|line| line.contains("62.0 GiB of 98.0 GiB disk free (63%)")),
+        "{said:?}"
+    );
+}
+
+#[tokio::test]
+async fn free_disk_the_account_may_not_read_is_unknown_with_the_right_it_needs() {
+    let machine = one_node(false, false).running(
+        SUMMARY,
+        Err("Error from server (Forbidden): nodes \"lima-rancher-desktop\" is forbidden: \
+             User \"dev\" cannot get resource \"nodes/proxy\" in API group \"\" at the cluster scope"),
+    );
+
+    let findings = checks::disk(&machine).await;
+
+    assert!(!findings.iter().any(Finding::stops), "{findings:?}");
+    let unknown = findings
+        .iter()
+        .find(|finding| matches!(finding, Finding::Unknown { .. }))
+        .expect("unknown");
+    let said = format!("{unknown}");
+    assert!(
+        said.contains("free disk on node lima-rancher-desktop"),
+        "{said}"
+    );
+    assert!(said.contains("may not get nodes/proxy"), "{said}");
+    // What could be read still was.
+    assert!(
+        findings
+            .iter()
+            .any(|finding| format!("{finding}").contains("not under disk pressure")),
+        "{findings:?}"
+    );
+}
+
+#[tokio::test]
+async fn nodes_the_account_may_not_list_are_one_unknown() {
+    let machine = Fake::default().running(
+        NODES,
+        Err(
+            "Error from server (Forbidden): nodes is forbidden: User \"dev\" cannot list \
+             resource \"nodes\" in API group \"\" at the cluster scope",
+        ),
+    );
+
+    let findings = checks::disk(&machine).await;
+
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(
+        matches!(&findings[0], Finding::Unknown { why, .. } if why.contains("may not list nodes")),
+        "{findings:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_summary_with_no_disk_in_it_is_unknown_rather_than_fine() {
+    let machine = one_node(false, false).running(SUMMARY, Ok(r#"{"node": {}}"#));
+
+    let findings = checks::disk(&machine).await;
+
+    assert!(
+        findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::Unknown { .. })),
+        "{findings:?}"
+    );
+}
+
+#[tokio::test]
+async fn several_nodes_with_room_are_one_line_naming_the_least() {
+    let machine = Fake::default()
+        .running(
+            NODES,
+            Ok(&listing(vec![
+                node("a", false, false),
+                node("b", false, false),
+            ])),
+        )
+        .running(
+            "kubectl get --raw /api/v1/nodes/a/proxy/stats/summary",
+            Ok(&one_disk(70 * GIB, 100 * GIB)),
+        )
+        .running(
+            "kubectl get --raw /api/v1/nodes/b/proxy/stats/summary",
+            Ok(&one_disk(40 * GIB, 100 * GIB)),
+        );
+
+    let findings = checks::disk(&machine).await;
+
+    let said: Vec<String> = findings
+        .iter()
+        .map(|finding| format!("{finding}"))
+        .collect();
+    assert_eq!(findings.len(), 2, "{said:?}");
+    assert!(said[0].contains("none of the 2 nodes"), "{said:?}");
+    assert!(
+        said[1].contains("2 nodes have room; the least is node b"),
+        "{said:?}"
+    );
+}

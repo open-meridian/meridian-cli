@@ -101,6 +101,7 @@ pub async fn examine(machine: &dyn Machine, intended: &Intended) -> Vec<Finding>
     findings.push(checks::helm(machine).await);
     findings.extend(checks::cluster(machine, &intended.namespace).await);
     findings.push(checks::storage_class(machine).await);
+    findings.extend(checks::disk(machine).await);
     findings.push(checks::image(machine, &intended.image).await);
     findings.extend(checks::platform(machine, &intended.platform).await);
     findings
