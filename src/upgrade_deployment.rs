@@ -359,6 +359,11 @@ pub struct Pod {
     pub images: BTreeMap<String, String>,
     pub init: Vec<Container>,
     pub containers: Vec<Container>,
+    /// When it was made, as the API server states it: RFC 3339 in UTC to the
+    /// second, so two of them compare as strings.
+    pub created: Option<String>,
+    /// Since when it has been ready, in the same form. None while it is not.
+    pub ready_since: Option<String>,
 }
 
 fn containers(statuses: &serde_json::Value) -> Vec<Container> {
@@ -410,6 +415,16 @@ pub fn pods(listed: &str) -> Vec<Pod> {
             images: images(&item["spec"]["containers"]),
             init: containers(&item["status"]["initContainerStatuses"]),
             containers: containers(&item["status"]["containerStatuses"]),
+            created: item["metadata"]["creationTimestamp"]
+                .as_str()
+                .map(String::from),
+            ready_since: item["status"]["conditions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|condition| condition["type"] == "Ready" && condition["status"] == "True")
+                .and_then(|condition| condition["lastTransitionTime"].as_str())
+                .map(String::from),
         })
         .collect()
 }
@@ -929,6 +944,236 @@ pub fn leftovers(jobs: &[Job], revision: u64) -> (Vec<String>, Vec<String>) {
     (finished, running)
 }
 
+// ── Launched plugins ────────────────────────────────────────────────────────
+//
+// A plugin the launcher launched is its own Deployment, made from the
+// launcher's template at the moment of the launch, and Helm does not own it.
+// So an upgrade moves every component and leaves each launched plugin on the
+// sidecar it was launched with. On 2026-09-30 a plugin relaunched while
+// 0.1.196 moved to 0.1.198 was launched by the old launcher, on the old
+// sidecar, and reported "holding 0 links": that sidecar predated the link
+// list. The report listed the image and nothing pointed at it.
+
+/// What the chart's plugin template marks a launched plugin's pods with.
+const LAUNCHED: &str = "meridian.dev/launched";
+const INSTANCE: &str = "meridian.dev/instance";
+const LIVE: &str = "meridian.dev/live";
+const COMPONENT: &str = "meridian.dev/component";
+const RELEASE: &str = "app.kubernetes.io/instance";
+
+/// A launched plugin to relaunch: on a sidecar that is not the deployment's,
+/// or launched while an upgrade rolled out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Relaunch {
+    pub instance: String,
+    pub pod: String,
+    /// Its name, where its image says it: the conductor launches a version
+    /// as `<registry>/plugins/<name>@<digest>`. Its version is said nowhere
+    /// in the pod; the catalogue holds it, behind a session.
+    pub name: Option<String>,
+    /// Run live by `meridian plugin dev`, which relaunches it.
+    pub live: bool,
+    pub sidecar: String,
+    /// The runtime images the deployment's own components run.
+    pub deployment: Vec<String>,
+    /// Its pod was made during the upgrade, before the new launcher was ready.
+    pub during_rollout: bool,
+}
+
+impl Relaunch {
+    pub fn stale(&self) -> bool {
+        !self.deployment.contains(&self.sidecar)
+    }
+
+    /// What moves it, typed as it is typed. Nothing runs them for the person.
+    pub fn commands(&self) -> [String; 2] {
+        let instance = &self.instance;
+        [
+            format!("meridian plugin stop {instance}"),
+            if self.live {
+                format!("meridian plugin dev --instance {instance}")
+            } else {
+                format!(
+                    "meridian plugin launch {} <version> --instance {instance}",
+                    self.name.as_deref().unwrap_or("<name>")
+                )
+            },
+        ]
+    }
+}
+
+/// The name in `<registry>/plugins/<name>@<digest>`, or None for an image
+/// not named so.
+fn plugin_name(image: &str) -> Option<String> {
+    let path = image.split_once('@').map_or(image, |(path, _)| path);
+    let (under, name) = path.rsplit_once('/')?;
+    (under.ends_with("/plugins") || under == "plugins").then(|| name.to_string())
+}
+
+fn repository(image: &str) -> &str {
+    let path = image.split_once('@').map_or(image, |(path, _)| path);
+    match path.rsplit_once(':') {
+        // A colon after the last slash is a tag; before it, a registry's port.
+        Some((repository, tag)) if !tag.contains('/') => repository,
+        _ => path,
+    }
+}
+
+/// Every launched plugin to relaunch, of the pods listed. Its sidecar is
+/// compared with the runtime images of its own release's components, which
+/// are the pods of that release that are not launched, not a Job's, and not
+/// stopped. `before`, the pod names listed just before an upgrade was
+/// applied, says which plugin pods the upgrade saw made; without it, as for
+/// `doctor`, none is taken for launched during a rollout.
+pub fn to_relaunch(pods: &[Pod], before: Option<&BTreeSet<String>>) -> Vec<Relaunch> {
+    let alive =
+        |pod: &&Pod| !pod.terminating && !matches!(pod.phase.as_str(), "Succeeded" | "Failed");
+    let launched = |pod: &Pod| pod.labels.get(LAUNCHED).is_some_and(|mark| mark == "true");
+    let mut found = Vec::new();
+    for pod in pods.iter().filter(alive).filter(|pod| launched(pod)) {
+        let (Some(instance), Some(sidecar)) = (pod.labels.get(INSTANCE), pod.images.get("sidecar"))
+        else {
+            continue;
+        };
+        let release = pod.labels.get(RELEASE);
+        let components: Vec<&Pod> = pods
+            .iter()
+            .filter(alive)
+            .filter(|each| {
+                each.job.is_none() && !launched(each) && each.labels.get(RELEASE) == release
+            })
+            .collect();
+        let deployment: Vec<String> = components
+            .iter()
+            .flat_map(|each| each.images.values())
+            .filter(|image| repository(image) == repository(sidecar))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if deployment.is_empty() {
+            // No component of its release runs the runtime: nothing to compare.
+            continue;
+        }
+        let launcher_ready = components
+            .iter()
+            .filter(|each| each.labels.get(COMPONENT).is_some_and(|c| c == "launcher"))
+            .filter_map(|each| each.ready_since.as_deref())
+            .max();
+        let during_rollout = before.is_some_and(|before| !before.contains(&pod.name))
+            && match (pod.created.as_deref(), launcher_ready) {
+                (Some(created), Some(ready)) => created < ready,
+                // Made since the upgrade began, and nothing says the new
+                // launcher was ready by then.
+                _ => true,
+            };
+        let relaunch = Relaunch {
+            instance: instance.clone(),
+            pod: pod.name.clone(),
+            name: pod
+                .images
+                .get("plugin")
+                .and_then(|image| plugin_name(image)),
+            live: pod.labels.get(LIVE).is_some_and(|mark| mark == "true"),
+            sidecar: sidecar.clone(),
+            deployment,
+            during_rollout,
+        };
+        if relaunch.stale() || relaunch.during_rollout {
+            found.push(relaunch);
+        }
+    }
+    found
+}
+
+/// The report's section on plugins to relaunch, or nothing when there are
+/// none.
+pub fn relaunch_text(relaunch: &[Relaunch]) -> String {
+    if relaunch.is_empty() {
+        return String::new();
+    }
+    let shorts = |images: &[String]| {
+        images
+            .iter()
+            .map(|image| short(image))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut said = format!(
+        "\nRelaunch {} to move {} to this version's sidecar. Nothing was relaunched; that is \
+         yours to decide.\n",
+        match relaunch {
+            [_] => "this plugin".to_string(),
+            many => format!("these {} plugins", many.len()),
+        },
+        if relaunch.len() == 1 { "it" } else { "them" }
+    );
+    let width = relaunch
+        .iter()
+        .map(|each| each.instance.len())
+        .max()
+        .unwrap_or(0);
+    for each in relaunch {
+        let sidecar = short(&each.sidecar);
+        said.push_str(&format!(
+            "  {:<width$}  {}\n",
+            each.instance,
+            if each.stale() {
+                format!(
+                    "sidecar {sidecar}, and the deployment runs {}",
+                    shorts(&each.deployment)
+                )
+            } else {
+                format!("sidecar {sidecar}, the deployment's")
+            }
+        ));
+        if each.during_rollout {
+            said.push_str(&format!(
+                "  {:<width$}  launched during the upgrade: pod/{} started before the new \
+                 launcher was ready\n",
+                "", each.pod
+            ));
+        }
+    }
+    if relaunch.iter().any(Relaunch::stale) {
+        said.push_str(
+            "A launched plugin keeps the sidecar it was launched with until it is relaunched, so \
+             what needs the newer sidecar does not reach it.\n",
+        );
+    }
+    if relaunch.iter().any(|each| each.during_rollout) {
+        said.push_str(
+            "A plugin launched while an upgrade rolls out can be launched by the old launcher, \
+             from the old version's template. The upgrade has finished, so a relaunch now is \
+             made by the new one.\n",
+        );
+    }
+    said.push_str("To move each, stop it and launch it again:\n");
+    for each in relaunch {
+        let [stop, launch] = each.commands();
+        let there = if each.live {
+            "   (in the plugin's directory)"
+        } else {
+            ""
+        };
+        said.push_str(&format!("  {stop}\n  {launch}{there}\n"));
+    }
+    if relaunch.iter().any(|each| !each.live) {
+        said.push_str(&format!(
+            "`meridian plugin list` names the {} each instance runs, which its pod does not say.\n",
+            if relaunch
+                .iter()
+                .any(|each| !each.live && each.name.is_none())
+            {
+                "plugin and version"
+            } else {
+                "version"
+            }
+        ));
+    }
+    said
+}
+
 /// What was done, to say at the end.
 #[derive(Debug, Default)]
 pub struct Report {
@@ -945,6 +1190,8 @@ pub struct Report {
     pub removed: Vec<String>,
     /// Each removal that failed, and how to make it.
     pub not_cleaned: Vec<String>,
+    /// Launched plugins to relaunch, which nothing relaunches for the person.
+    pub relaunch: Vec<Relaunch>,
 }
 
 pub fn report_text(asked: &Asked, report: &Report) -> String {
@@ -1012,6 +1259,8 @@ pub fn report_text(asked: &Asked, report: &Report) -> String {
         ));
     }
     said.push_str("Old ReplicaSets are left to the chart's revisionHistoryLimit.\n");
+    // Last, so it is what is read last.
+    said.push_str(&relaunch_text(&report.relaunch));
     said
 }
 

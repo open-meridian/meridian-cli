@@ -672,3 +672,72 @@ async fn several_nodes_with_room_are_one_line_naming_the_least() {
         "{said:?}"
     );
 }
+
+const PODS: &str = "kubectl get pods -n meridian -o json";
+
+/// The deployment's launcher on a runtime tag, and SnapTrade launched with a
+/// sidecar on another.
+fn launched(sidecar: &str) -> String {
+    let component = |name: &str, tag: &str| {
+        serde_json::json!({
+            "metadata": { "name": format!("{name}-x"), "labels": {
+                "app.kubernetes.io/instance": "meridian", "meridian.dev/component": name } },
+            "spec": { "containers": [ { "name": name,
+                "image": format!("ghcr.io/open-meridian/meridian-runtime:{tag}") } ] },
+            "status": { "phase": "Running" }
+        })
+    };
+    serde_json::json!({ "items": [
+        component("launcher", "141dd10"),
+        {
+            "metadata": { "name": "snaptrade-x", "labels": {
+                "app.kubernetes.io/instance": "meridian", "meridian.dev/component": "sidecar",
+                "meridian.dev/instance": "snaptrade", "meridian.dev/launched": "true" } },
+            "spec": { "containers": [
+                { "name": "sidecar", "image": format!("ghcr.io/open-meridian/meridian-runtime:{sidecar}") },
+                { "name": "plugin", "image": "localhost:5000/plugins/snaptrade@sha256:5663243f" } ] },
+            "status": { "phase": "Running" }
+        }
+    ] })
+    .to_string()
+}
+
+#[tokio::test]
+async fn a_plugin_on_an_older_sidecar_is_worth_saying_with_how_to_move_it() {
+    let machine = Fake::default().running(PODS, Ok(&launched("6632029")));
+
+    let findings = checks::plugins(&machine, "meridian").await;
+
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(!findings[0].stops(), "{findings:?}");
+    let said = format!("{}", findings[0]);
+    assert!(said.starts_with("  worth    plugin snaptrade runs sidecar ghcr.io/open-meridian/meridian-runtime:6632029, and the deployment runs ghcr.io/open-meridian/meridian-runtime:141dd10"), "{said}");
+    assert!(said.contains("`meridian plugin stop snaptrade`"), "{said}");
+    assert!(
+        said.contains("`meridian plugin launch snaptrade <version> --instance snaptrade`"),
+        "{said}"
+    );
+    // A warning, which never stops an install.
+    assert_eq!(verdict(&findings).1, 0);
+}
+
+#[tokio::test]
+async fn a_plugin_on_the_deployments_sidecar_is_ok_and_none_is_nothing() {
+    let current = Fake::default().running(PODS, Ok(&launched("141dd10")));
+    let findings = checks::plugins(&current, "meridian").await;
+    assert_eq!(
+        findings,
+        [Finding::Fine(
+            "the plugin launched in meridian runs its deployment's sidecar".into()
+        )]
+    );
+
+    let empty = Fake::default().running(PODS, Ok(r#"{"items": []}"#));
+    assert!(checks::plugins(&empty, "meridian").await.is_empty());
+
+    let refused = Fake::default().running(PODS, Err("pods is forbidden"));
+    assert!(matches!(
+        checks::plugins(&refused, "meridian").await.as_slice(),
+        [Finding::Unknown { .. }]
+    ));
+}

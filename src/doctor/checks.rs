@@ -553,3 +553,73 @@ pub async fn disk(machine: &dyn Machine) -> Vec<Finding> {
     }
     findings
 }
+
+/// Whether each plugin launched in the namespace runs the sidecar its
+/// deployment's components run.
+///
+/// A launched plugin keeps the sidecar it was launched with, through every
+/// upgrade after, until it is relaunched; so what needs the newer sidecar
+/// does not reach it, and nothing else says so. Worth saying, and never in
+/// the way: relaunching it is the person's to decide. With nothing launched,
+/// as before an install, there is nothing to say.
+pub async fn plugins(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
+    use crate::upgrade_deployment::{pods, to_relaunch};
+    let listed = match machine
+        .run("kubectl", &["get", "pods", "-n", namespace, "-o", "json"])
+        .await
+    {
+        Ok(listed) => listed,
+        Err(failed) => {
+            return vec![Finding::Unknown {
+                what: format!("whether the plugins launched in {namespace} run its sidecar"),
+                why: failed.to_string(),
+            }]
+        }
+    };
+    let held = pods(&listed);
+    let launched = held
+        .iter()
+        .filter(|pod| {
+            pod.labels
+                .get("meridian.dev/launched")
+                .is_some_and(|mark| mark == "true")
+                && !pod.terminating
+                && !matches!(pod.phase.as_str(), "Succeeded" | "Failed")
+        })
+        .count();
+    let stale: Vec<Finding> = to_relaunch(&held, None)
+        .into_iter()
+        .filter(|each| each.stale())
+        .map(|each| {
+            let [stop, launch] = each.commands();
+            Finding::Worth {
+                what: format!(
+                    "plugin {} runs sidecar {}, and the deployment runs {}",
+                    each.instance,
+                    each.sidecar,
+                    each.deployment.join(", ")
+                ),
+                why: format!(
+                    "A launched plugin keeps the sidecar it was launched with until it is \
+                     relaunched, so what needs the newer one does not reach it. `{stop}`, then \
+                     `{launch}`, moves it{}.",
+                    if each.live {
+                        ", run in the plugin's directory"
+                    } else {
+                        "; `meridian plugin list` names its version"
+                    }
+                ),
+            }
+        })
+        .collect();
+    match (launched, stale.is_empty()) {
+        (0, _) => Vec::new(),
+        (1, true) => vec![Finding::Fine(format!(
+            "the plugin launched in {namespace} runs its deployment's sidecar"
+        ))],
+        (many, true) => vec![Finding::Fine(format!(
+            "the {many} plugins launched in {namespace} run their deployment's sidecar"
+        ))],
+        _ => stale,
+    }
+}

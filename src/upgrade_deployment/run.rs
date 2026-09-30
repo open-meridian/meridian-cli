@@ -3,6 +3,7 @@
 //! Everything here touches the world, through a `Machine` a test can be.
 //! What can be decided without touching it is in the parent module.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use tokio::time::Instant;
@@ -11,8 +12,8 @@ use super::watch::{Step, Watch};
 use super::{
     chart_of, direction, image_in, installed, jobs, left_by_a_restart, leftovers, migration,
     plugin_floors, pods, progress, release_finding, restarted, restarts, running_images,
-    skip_policy, target_image, workloads, Asked, Chart, Direction, Installed, JobState, Plan,
-    Report, HELM_MINIMUM,
+    skip_policy, target_image, to_relaunch, workloads, Asked, Chart, Direction, Installed,
+    JobState, Plan, Report, HELM_MINIMUM,
 };
 use crate::doctor::{checks, Failure, Finding, Machine};
 
@@ -370,12 +371,15 @@ pub async fn apply(
     watch: &mut dyn Watch,
 ) -> Result<Report, String> {
     let (release, namespace) = (asked.release.as_str(), asked.namespace.as_str());
-    // Before, so a restart is counted from here and not from a pod's birth.
-    let before = restarts(&pods(
+    // Before, so a restart is counted from here and not from a pod's birth,
+    // and a plugin pod made from here was made during the upgrade.
+    let before_pods = pods(
         &kubectl_json(machine, asked, "pods")
             .await
             .unwrap_or_default(),
-    ));
+    );
+    let before = restarts(&before_pods);
+    let before_names: BTreeSet<String> = before_pods.into_iter().map(|pod| pod.name).collect();
 
     let arguments = super::helm_arguments(asked, plan);
     let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
@@ -499,6 +503,8 @@ pub async fn apply(
             })
             .collect(),
         restarted: restarted(&before, &held_pods, namespace),
+        // Said, and never done: relaunching a plugin is the person's call.
+        relaunch: to_relaunch(&held_pods, Some(&before_names)),
         ..Report::default()
     };
 

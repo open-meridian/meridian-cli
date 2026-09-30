@@ -1374,3 +1374,223 @@ fn colour_is_escape_codes_this_writes_and_no_color_turns_it_off() {
     assert!(watch::colour(Some("".into())));
     assert!(!watch::colour(Some("1".into())));
 }
+
+// ── Launched plugins after an upgrade ────────────────────────────────────
+
+/// A launched plugin's pod, as the chart's plugin template labels it and the
+/// conductor names its image, on a sidecar tag, made at a time.
+fn launched_pod(name: &str, tag: &str, created: &str) -> serde_json::Value {
+    json!({
+        "metadata": { "name": name, "creationTimestamp": created,
+                      "labels": { "app.kubernetes.io/instance": "meridian",
+                                  "meridian.dev/component": "sidecar",
+                                  "meridian.dev/instance": "snaptrade",
+                                  "meridian.dev/launched": "true" } },
+        "spec": { "containers": [
+            { "name": "sidecar", "image": format!("{REPO}:{tag}") },
+            { "name": "plugin", "image": "localhost:5000/plugins/snaptrade@sha256:5663243f580d" } ] },
+        "status": { "phase": "Running", "containerStatuses": [] }
+    })
+}
+
+/// When the new launcher became ready.
+const LAUNCHER_READY: &str = "2026-09-30T05:53:40Z";
+
+/// 0.1.180 to 0.1.182 with SnapTrade launched: `before` is its pod before
+/// the upgrade, if it had one, and `after` its pod once every component is
+/// on the new image.
+fn upgrading_with_a_plugin(before: Option<serde_json::Value>, after: serde_json::Value) -> Stand {
+    let at = |component, tag| deployment(component, tag, 1, 1);
+    let mut launcher = pod("launcher-new", "launcher", &format!("{REPO}:9c5d480"), 0);
+    launcher["status"]["conditions"] =
+        json!([{ "type": "Ready", "status": "True", "lastTransitionTime": LAUNCHER_READY }]);
+    let before = items(
+        [
+            pod("conductor-old", "conductor", &format!("{REPO}:845bd06"), 0),
+            pod("launcher-old", "launcher", &format!("{REPO}:845bd06"), 0),
+        ]
+        .into_iter()
+        .chain(before)
+        .collect(),
+    );
+    healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
+        .json(
+            WORKLOADS,
+            items(vec![at("conductor", "845bd06"), at("launcher", "845bd06")]),
+        )
+        .json(
+            WORKLOADS,
+            items(vec![at("conductor", "9c5d480"), at("launcher", "9c5d480")]),
+        )
+        .json(PODS, before.clone())
+        .json(PODS, before)
+        .json(
+            PODS,
+            items(vec![
+                pod("conductor-new", "conductor", &format!("{REPO}:9c5d480"), 0),
+                launcher,
+                after,
+            ]),
+        )
+        .json(
+            JOBS,
+            items(vec![job(
+                "meridian-meridian-runtime-migrate-8",
+                Some("Complete"),
+            )]),
+        )
+        .answering(UPGRADE, Ok("upgraded"))
+}
+
+async fn upgraded(stand: &Stand) -> Report {
+    let plan = planned(stand).await;
+    let mut said = Vec::new();
+    apply(stand, &asked(), &plan, &pace(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    .unwrap_or_else(|failed| panic!("{failed}\n{said:?}"))
+}
+
+#[tokio::test]
+async fn a_plugin_on_the_deployments_sidecar_is_not_said() {
+    // Launched after the upgrade's new launcher was ready, on its sidecar.
+    let stand = upgrading_with_a_plugin(
+        None,
+        launched_pod("snaptrade-b", "9c5d480", "2026-09-30T05:54:10Z"),
+    );
+
+    let report = upgraded(&stand).await;
+
+    assert!(report.relaunch.is_empty(), "{:?}", report.relaunch);
+    let text = report_text(&asked(), &report);
+    assert!(!text.contains("Relaunch"), "{text}");
+    assert!(!text.contains("meridian plugin"), "{text}");
+    // Nothing is relaunched either way.
+    assert!(!stand
+        .asked()
+        .iter()
+        .any(|command| command.contains("plugin")));
+}
+
+#[tokio::test]
+async fn a_plugin_left_on_the_old_sidecar_is_named_with_the_commands_that_move_it() {
+    let launched = launched_pod("snaptrade-a", "845bd06", "2026-09-30T04:55:57Z");
+    let stand = upgrading_with_a_plugin(Some(launched.clone()), launched);
+
+    let report = upgraded(&stand).await;
+
+    assert_eq!(report.relaunch.len(), 1, "{:?}", report.relaunch);
+    assert_eq!(report.relaunch[0].instance, "snaptrade");
+    assert!(!report.relaunch[0].during_rollout);
+    let text = report_text(&asked(), &report);
+    assert!(
+        text.contains(
+            "Relaunch this plugin to move it to this version's sidecar. Nothing was relaunched"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "  snaptrade  sidecar meridian-runtime:845bd06, and the deployment runs \
+             meridian-runtime:9c5d480\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("keeps the sidecar it was launched with until it is relaunched"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "  meridian plugin stop snaptrade\n  \
+             meridian plugin launch snaptrade <version> --instance snaptrade\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("`meridian plugin list` names the version"),
+        "{text}"
+    );
+    assert!(!text.contains("launched during the upgrade"), "{text}");
+    // Said, and never done.
+    let asked_for = stand.asked();
+    assert!(
+        !asked_for.iter().any(|command| command.contains("plugin")
+            || command.starts_with("kubectl delete")
+            || command.starts_with("kubectl rollout")),
+        "{asked_for:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_plugin_launched_during_the_rollout_is_said_to_be() {
+    // Stopped and launched again mid-upgrade, before the new launcher was
+    // ready, as on 2026-09-30: the old launcher made it, on the old sidecar.
+    let stand = upgrading_with_a_plugin(
+        Some(launched_pod(
+            "snaptrade-a",
+            "845bd06",
+            "2026-09-30T04:55:57Z",
+        )),
+        launched_pod("snaptrade-b", "845bd06", "2026-09-30T05:53:31Z"),
+    );
+
+    let report = upgraded(&stand).await;
+
+    assert_eq!(report.relaunch.len(), 1, "{:?}", report.relaunch);
+    assert!(report.relaunch[0].during_rollout);
+    let text = report_text(&asked(), &report);
+    assert!(
+        text.contains(
+            "launched during the upgrade: pod/snaptrade-b started before the new launcher was ready"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("can be launched by the old launcher"),
+        "{text}"
+    );
+    assert!(
+        text.contains("meridian plugin launch snaptrade <version> --instance snaptrade"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_live_plugin_is_moved_by_plugin_dev_and_an_unnamed_one_by_placeholders() {
+    let mut live = launched_pod("snaptrade-a", "845bd06", "2026-09-30T04:55:57Z");
+    live["metadata"]["labels"]["meridian.dev/live"] = json!("true");
+    let mut unnamed = launched_pod("other-a", "845bd06", "2026-09-30T04:55:57Z");
+    unnamed["metadata"]["labels"]["meridian.dev/instance"] = json!("other");
+    unnamed["spec"]["containers"][1]["image"] = json!("ghcr.io/example/other:0.1.0");
+    let held = pods(
+        &items(vec![
+            pod("launcher-new", "launcher", &format!("{REPO}:9c5d480"), 0),
+            live,
+            unnamed,
+        ])
+        .to_string(),
+    );
+
+    let relaunch = to_relaunch(&held, None);
+
+    assert_eq!(relaunch.len(), 2, "{relaunch:?}");
+    assert_eq!(
+        relaunch[0].commands()[1],
+        "meridian plugin dev --instance snaptrade"
+    );
+    assert_eq!(
+        relaunch[1].commands()[1],
+        "meridian plugin launch <name> <version> --instance other"
+    );
+    let text = relaunch_text(&relaunch);
+    assert!(text.contains("these 2 plugins"), "{text}");
+    assert!(
+        text.contains("  meridian plugin dev --instance snaptrade   (in the plugin's directory)\n"),
+        "{text}"
+    );
+    assert!(text.contains("names the plugin and version"), "{text}");
+}
