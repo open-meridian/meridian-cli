@@ -15,6 +15,7 @@ meridian connect [<address>] # sign in to a deployment (default: the local one),
 meridian sign-out            # end that session, here and at the deployment
 meridian plugin new <name>   # start a plugin from the SDK's reference plugin
 meridian plugin check        # hold it to the framework's rules: pages, settings, SDK, tests
+meridian plugin migrate      # move it to a newer SDK: its pins, each release's rewrite, then check
 meridian plugin upload       # build it and put it in the deployment's catalogue
 meridian plugin list         # versions uploaded, and what is launched
 meridian plugin launch …     # run a version, once you approve what it asks for
@@ -27,8 +28,8 @@ meridian upgrade             # replace this binary with the latest release
 meridian uninstall           # end every session it holds, and remove it
 ```
 
-Every command exits non-zero on failure, and `plugin check`, `dev`, `logs`,
-`events` and `open` take `--json` for scripts and AI agents.
+Every command exits non-zero on failure, and `plugin check`, `migrate`, `dev`,
+`logs`, `events` and `open` take `--json` for scripts and AI agents.
 
 ## Install
 
@@ -266,6 +267,24 @@ image.
 you approve them; `--yes` approves for a script that has already read them.
 Its page is on its own name, `http://my-plugin.plugins.meridian.localhost/`,
 opened from the dashboard's home.
+
+## Moving a plugin to a newer SDK
+
+```
+meridian plugin migrate                 # to the latest release of open-meridian
+meridian plugin migrate --to 0.7.0 --run-tests
+```
+
+Each release of the SDK that changes what a plugin calls carries a migration
+from the release before it (decisions/025). `plugin migrate` moves the
+plugin's two pins, `open-meridian==` in `pyproject.toml` and the Dockerfile's
+`plugin-python:`, runs each step between in the SDK's image, then `plugin
+check`, and says what is left by hand with its rule, file and line. The
+steps run in docker, cut off from the network and given the plugin's files
+on stdin; this binary alone writes the plugin's directory, once every step
+has run. It refuses changes git does not hold yet, unless `--force`, and it
+never goes backwards. `make e2e-migrate` runs it, for real, over the plugins
+meridian-python records its migrations for.
 
 ## Developing a plugin live
 

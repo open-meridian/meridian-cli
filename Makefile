@@ -10,7 +10,7 @@ DOCKER := DOCKER_BUILDKIT=1 docker
 unexport GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
          GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
 
-.PHONY: help ci-local ci-local-deep build test lint fmt lock install-hooks e2e-up \
+.PHONY: help ci-local ci-local-deep build test lint fmt lock install-hooks e2e-up e2e-migrate \
         vendor-template check-vendored-template check-install check-c-deps
 
 help:
@@ -23,6 +23,7 @@ help:
 	@echo "  make fmt        apply rustfmt"
 	@echo "  make lock       regenerate Cargo.lock"
 	@echo "  make e2e-up     install into a throwaway namespace and answer the wizard"
+	@echo "  make e2e-migrate  plugin migrate, for real, over meridian-python's recorded plugins"
 	@echo "  make vendor-template  move the scaffold \`plugin new\` writes to SDK_REV"
 
 # Local green is the completion signal; CI is confirmation.
@@ -37,7 +38,7 @@ ci-local-deep: ci-local
 # offline and gives the same plugin every time. The template lives beside the
 # SDK it is written against and is tested there against the real sidecar;
 # this copy is held to it the way the SDK's bindings are held to the schema.
-SDK_REV  := f9f1eca04c09c4003c945ddf4d08b57e97e0efd2
+SDK_REV  := 1d0da36c83a4a354f7a7ef19b3fd402a35b3a7ce
 SDK_REPO := https://github.com/open-meridian/meridian-python.git
 SCRATCH  := .sdk-scratch
 
@@ -119,6 +120,23 @@ e2e-up:
 	@test -f "$(CORE)/e2e/cluster/run.py" || { echo "no meridian-core at $(CORE); set CORE=<path>" >&2; exit 1; }
 	@$(DOCKER) build -q -f Dockerfile.rust --target e2e -t meridian-cli-e2e:local . >/dev/null
 	@$(MAKE) --no-print-directory -C "$(CORE)" e2e-cluster E2E_DRIVER=cli E2E_CLI_IMAGE=meridian-cli-e2e:local
+
+# `meridian plugin migrate`, the real binary, over the plugins meridian-python
+# records its migrations for, with the steps run in the SDK image built from
+# that checkout (its `make base-image`): each must come out as the tree
+# meridian-python expects, checked with --run-tests, leaving exactly what it
+# expects by hand. Needs meridian-python beside this checkout and a docker
+# daemon, whose socket the run is given. Not in ci-local: the steps it runs
+# are a sibling's, at whatever that checkout holds.
+SDK ?= ../meridian-python
+SDK_IMAGE ?= plugin-python:local
+
+e2e-migrate:
+	@test -d "$(SDK)/tests/migrations" || { echo "no meridian-python at $(SDK); set SDK=<path>" >&2; exit 1; }
+	@$(MAKE) --no-print-directory -C "$(SDK)" base-image BASE_IMAGE=$(SDK_IMAGE)
+	@$(DOCKER) build -q -f Dockerfile.rust --target e2e-migrate --build-arg SDK_IMAGE=$(SDK_IMAGE) \
+		--build-context fixtures="$(abspath $(SDK))/tests/migrations" -t meridian-cli-e2e-migrate:local . >/dev/null
+	@docker run --rm -v /var/run/docker.sock:/var/run/docker.sock meridian-cli-e2e-migrate:local
 
 install-hooks:
 	@git config core.hooksPath hooks

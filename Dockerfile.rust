@@ -10,6 +10,8 @@
 # a git dependency at a pinned revision, which cargo fetches over HTTPS.
 
 ARG RUST_VERSION=1.90
+# The SDK image e2e-migrate is built on, and runs the migrations in.
+ARG SDK_IMAGE=plugin-python:local
 
 FROM rust:${RUST_VERSION}-slim-bookworm AS base
 RUN apt-get update \
@@ -99,3 +101,23 @@ COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker:29-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 COPY --from=release /meridian /usr/local/bin/meridian
 ENTRYPOINT ["meridian"]
+
+# `meridian plugin migrate`, the real binary, over the plugins meridian-python
+# records its migrations for: `make e2e-migrate`, which hands in that
+# checkout's tests/migrations and names the SDK image built from it. Not a
+# release: Python, that SDK and pytest, for the check's --run-tests, git for
+# each plugin's repository, and the docker client, given the host's daemon to
+# build and run the migrations' image with.
+FROM ${SDK_IMAGE} AS e2e-migrate
+ARG SDK_IMAGE
+ENV SDK_IMAGE=${SDK_IMAGE}
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir pytest
+COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker:29-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
+COPY --from=release /meridian /usr/local/bin/meridian
+COPY --from=fixtures . /fixtures/
+COPY tests/migrate/run.sh /e2e/run.sh
+ENTRYPOINT ["sh", "/e2e/run.sh"]

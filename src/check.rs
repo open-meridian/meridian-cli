@@ -98,7 +98,7 @@ impl Report {
 
 /// Never read: what a checkout, a build, a virtual environment or an agent
 /// leaves beside the plugin, none of which is the plugin.
-const NOT_THE_PLUGIN: [&str; 18] = [
+pub(crate) const NOT_THE_PLUGIN: [&str; 18] = [
     ".git",
     ".venv",
     "venv",
@@ -126,7 +126,7 @@ const TEXT: [&str; 18] = [
 ];
 
 /// Anything larger is generated, not written.
-const LARGEST: u64 = 1 << 20;
+pub(crate) const LARGEST: u64 = 1 << 20;
 
 /// The plugin's files, read once for every rule.
 pub fn read(root: &Path) -> Result<Plugin, String> {

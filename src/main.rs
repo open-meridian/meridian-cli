@@ -11,6 +11,7 @@ mod doctor;
 mod down;
 mod live;
 mod machine;
+mod migrate;
 mod plugin;
 mod release;
 mod sessions;
@@ -31,6 +32,8 @@ meridian -- bringing a Meridian deployment up
   meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>
   meridian plugin check      hold the plugin here to the framework's rules: its pages,
                              settings, SDK use, [tool.meridian], tests and shape
+  meridian plugin migrate    move the plugin here to a newer release of its SDK: its pins,
+                             each release's rewrite of its code, then plugin check
   meridian plugin upload     build the plugin here and put it in the deployment's catalogue
   meridian plugin list       the catalogue: versions uploaded, and what is launched
   meridian plugin launch <name> <version> --instance <id>
@@ -95,6 +98,19 @@ plugin check: needs no deployment. Exits 0 when every rule holds, 1 when one doe
 not, each failure with its file, line and what to write instead
       --dir <dir>           the plugin's directory (default: .)
       --run-tests           run its tests too, with pytest
+      --json                one JSON object on stdout
+
+plugin migrate: needs no deployment, and docker. Exits 0 when migrated with nothing
+left by hand and every rule holding; 1 when something is left by hand, a rule does
+not hold, or it could not run (then nothing was changed); 2 when asked wrongly or
+refused before changing anything: no pins, pins disagreeing, an older --to, or
+changes git does not hold yet
+      --to <version>        the release to move to (default: the latest). Never older
+      --dir <dir>           the plugin's directory (default: .)
+      --image <ref>         the SDK image the steps run in (default: the latest
+                            release's, which carries every step)
+      --force               migrate a directory git does not hold as it is
+      --run-tests           run its tests in the check, as plugin check does
       --json                one JSON object on stdout
 
 plugin upload, list, launch, stop, dev, logs, events, open: through the session
@@ -183,8 +199,9 @@ const TAKES_A_VALUE: [&str; 21] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 11] = [
+const SWITCHES: [&str; 12] = [
     "--no-doctor",
+    "--force",
     "--run-tests",
     "--delete-namespace",
     "--json",
@@ -350,6 +367,9 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
     if words.first() == Some(&"check") {
         return check_command(arguments, &words);
     }
+    if words.first() == Some(&"migrate") {
+        return migrate_command(arguments, &words).await;
+    }
     if let Some(&verb) = words.first() {
         if matches!(verb, "upload" | "list" | "launch" | "stop") {
             return catalogue_command(arguments, &words).await;
@@ -376,7 +396,7 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
             }
         }
         _ => {
-            eprintln!("meridian: plugin takes `new <name>`, `check`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events` or `open`\n\n{USAGE}");
+            eprintln!("meridian: plugin takes `new <name>`, `check`, `migrate`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events` or `open`\n\n{USAGE}");
             2
         }
     }
@@ -408,6 +428,46 @@ fn check_command(arguments: &Arguments, words: &[&str]) -> i32 {
         0
     } else {
         1
+    }
+}
+
+/// `meridian plugin migrate`: the plugin in --dir moved to a newer release
+/// of its SDK (decisions/025). It needs no session, and docker.
+async fn migrate_command(arguments: &Arguments, words: &[&str]) -> i32 {
+    if words.len() != 1 {
+        eprintln!(
+            "meridian plugin migrate: takes no words; --dir names the plugin's directory\n\n{USAGE}"
+        );
+        return 2;
+    }
+    let asked = migrate::Asked {
+        dir: std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or(".")),
+        to: arguments.value("--to", "--to").map(String::from),
+        image: arguments.value("--image", "--image").map(String::from),
+        force: arguments.set("--force"),
+        run_tests: arguments.set("--run-tests"),
+    };
+    match migrate::migrate(&migrate::ThisHost, &migrate::PYTHON, &asked).await {
+        migrate::Migrated::Refused(refusal) => {
+            eprintln!("meridian plugin migrate: {refusal}");
+            2
+        }
+        migrate::Migrated::Failed(failed) => {
+            eprintln!("meridian plugin migrate: {failed}");
+            1
+        }
+        migrate::Migrated::Done(report) => {
+            if arguments.set("--json") {
+                println!("{}", migrate::json(&report));
+            } else {
+                print!("{}", migrate::text(&report));
+            }
+            if report.done() {
+                0
+            } else {
+                1
+            }
+        }
     }
 }
 
@@ -1516,6 +1576,23 @@ mod tests {
         assert_eq!(arguments.value("--timeout", "--timeout"), Some("15m"));
         assert!(arguments.set("--yes"));
         assert!(parse(said("upgrade-deployment 0.1.182")).is_err());
+    }
+
+    #[test]
+    fn plugin_migrate_takes_its_target_directory_image_and_force() {
+        let migrate = parse(said(
+            "plugin migrate --to 0.7.0 --dir ./p --image plugin-python:local --force --run-tests --json",
+        ))
+        .unwrap();
+        assert_eq!(migrate.words, ["migrate"]);
+        assert_eq!(migrate.value("--to", "--to"), Some("0.7.0"));
+        assert_eq!(migrate.value("--dir", "--dir"), Some("./p"));
+        assert_eq!(
+            migrate.value("--image", "--image"),
+            Some("plugin-python:local")
+        );
+        assert!(migrate.set("--force") && migrate.set("--run-tests") && migrate.set("--json"));
+        assert!(parse(said("plugin migrate --forced")).is_err());
     }
 
     #[test]
