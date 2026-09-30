@@ -1,6 +1,6 @@
 [package]
 name = "meridian-cli"
-version = "0.1.17"
+version = "0.1.18"
 edition = "2021"
 rust-version = "1.90"
 # AGPL, because this links meridian-core's crates and the deployment runtime is
