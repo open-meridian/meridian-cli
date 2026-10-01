@@ -80,7 +80,12 @@ def test_each_page_is_served_at_its_levels_and_refused_at_the_others() -> None:
 def test_manage_shows_the_plugins_setup_and_no_accounts_data() -> None:
     page = client().get("/setup", "admin").text
     assert "Ada Park" in page and "<code>reference-1</code>" in page and "custody" in page
-    client().assert_no_account_data("ACC-1", "ACC-2")
+    # What the plugin holds for an account -- here, the statement it opened
+    # for one -- is never on a page at admin. An account's identity may be: a
+    # Manage page may list accounts by name, to link to.
+    sidecar = Sidecar()
+    assert "STMT-1" in client(sidecar).post("/statement", "write").text
+    client(sidecar).assert_no_account_data("STMT-1")
 
 
 def test_the_accounts_page_shows_what_the_caller_may_read_and_write() -> None:

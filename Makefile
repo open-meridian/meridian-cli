@@ -38,7 +38,7 @@ ci-local-deep: ci-local
 # offline and gives the same plugin every time. The template lives beside the
 # SDK it is written against and is tested there against the real sidecar;
 # this copy is held to it the way the SDK's bindings are held to the schema.
-SDK_REV  := 7077dfa33603d0ae5b9b24bc74f272f2ae3acd34
+SDK_REV  := d5e0e248f8f5336b8e5979dfb81808412bf9cac1
 SDK_REPO := https://github.com/open-meridian/meridian-python.git
 SCRATCH  := .sdk-scratch
 

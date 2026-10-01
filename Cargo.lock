@@ -971,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-cli"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

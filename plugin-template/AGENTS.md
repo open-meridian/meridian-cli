@@ -25,8 +25,11 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   levels=[...])` for anything else. The dashboard shows a page under the
   buttons of its levels, and the SDK refuses any other session before the
   view runs. A page at `admin` configures the plugin and shows no account's
-  data -- nothing the plugin holds for an account, synced or not -- and
-  `PageClient.assert_no_account_data` in the tests holds it to that.
+  data -- nothing the plugin holds for an account, synced or not: holdings,
+  quantities, values, balances, a statement's rows -- and
+  `PageClient.assert_no_account_data`, given that data, holds it to that in
+  the tests. An account's identity (its name, custodian, type, owner, note)
+  is not its data: a Manage page may list every account as a link target.
 
 This file is for any coding agent working on the plugin, and is committed with
 it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the
@@ -204,8 +207,9 @@ theirs.
 
 ### Before starting
 
-- `meridian --version` is 0.1.15 or later. Older ones have no `plugin check`,
-  and before 0.1.3 no `plugin dev`: the person runs `meridian upgrade`.
+- `meridian --version` is 0.1.21 or later. Older ones have no `--level` on
+  `plugin open`, before 0.1.15 no `plugin check`, and before 0.1.3 no
+  `plugin dev`: the person runs `meridian upgrade`.
 - The person has run `meridian connect` (with the address, for a deployment
   not on this machine). You cannot do it for them: it signs in through their
   browser. `meridian plugin list` says whether the
@@ -275,10 +279,16 @@ Ask the question that answers what you changed:
 
 | To know | Run |
 |---|---|
-| What the page shows, as the person is served it | `meridian plugin open --instance reference-plugin --print /` (any path on the plugin) |
+| What a page shows, as the person is served it | `meridian plugin open --instance reference-plugin --level open --print /` for Accounts under Open (`--level view` under View), and `--level manage --print /setup` for Setup under Manage: any path on the plugin, at a level it is declared with |
 | What the plugin printed or logged since your change | `meridian plugin logs --instance reference-plugin --since <R-1>` |
 | What the sidecar refused it, or what else happened | `meridian plugin events --instance reference-plugin --since <R-1> --json` |
-| What the person sees in a browser | `meridian plugin open --instance reference-plugin`: a link one browser opens once. Give it to the person, or open it in your browser pane |
+| What the person sees in a browser | `meridian plugin open --instance reference-plugin --level open`: a link one browser opens once, at that level. Give it to the person, or open it in your browser pane |
+
+`--level` is the home's button the session is opened by: `manage`, `open` or
+`view`. Name it every time. A page answers 403 at a level it is not declared
+with, and without `--level` the dashboard opens at the first level the person
+holds, Manage before Open before View, so on a development deployment, where
+they hold `admin`, `/` would be asked under Manage and refused.
 
 `--print` exits non-zero when the plugin answers with an error, and prints what
 it answered. Prefer it to a browser for checking your own work: it needs no

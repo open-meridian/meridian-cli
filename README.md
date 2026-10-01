@@ -6,7 +6,7 @@ works with one that is already running. The whole install, step by step, is
 meridian-core's [INSTALL.md](https://github.com/open-meridian/meridian-core/blob/main/INSTALL.md),
 and every command and flag is in the
 [command line reference](https://open-meridian.dev/api/cli/). This is release
-0.1.21.
+0.1.22.
 
 ```
 meridian doctor              # can this machine and this cluster run a deployment?
@@ -396,7 +396,7 @@ binary per target (macOS and Linux, each on x86_64 and arm64), each with its
 published from a push to `main`. `plugin new`'s template is vendored from
 meridian-python's `template/` at a pinned commit (`make vendor-template`;
 `check-vendored-template` fails when it drifts), so a release carries the SDK
-version the new plugin pins: 0.10.0 from 0.1.21.
+version the new plugin pins: 0.10.1 from 0.1.22.
 
 ## Licence
 
