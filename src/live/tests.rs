@@ -197,3 +197,130 @@ fn a_path_is_carried_as_one_query_value() {
         "/orders%3Fid%3D7%26x%3Da%20b"
     );
 }
+
+#[test]
+fn every_spelling_the_dashboard_takes_is_a_level_and_nothing_else() {
+    for (named, level) in [
+        ("manage", Level::Manage),
+        ("Admin", Level::Manage),
+        ("open", Level::Open),
+        ("WRITE", Level::Open),
+        (" view ", Level::View),
+        ("read", Level::View),
+    ] {
+        assert_eq!(Level::named(named), Some(level), "{named}");
+    }
+    for named in ["", "owner", "readwrite", "manager", "r"] {
+        assert_eq!(Level::named(named), None, "{named:?}");
+    }
+    // Sent as the dashboard names it, whichever spelling was given.
+    assert_eq!(Level::Manage.name(), "admin");
+    assert_eq!(Level::Open.name(), "write");
+    assert_eq!(Level::View.name(), "read");
+    assert_eq!(Level::Manage.said(), "Manage (admin)");
+}
+
+#[test]
+fn a_refusal_at_the_level_the_dashboard_chose_says_how_to_ask_at_another() {
+    assert_eq!(
+        page_failed("ref", "/", 403, None, Some(Level::Manage)),
+        "ref answered 403 for / at Manage (admin), the first level you hold; a page serves \
+         only the levels it is declared with, and `--level open` or `--level view` asks at \
+         another"
+    );
+    // Asked for, the level is the person's choice, and said as it is.
+    assert_eq!(
+        page_failed("ref", "/setup", 403, Some(Level::Open), Some(Level::Open)),
+        "ref answered 403 for /setup at Open (write)"
+    );
+    // Not a refusal of the level.
+    assert_eq!(
+        page_failed("ref", "/", 500, None, Some(Level::View)),
+        "ref answered 500 for / at View (read)"
+    );
+    // A dashboard older than levels names none, and none is said.
+    assert_eq!(
+        page_failed("ref", "/", 403, None, None),
+        "ref answered 403 for /"
+    );
+}
+
+/// A dashboard that answers one request with `body`, and hands back the
+/// request line it was asked.
+async fn answering_once(body: &'static str) -> (String, tokio::task::JoinHandle<String>) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let asked = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut read = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while !read.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = stream.read(&mut chunk).await.unwrap();
+            assert!(n > 0, "the request ended before its head did");
+            read.extend_from_slice(&chunk[..n]);
+        }
+        let answer = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(answer.as_bytes()).await.unwrap();
+        String::from_utf8_lossy(&read)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    });
+    (address, asked)
+}
+
+#[tokio::test]
+async fn open_carries_the_level_asked_and_reads_the_one_it_was_opened_at() {
+    let (address, asked) =
+        answering_once(r#"{"instance_id":"ref","level":"write","url":"http://ref/x"}"#).await;
+    let deployment = Deployment {
+        address: &address,
+        session: "s",
+    };
+    let opened = deployment.open("ref", Some(Level::Open)).await.unwrap();
+    assert_eq!(opened.url, "http://ref/x");
+    assert_eq!(opened.level, Some(Level::Open));
+    assert_eq!(
+        asked.await.unwrap(),
+        "POST /terminal/plugins/ref/open?level=write HTTP/1.1"
+    );
+}
+
+#[tokio::test]
+async fn open_with_no_level_names_none_and_leaves_the_dashboard_to_choose() {
+    let (address, asked) = answering_once(r#"{"url":"http://ref/x"}"#).await;
+    let deployment = Deployment {
+        address: &address,
+        session: "s",
+    };
+    let opened = deployment.open("ref", None).await.unwrap();
+    assert_eq!(opened.level, None);
+    assert_eq!(
+        asked.await.unwrap(),
+        "POST /terminal/plugins/ref/open HTTP/1.1"
+    );
+}
+
+#[tokio::test]
+async fn a_page_is_read_at_the_level_asked_after_its_path() {
+    let (address, asked) =
+        answering_once(r#"{"status":200,"level":"admin","body":"<p>x</p>"}"#).await;
+    let deployment = Deployment {
+        address: &address,
+        session: "s",
+    };
+    let said = deployment
+        .page("ref", "/setup?tab=a", Some(Level::Manage))
+        .await
+        .unwrap();
+    assert_eq!(said["level"], "admin");
+    assert_eq!(
+        asked.await.unwrap(),
+        "GET /terminal/plugins/ref/page?path=/setup%3Ftab%3Da&level=admin HTTP/1.1"
+    );
+}

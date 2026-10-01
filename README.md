@@ -6,7 +6,7 @@ works with one that is already running. The whole install, step by step, is
 meridian-core's [INSTALL.md](https://github.com/open-meridian/meridian-core/blob/main/INSTALL.md),
 and every command and flag is in the
 [command line reference](https://open-meridian.dev/api/cli/). This is release
-0.1.20.
+0.1.21.
 
 ```
 meridian doctor              # can this machine and this cluster run a deployment?
@@ -272,7 +272,9 @@ meridian plugin launch my-plugin 0.1.0 --instance my-plugin
 meridian plugin stop my-plugin
 ```
 
-`plugin new` writes a working plugin: its code and page, a `Dockerfile`,
+`plugin new` writes a working plugin: its pages, each a view function and a
+Jinja2 template declared with the levels it serves (a Setup page under
+Manage, an Accounts page under Open and View), a `Dockerfile`,
 `pyproject.toml`, and `AGENTS.md`, which teaches any coding agent the live
 loop below. `CLAUDE.md` and the `develop-live` skill lead Claude Code to the
 same text. Commit them with the plugin; `.dockerignore` keeps them out of its
@@ -280,8 +282,9 @@ image.
 
 `launch` shows the roles the version asks for and runs it only once
 you approve them; `--yes` approves for a script that has already read them.
-Its page is on its own name, `http://my-plugin.plugins.meridian.localhost/`,
-opened from the dashboard's home.
+Its pages are on its own name, `http://my-plugin.plugins.meridian.localhost/`,
+opened from the dashboard's home by a button for each level you hold on it:
+Manage (`admin`), Open (`write`) and View (`read`).
 
 ## Moving a plugin to a newer SDK
 
@@ -341,6 +344,7 @@ From another terminal, or an agent:
 ```
 meridian plugin open --instance my-plugin             # a link to its page, for one browser, once
 meridian plugin open --instance my-plugin --print /   # the page itself, as you are served it
+meridian plugin open --instance my-plugin --level open --print /   # at Open, not the first level held
 meridian plugin logs --instance my-plugin --since 3   # what it printed after revision 3
 meridian plugin events --instance my-plugin --follow  # sent, ready, crashed, refused, as they happen
 ```
@@ -349,6 +353,14 @@ meridian plugin events --instance my-plugin --follow  # sent, ready, crashed, re
 this session lasts. The link itself works once, within a minute, since a link
 in a terminal is easily seen by somebody else. Reload the page as often as you
 like; run `open` again for another browser.
+
+A session on a plugin carries one level, as the home's buttons do: `--level
+manage`, `open` or `view` (or `admin`, `write`, `read`). Without it, `open`
+opens at the first level you hold, Manage before Open before View, as the
+home's first button does. A page serves only the levels it is declared with,
+so as a plugin's admin, `--print /` on the scaffold's Accounts page is refused
+at Manage; `--level open` asks at Open, and `--print /setup` reads its Manage
+page.
 
 When it is right, raise the version in `pyproject.toml` and release it:
 
@@ -384,7 +396,7 @@ binary per target (macOS and Linux, each on x86_64 and arm64), each with its
 published from a push to `main`. `plugin new`'s template is vendored from
 meridian-python's `template/` at a pinned commit (`make vendor-template`;
 `check-vendored-template` fails when it drifts), so a release carries the SDK
-version the new plugin pins: 0.9.0 from 0.1.20.
+version the new plugin pins: 0.10.0 from 0.1.21.
 
 ## Licence
 

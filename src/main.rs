@@ -47,7 +47,7 @@ meridian -- bringing a Meridian deployment up
   meridian plugin events --instance <id>
                              what happened to a live plugin: synced, restarted,
                              ready, crashed, refused, each with its revision
-  meridian plugin open --instance <id>
+  meridian plugin open --instance <id> [--level manage|open|view]
                              a link to a plugin's page that one browser opens once
   meridian connect [<address>]
                              sign in to a deployment's dashboard, and keep the session
@@ -131,6 +131,10 @@ asked wrongly, and 3 when there is no session or it has lapsed
       --follow              events: keep reporting them as they happen
       --print <path>        open: the page at that path on the plugin's host, as you
                             are served it, instead of a link
+      --level <level>       open: the level its session carries, as the dashboard's
+                            home offers them: manage (admin), open (write) or view
+                            (read). Without it, the first you hold: Manage, then
+                            Open, then View, as the home's first button opens
 
 down: nothing is asked, since saying down is the decision
       --release <name>      the Helm release (default: meridian)
@@ -172,10 +176,11 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 21] = [
+const TAKES_A_VALUE: [&str; 22] = [
     "--into",
     "--since",
     "--print",
+    "--level",
     "--host",
     "--to",
     "--deployment",
@@ -648,6 +653,27 @@ async fn live_command(arguments: &Arguments, words: &[&str]) -> i32 {
             return 2;
         }
     };
+    // Refused here rather than by the dashboard, so a misspelt level never
+    // opens the plugin at the default one instead.
+    let level = match arguments.value("--level", "--level") {
+        None => None,
+        Some(_) if verb != "open" => {
+            eprintln!(
+                "meridian plugin {verb}: --level is open's: the level a plugin's page is opened at"
+            );
+            return 2;
+        }
+        Some(named) => match live::Level::named(named) {
+            Some(level) => Some(level),
+            None => {
+                eprintln!(
+                    "meridian plugin open: `{named}` is not a level: {}",
+                    live::LEVELS
+                );
+                return 2;
+            }
+        },
+    };
     let deployment = live::Deployment {
         address: &held.address,
         session: &held.session,
@@ -670,8 +696,8 @@ async fn live_command(arguments: &Arguments, words: &[&str]) -> i32 {
             .await
         }
         ["open"] => match arguments.value("--print", "--print") {
-            Some(path) => printed(&deployment, instance, path, json).await,
-            None => opened(&deployment, instance, json).await,
+            Some(path) => printed(&deployment, instance, path, level, json).await,
+            None => opened(&deployment, instance, level, json).await,
         },
         _ => {
             eprintln!("meridian: plugin {verb} takes no words; --instance <id> names the instance\n\n{USAGE}");
@@ -933,35 +959,43 @@ async fn events(
 }
 
 /// `plugin open`: a link to the plugin's host that one browser opens, once
-/// (W6.15).
+/// (W6.15), at the level asked or the first the person holds (W6.9).
 async fn opened(
     deployment: &live::Deployment<'_>,
     instance: &str,
+    level: Option<live::Level>,
     json: bool,
 ) -> Result<(), live::Failed> {
-    let url = deployment.open(instance).await?;
+    let opened = deployment.open(instance, level).await?;
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "instance_id": instance, "url": url })
-        );
+        let mut said = serde_json::json!({ "instance_id": instance, "url": opened.url });
+        if let Some(level) = opened.level {
+            said["level"] = level.name().into();
+        }
+        println!("{said}");
     } else {
-        println!("{url}");
-        eprintln!("One browser may open it, within a minute; it signs that browser in to {instance}'s page alone.");
+        println!("{}", opened.url);
+        let at = opened
+            .level
+            .map(|level| format!(", at {}", level.said()))
+            .unwrap_or_default();
+        eprintln!("One browser may open it, within a minute; it signs that browser in to {instance}'s page alone{at}.");
     }
     Ok(())
 }
 
 /// `plugin open --print <path>`: the page as the person is served it
-/// (W6.15). The plugin's own error is printed, and is a failure.
+/// (W6.15), at the level asked or the first they hold (W6.9). The plugin's
+/// own error is printed, and is a failure.
 async fn printed(
     deployment: &live::Deployment<'_>,
     instance: &str,
     path: &str,
+    level: Option<live::Level>,
     json: bool,
 ) -> Result<(), live::Failed> {
     use std::io::Write as _;
-    let said = deployment.page(instance, path).await?;
+    let said = deployment.page(instance, path, level).await?;
     let status = said["status"].as_u64().unwrap_or(0);
     if json {
         println!("{said}");
@@ -975,8 +1009,9 @@ async fn printed(
         let _ = std::io::stdout().write_all(&bytes);
     }
     if !(200..300).contains(&status) {
-        return Err(live::Failed::Refused(format!(
-            "{instance} answered {status} for {path}"
+        let served = said["level"].as_str().and_then(live::Level::named);
+        return Err(live::Failed::Refused(live::page_failed(
+            instance, path, status, level, served,
         )));
     }
     Ok(())
@@ -1602,6 +1637,24 @@ mod tests {
         assert_eq!(check.value("--dir", "--dir"), Some("./p"));
         assert!(check.set("--run-tests") && check.set("--json"));
         assert!(parse(said("plugin check --run-test")).is_err());
+    }
+
+    #[test]
+    fn plugin_open_takes_the_level_its_session_carries() {
+        let open = parse(said(
+            "plugin open --instance ref --level manage --print /setup",
+        ))
+        .unwrap();
+        assert_eq!(open.words, ["open"]);
+        assert_eq!(open.value("--level", "--level"), Some("manage"));
+        assert_eq!(open.value("--print", "--print"), Some("/setup"));
+        assert_eq!(
+            parse(said("plugin open --instance ref --level=view"))
+                .unwrap()
+                .value("--level", "--level"),
+            Some("view")
+        );
+        assert!(parse(said("plugin open --instance ref --level")).is_err());
     }
 
     #[test]

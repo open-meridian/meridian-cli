@@ -6,16 +6,27 @@ and subscribe to comes from the roles `pyproject.toml` declares under
 `[tool.meridian]`, once a deployment admin approves them.
 
 - `src/reference_plugin/__main__.py` connects to the sidecar and serves the
-  page; `src/reference_plugin/page.py` is the page, built on the plugin UI
-  kit (below).
+  pages; `src/reference_plugin/page.py` declares them, each a view function
+  and a template under `templates/`, built on the plugin UI kit (below).
 - A save changes what the plugin does, never what it is allowed to do. Roles
   and dependencies take a new version, which a person approves.
-- Who may use it is not the plugin's to say. A person's access to a plugin is
-  `read` or `write`, granted in the deployment's access groups, the same for
-  every plugin; `meridian.Caller` tells the page what the person asking may
-  read (`caller.read`, `caller.may_read`) and write (`caller.write`,
-  `caller.may_write`). Declare no `tags`: a plugin has none, and
+- Who may use it is not the plugin's to say. A person holds `admin`, `read`
+  or `write` on a plugin, or `admin` and one of the others, granted in the
+  deployment's access groups, the same for every plugin, and opens it from
+  the dashboard's home by Manage (`admin`), Open (`write`) or View (`read`).
+  A session carries the one level chosen, and `request.caller` tells a view
+  that level (`caller.level`, `caller.admin`) and the accounts it reaches:
+  what the person may read (`caller.read`, `caller.may_read`) and write
+  (`caller.write`, `caller.may_write`), both under Open, read alone under
+  View, and none under Manage. Declare no `tags`: a plugin has none, and
   `meridian plugin upload` refuses a `pyproject.toml` that names them.
+- **Declare each page with the levels it serves**, where its view is:
+  `@pages.page(path, title, levels=[...])` for a tab, `@pages.route(path,
+  levels=[...])` for anything else. The dashboard shows a page under the
+  buttons of its levels, and the SDK refuses any other session before the
+  view runs. A page at `admin` configures the plugin and shows no account's
+  data -- nothing the plugin holds for an account, synced or not -- and
+  `PageClient.assert_no_account_data` in the tests holds it to that.
 
 This file is for any coding agent working on the plugin, and is committed with
 it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the
@@ -42,9 +53,10 @@ came in `meridian` 0.1.15; with an older one, the person runs
 - **`meridian plugin check --run-tests`** also runs the tests under `tests/`
   with pytest, in the plugin's `.venv` if it has one, otherwise with the
   `python3` on the PATH, which needs the plugin and pytest installed
-  (`pip install -e . pytest`). `tests/test_page.py` tests the page and the
-  operation it sends against a stand-in for the sidecar; replace its tests as
-  you replace the page, and add one for each page and each operation.
+  (`pip install -e . pytest`). `tests/test_page.py` asks the pages under
+  Manage, Open and View with `meridian.testing.PageClient`, and the operation
+  they send against a stand-in for the sidecar; replace its tests as you
+  replace the pages, and add one for each page and each operation.
 - The plugin's CI (`.github/workflows/check.yaml`) runs the same
   `meridian plugin check --run-tests` on every push.
 
@@ -58,15 +70,24 @@ Build every page with Open Meridian's plugin UI kit, and nothing else for its
 look. Then it looks like the rest of the platform, follows each person's
 colour scheme, light or dark, and their market-direction convention, and
 needs no design work. The kit is plain CSS and web components: it works from
-plain HTML, as `page.py` writes it, and from React, Vue or Svelte alike.
+plain HTML, as the templates write it, and from React, Vue or Svelte alike.
 
-**Link it**, in `<head>`, from the path the dashboard serves it at on this
-plugin's own host. The version is the one `page.py`'s `KIT` names:
-
-```html
-<link rel="stylesheet" href="/.meridian/ui/0.1.0/meridian.css">
-<script src="/.meridian/ui/0.1.0/meridian.js"></script>
-```
+**It is linked for you.** Each page's template, under `templates/`, is a
+Jinja2 template that extends the SDK's base template,
+`{% extends "meridian/base.html" %}`, which links the kit from the path the
+dashboard serves it at on this plugin's own host and draws the page's heading
+and tab row (the kit drops both when the dashboard frames the page and draws
+its own). A template fills three blocks: `content`, the page itself;
+`head_actions`, buttons marked `data-om-action="<id>"`, which the dashboard
+draws in its header; and `status`, an `<om-status data-om-header>` it draws
+beside the plugin's name. `pages.render("x.html", ...)` renders it, every
+value escaped, with `caller` and `level` (admin, write or read) in it; a
+template adapts by `{% if level == "write" %}`, and `{% include %}` and
+macros share pieces between pages. A form that posts puts `{{ csrf_input }}`
+inside it (a script sends `request.csrf_token` as `X-CSRF-Token`): every
+request but GET and HEAD without this plugin's token is refused before the
+view runs, so another site's page cannot act here as the person. A GET
+changes nothing.
 
 Never copy the kit into the plugin, and never load it, or anything else for
 the page, from another origin or a CDN.
@@ -84,7 +105,9 @@ the page, from another origin or a CDN.
 | Several views on one page, resizable and rearrangeable | `<om-panels layout-id="…">`, a `data-panel` child per view; each person's arrangement is remembered |
 | Everything else | The kit's classes: `.page`, `.page-head`, `.panel` and `.panel-body`, `.tiles`, `.tabs`, `.field`, `.filters`, `.notice`, `.badge`, `button.primary` and `.danger`, `table` and `.num`, `.empty-state` |
 
-Set a component's data (`columns`, `rows`, `series`) as properties, in a
+Give a component its data as JSON inside it, `<script
+type="application/json">{{ grid | tojson }}</script>`, which needs no script of the
+page's; or set it (`columns`, `rows`, `series`) as properties, in a
 `customElements.whenDefined(...)` callback. The kit's README
 (open-meridian/meridian-ui) documents every component, attribute and event.
 
@@ -111,9 +134,10 @@ Spacing, radii, shadows and type are the kit's too: `var(--space-1)` to
 `var(--mono)`.
 
 **No chrome, no theme code.** The dashboard frames the page and draws the
-plugin's name, the way back to the dashboard and the person. The page draws
-only its content, inside `<main class="page">`: no header bar, navigation,
-logo, sign-in or sign-out, and no light and dark switch. The kit applies the
+plugin's name, its tab row, the way back to the dashboard and the person. The
+page draws only its content, which the base template puts inside `<main
+class="page">`: no header bar, navigation, logo, sign-in or sign-out, and no
+light and dark switch. The kit applies the
 person's theme, which the frame hands it, with no code of the page's.
 
 **Money is exact.** Send prices and quantities to the page as decimal strings
@@ -125,47 +149,43 @@ page reaches only its own origin, the plugin's server, which proxies anything
 further; figures are strings, never floats.
 
 **Where the kit is not served.** Until every dashboard serves `/.meridian/ui/`,
-build pages that work without it, as `page.py` does: put a plain `<table>`
+build pages that work without it, as the templates do: put a plain `<table>`
 inside `<om-grid>` (a browser shows it as it is, and the kit's grid replaces
-it), set components' data only once they are defined, and make actions plain
+it), give components their data as JSON inside them, and make actions plain
 forms. Without the kit the page is unstyled, but everything on it works.
 
-A short page, whole:
+A short page, whole: the view, in `page.py`,
 
-```html
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Positions</title>
-  <link rel="stylesheet" href="/.meridian/ui/0.1.0/meridian.css">
-  <script src="/.meridian/ui/0.1.0/meridian.js"></script>
-</head>
-<body>
-  <main class="page">
-    <header class="page-head">
-      <div><h1>Positions</h1><p>Every account you may read here.</p></div>
-      <div class="actions"><om-live src="events" snapshot="positions.json" for="positions"></om-live></div>
-    </header>
-    <section class="panel">
-      <om-grid id="positions" row-key="position_id" high-rate sort="market_value:desc" caption="Positions">
-        <table><tr><th>Instrument</th><th>Quantity</th><th>Market value</th></tr></table>
-      </om-grid>
-    </section>
-  </main>
-  <script type="module">
-    customElements.whenDefined("om-grid").then(() => {
-      document.getElementById("positions").columns = [
-        { key: "symbol", label: "Instrument" },
-        { key: "quantity", label: "Quantity", type: "decimal", group: true },
-        { key: "market_value", label: "Market value", type: "decimal", group: true },
-        { key: "day_pnl", label: "Day P&L", type: "decimal", group: true, tone: "sign" },
-      ];
-    });
-  </script>
-</body>
-</html>
+```python
+COLUMNS = [
+    {"key": "symbol", "label": "Instrument"},
+    {"key": "quantity", "label": "Quantity", "type": "decimal", "group": True},
+    {"key": "market_value", "label": "Market value", "type": "decimal", "group": True},
+    {"key": "day_pnl", "label": "Day P&L", "type": "decimal", "group": True, "tone": "sign"},
+]
+
+
+@pages.page("/positions", "Positions", levels=["write", "read"])
+def positions(request: meridian.Request) -> str:
+    return pages.render("positions.html", grid={"columns": COLUMNS, "rows": []})
+```
+
+and its template, `templates/positions.html`:
+
+```html+jinja
+{% extends "meridian/base.html" %}
+{% block head_actions %}
+<om-live src="events" snapshot="positions.json" for="positions"></om-live>
+{% endblock %}
+{% block content %}
+<p class="muted">Every account you may read here.</p>
+<section class="panel">
+  <om-grid id="positions" row-key="position_id" high-rate sort="market_value:desc" caption="Positions">
+    <script type="application/json">{{ grid | tojson }}</script>
+    <table><tr><th>Instrument</th><th>Quantity</th><th>Market value</th></tr></table>
+  </om-grid>
+</section>
+{% endblock %}
 ```
 
 The plugin's server answers `positions.json` with `{ "sequence": "41", "rows":

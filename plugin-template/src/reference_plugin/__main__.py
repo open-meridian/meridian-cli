@@ -1,9 +1,9 @@
 """A Meridian plugin, as `meridian plugin new` writes one.
 
-It connects to the sidecar it is launched beside, says who it was launched as
-and what the deployment lets it do, serves a page people reach through the
-dashboard (page.py), reports itself healthy, and runs until it is stopped.
-Heartbeats are sent for it.
+It connects to the sidecar it is launched beside, declaring its pages, says
+who it was launched as and what the deployment lets it do, serves the pages
+people reach through the dashboard (page.py), reports itself healthy, and runs
+until it is stopped. Heartbeats are sent for it.
 
 Everything a plugin does goes through that sidecar. It holds no credential,
 knows no other address, and cannot choose its own identity or grants: those
@@ -19,7 +19,7 @@ import signal
 
 import meridian
 
-from .page import TITLE, serve
+from .page import TITLE, pages
 
 log = logging.getLogger("reference_plugin")
 
@@ -33,11 +33,12 @@ async def run() -> None:
     for stop in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(stop, stopped.set)
 
-    # Where the page listens, on loopback beside the sidecar, which forwards
-    # people's requests to it.
+    # Where the pages listen, on loopback beside the sidecar, which forwards
+    # people's requests to them. Each page is declared with the levels it
+    # serves, and the dashboard shows it under those buttons.
     port = int(os.environ.get("REFERENCE_PAGE_PORT", "8000"))
     async with await meridian.connect(
-        interface=meridian.Interface(port=port, title=TITLE)
+        interface=meridian.Interface(port=port, title=TITLE, pages=pages)
     ) as plugin:
         log.info(
             "registered as %s, roles %s",
@@ -49,12 +50,12 @@ async def run() -> None:
             ", ".join(plugin.grants.publish) or "nothing",
             ", ".join(plugin.grants.subscribe) or "nothing",
         )
-        page = serve(plugin, loop, port)
-        log.info("serving its page on 127.0.0.1:%d", port)
+        served = pages.serve(plugin, port)
+        log.info("serving its pages on 127.0.0.1:%d", port)
         await plugin.report(healthy=True, detail="started")
         await stopped.wait()
         log.info("stopping")
-        page.shutdown()
+        served.shutdown()
 
 
 def main() -> None:

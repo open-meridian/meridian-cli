@@ -175,34 +175,149 @@ impl Deployment<'_> {
         .await
     }
 
-    /// W6.15: a link to the plugin's host that one browser opens, once.
-    pub async fn open(&self, instance: &str) -> Result<String, Failed> {
+    /// W6.15: a link to the plugin's host that one browser opens, once, at
+    /// the level named, or with none named at the first the person holds.
+    pub async fn open(&self, instance: &str, level: Option<Level>) -> Result<Opened, Failed> {
         let said = self
             .call(
                 reqwest::Method::POST,
-                &format!("/terminal/plugins/{instance}/open"),
+                &format!(
+                    "/terminal/plugins/{instance}/open{}",
+                    level_query('?', level)
+                ),
                 None,
             )
             .await?;
-        said["url"]
+        let url = said["url"]
             .as_str()
             .map(String::from)
-            .ok_or_else(|| Failed::Refused(format!("no link came back: {said}")))
+            .ok_or_else(|| Failed::Refused(format!("no link came back: {said}")))?;
+        Ok(Opened {
+            url,
+            level: said["level"].as_str().and_then(Level::named),
+        })
     }
 
     /// W6.15: the page at a path on the plugin's host, as the person is
-    /// served it.
-    pub async fn page(&self, instance: &str, path: &str) -> Result<serde_json::Value, Failed> {
+    /// served it at the level named, or with none named at the first they
+    /// hold.
+    pub async fn page(
+        &self,
+        instance: &str,
+        path: &str,
+        level: Option<Level>,
+    ) -> Result<serde_json::Value, Failed> {
         self.call(
             reqwest::Method::GET,
             &format!(
-                "/terminal/plugins/{instance}/page?path={}",
-                query_escaped(path)
+                "/terminal/plugins/{instance}/page?path={}{}",
+                query_escaped(path),
+                level_query('&', level)
             ),
             None,
         )
         .await
     }
+}
+
+/// A link to a plugin's host, and the level the dashboard opened it at:
+/// None from a dashboard older than levels, which names none.
+pub struct Opened {
+    pub url: String,
+    pub level: Option<Level>,
+}
+
+/// The level a session on a plugin is opened at (W6.9): the dashboard's home
+/// offers a button per level a person holds, Manage for `admin`, Open for
+/// `write` and View for `read`, and a session carries the one chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Level {
+    Manage,
+    Open,
+    View,
+}
+
+/// What `--level` takes, said when it is given anything else.
+pub const LEVELS: &str = "manage, open or view: the dashboard's buttons, Manage for admin, \
+    Open for write and View for read (admin, write and read are taken too)";
+
+impl Level {
+    /// A level by its button's name or its own, in any case, as the
+    /// dashboard reads one; None for anything else.
+    pub fn named(named: &str) -> Option<Level> {
+        match named.trim().to_ascii_lowercase().as_str() {
+            "manage" | "admin" => Some(Level::Manage),
+            "open" | "write" => Some(Level::Open),
+            "view" | "read" => Some(Level::View),
+            _ => None,
+        }
+    }
+
+    /// As it travels to the dashboard: `admin`, `write` or `read`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Level::Manage => "admin",
+            Level::Open => "write",
+            Level::View => "read",
+        }
+    }
+
+    /// As `--level` is written: `manage`, `open` or `view`.
+    pub fn word(self) -> &'static str {
+        match self {
+            Level::Manage => "manage",
+            Level::Open => "open",
+            Level::View => "view",
+        }
+    }
+
+    /// As a person reads it: the button, and the level it opens.
+    pub fn said(self) -> String {
+        let button = match self {
+            Level::Manage => "Manage",
+            Level::Open => "Open",
+            Level::View => "View",
+        };
+        format!("{button} ({})", self.name())
+    }
+}
+
+/// What `open --print` says when the plugin answers with an error: the
+/// level it was asked at, when the dashboard names it, and, for a refusal at
+/// the level the dashboard chose, how to ask at another. A page serves only
+/// the levels it is declared with, so the first level held, Manage for a
+/// plugin's admin, may well be refused a page at `write` and `read`.
+pub fn page_failed(
+    instance: &str,
+    path: &str,
+    status: u64,
+    asked: Option<Level>,
+    served: Option<Level>,
+) -> String {
+    let mut said = format!("{instance} answered {status} for {path}");
+    let Some(served) = served else {
+        return said;
+    };
+    said.push_str(&format!(" at {}", served.said()));
+    if status == 403 && asked.is_none() {
+        let others: Vec<String> = [Level::Manage, Level::Open, Level::View]
+            .into_iter()
+            .filter(|other| *other != served)
+            .map(|other| format!("`--level {}`", other.word()))
+            .collect();
+        said.push_str(&format!(
+            ", the first level you hold; a page serves only the levels it is declared \
+             with, and {} asks at another",
+            others.join(" or ")
+        ));
+    }
+    said
+}
+
+fn level_query(joined: char, level: Option<Level>) -> String {
+    level
+        .map(|level| format!("{joined}level={}", level.name()))
+        .unwrap_or_default()
 }
 
 fn since_query(since: Option<u64>) -> String {

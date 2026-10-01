@@ -1,0 +1,32 @@
+{% extends "meridian/base.html" %}
+{% block head_actions %}
+{# Only a session opened by Open writes; framed, the dashboard draws the button. #}
+{% if level == "write" %}
+<form class="inline" method="post" action="/statement">{{ csrf_input }}<button class="primary" data-om-action="open-statement">Open an empty statement for me</button></form>
+{% endif %}
+{% endblock %}
+{% block content %}
+<p class="muted">Signed in as <strong>{{ caller.display_name }}</strong>.</p>
+{% if notice %}
+<div class="notice {{ tone }}" role="status">{{ notice }}</div>
+{% endif %}
+<section class="panel">
+  <div class="panel-body">
+    <h2>What you may see here</h2>
+    <p class="muted">The accounts you may read here, and those you may write.</p>
+  </div>
+  <om-grid id="access" row-key="account" caption="What you may see here" empty="Nothing is granted to you here.">
+    <script type="application/json">{{ {"columns": columns, "rows": rows} | tojson }}</script>
+    <table>
+      <thead><tr><th>Account</th><th>You may</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr><td><code>{{ row.account }}</code></td><td>{{ row.may }}</td></tr>
+      {% else %}
+        <tr><td colspan="2">Nothing is granted to you here.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </om-grid>
+</section>
+{% endblock %}

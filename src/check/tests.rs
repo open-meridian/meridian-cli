@@ -90,6 +90,11 @@ fn page_py() -> String {
     format!("src/{MODULE}/page.py")
 }
 
+/// One of the pages' Jinja2 templates, which `pages.render` renders.
+fn template(name: &str) -> String {
+    format!("src/{MODULE}/templates/{name}")
+}
+
 #[test]
 fn a_freshly_scaffolded_plugin_breaks_no_rule() {
     let plugin = Scaffolded::new("fresh");
@@ -140,10 +145,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.9.0", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.10.0", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.9.0",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.10.0",
         ),
         (
             "tool-meridian",
@@ -190,11 +195,11 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
             "no-raw-colour",
             |p| {
                 let line = p.add_after(
-                    &page_py(),
-                    "\"</header>\"",
-                    "        '<p style=\"color: #c0ffee\">'",
+                    &template("setup.html"),
+                    "{% block content %}",
+                    "<p style=\"color: #c0ffee\">",
                 );
-                (page_py(), line)
+                (template("setup.html"), line)
             },
             "`#c0ffee` is a raw colour, which no scheme can change",
         ),
@@ -202,11 +207,11 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
             "own-origin",
             |p| {
                 let line = p.add_after(
-                    &page_py(),
-                    "f'<script src=\"{KIT}meridian.js\"></script>'",
-                    "        '<script src=\"https://cdn.example.com/chart.js\"></script>'",
+                    &template("accounts.html"),
+                    "{% block content %}",
+                    "<script src=\"https://cdn.example.com/chart.js\"></script>",
                 );
-                (page_py(), line)
+                (template("accounts.html"), line)
             },
             "`https://cdn.example.com/chart.js` is loaded from another origin",
         ),
@@ -232,7 +237,7 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
                 );
                 let line = p.add_after(
                     &main_py(),
-                    "        page = serve(plugin, loop, port)",
+                    "        served = pages.serve(plugin, port)",
                     "        async for held in plugin.settings():\n            log.info(\n                \"using %s\",\n                held.values[API_KEY],\n            )",
                 );
                 (main_py(), line + 3)
@@ -471,7 +476,7 @@ DECLARED = (
     // Its value, in a page or an exception, is.
     let page = plugin.add_after(
         &page_py(),
-        "def render(",
+        "def setup(",
         "    shown = f\"<p>{settings.values['broker_secret']}</p>\"",
     );
     let raised = plugin.add_after(

@@ -18,7 +18,7 @@ mod tests;
 
 /// The template, file by file, as it sits in `plugin-template/`. A test fails
 /// if a file there is missing from this list, so a new one cannot be dropped.
-const TEMPLATE: [(&str, &str); 13] = [
+const TEMPLATE: [(&str, &str); 15] = [
     ("AGENTS.md", include_str!("../plugin-template/AGENTS.md")),
     (
         ".claude/skills/develop-live/SKILL.md",
@@ -47,6 +47,14 @@ const TEMPLATE: [(&str, &str); 13] = [
     (
         "src/reference_plugin/page.py",
         include_str!("../plugin-template/src/reference_plugin/page.py"),
+    ),
+    (
+        "src/reference_plugin/templates/accounts.html",
+        include_str!("../plugin-template/src/reference_plugin/templates/accounts.html"),
+    ),
+    (
+        "src/reference_plugin/templates/setup.html",
+        include_str!("../plugin-template/src/reference_plugin/templates/setup.html"),
     ),
     (
         "tests/test_page.py",

@@ -1,0 +1,19 @@
+{% extends "meridian/base.html" %}
+{% block status %}
+<om-status data-om-header state="ok" label="Registered">Registered.</om-status>
+{% endblock %}
+{% block content %}
+<p class="muted">Signed in as <strong>{{ caller.display_name }}</strong>, to manage this plugin: its setup, and no account's data.</p>
+<section class="panel">
+  <div class="panel-body">
+    <h2>What this plugin is</h2>
+    <p class="muted">As the deployment launched it. What it may do comes from its roles, never from its code.</p>
+    <dl>
+      <dt>Instance</dt><dd><code>{{ instance }}</code></dd>
+      <dt>Roles</dt><dd>{{ roles | join(", ") or "none" }}</dd>
+      <dt>May publish</dt><dd>{{ publish | join(", ") or "nothing" }}</dd>
+      <dt>May subscribe</dt><dd>{{ subscribe | join(", ") or "nothing" }}</dd>
+    </dl>
+  </div>
+</section>
+{% endblock %}

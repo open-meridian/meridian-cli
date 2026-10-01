@@ -1,178 +1,99 @@
-"""The plugin's page, as people see it through the deployment's dashboard.
+"""The plugin's pages, as people see them through the deployment's dashboard.
 
-Served on loopback, where only this plugin's sidecar reaches it: the sidecar
-verified who is asking before forwarding the request, and says so in one
-`Meridian-Caller` header, which `meridian.Caller` reads. Nothing here checks a
-signature, holds a key or keeps a session -- that is the point.
+Each page is a view function and a template. `pages` declares each where its
+view is, with the levels it serves -- the dashboard's home opens a session by
+Manage at `admin`, by Open at `write`, by View at `read` -- sends the list
+when the plugin registers, and answers 403 to a session at any other level
+before the view runs. So a page is declared, checked and rendered in one
+place, and the dashboard's tab row and the plugin agree by construction.
 
-It shows who is asking and the accounts they may read or write through this
-plugin -- a person's access to a plugin is read or write, the same for every
-plugin, and a plugin names no parts of itself -- and offers one action that
-writes for them: opening an empty holdings
-statement, sent with `acting_for` so the sidecar decides whether they may.
-Replace it with your plugin's own pages; keep reading the caller the same way.
+- Setup (/setup), at `admin`: what this plugin is and what the deployment
+  lets it do. Manage configures a plugin and sees no account's data, so this
+  page shows none; `meridian.testing` holds it to that (tests/test_page.py).
+- Accounts (/), at `write` and `read`: the accounts the person may read here,
+  and under Open one action that writes for them, opening an empty holdings
+  statement (/statement, at `write` alone), sent with `acting_for` so the
+  sidecar decides whether they may.
 
-Built on the kit (AGENTS.md says how): the dashboard serves Open Meridian's UI
-kit at /.meridian/ui/<version>/ on this plugin's own host, and the page links
-its stylesheet and script, uses its classes and its components, and writes no
-colour and no theme code of its own. The dashboard's frame draws the plugin's
-name and the person; the page draws only its content.
+Replace them with your plugin's own pages; keep declaring them this way.
 
-Where the kit is not served (a dashboard that does not serve it yet, or the
-page opened some other way) the page still works, unstyled: the table is in
-the HTML inside <om-grid>, which a browser shows as it is until the kit's grid
-replaces it; the grid's data sits beside it as JSON, read only once the grid
-is defined; and the action is a plain form. Nothing waits on the kit.
+A request reaches a view only through this plugin's sidecar, which verified
+who is asking and says so in one `Meridian-Caller` header: `request.caller`,
+with the level the session was opened at and the accounts cut to it. Nothing
+here checks a signature, holds a key or keeps a session -- that is the point.
 
-The standard library's server, so the plugin needs nothing its base image
-does not already have. A framework on ASGI can use `meridian.CallerMiddleware`
-instead.
+`pages.render` renders a Jinja2 template under templates/, every value
+escaped, with `caller` and `level` in it. Each extends the kit's base
+template, `meridian/base.html` (AGENTS.md says how): the kit the dashboard
+serves on this plugin's own host, and the page's heading and tab row, which
+the kit drops when the dashboard frames the page and draws its own. A page's
+`status` and `head_actions` blocks hand the frame its status dot and its
+buttons. The page draws only its content, and no colour of its own. Where
+the kit is not served, it still works, unstyled: the table is inside
+<om-grid> as plain HTML, and the action is a plain form.
 """
 
 from __future__ import annotations
 
-import asyncio
-import html
-import http.server
-import json
-import threading
 import time
 import uuid
-from typing import Any
+from pathlib import Path
 
 import meridian
 
 TITLE = "Reference plugin"
 
-# The kit's version this page was built against. The dashboard serves the
-# deployment's; pinning one keeps the page as it was built.
-KIT = "/.meridian/ui/0.1.0/"
+pages = meridian.Pages(TITLE, templates=Path(__file__).parent / "templates")
 
-# The grid's columns and rows, set by the page's script once the kit has
-# defined the grid. Without the kit it never is, and the table stays.
-_GRID = """
-customElements.whenDefined("om-grid").then(() => {
-  const grid = document.getElementById("access");
-  grid.columns = [
-    { key: "account", label: "Account", type: "code" },
-    { key: "may", label: "You may" },
-  ];
-  grid.setRows(JSON.parse(document.getElementById("access-rows").textContent));
-});
-"""
+# The grid's columns; its rows are the person's accounts.
+COLUMNS = [
+    {"key": "account", "label": "Account", "type": "code"},
+    {"key": "may", "label": "You may"},
+]
 
 
-def _script_json(value: object) -> str:
-    """JSON safe inside a <script> element: nothing in it can close the element."""
-    text = json.dumps(value)
-    return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+@pages.page("/setup", "Setup", levels="admin")
+def setup(request: meridian.Request) -> str:
+    identity, grants = request.plugin.identity, request.plugin.grants
+    return pages.render(
+        "setup.html",
+        instance=identity.instance_id,
+        roles=identity.roles,
+        publish=grants.publish,
+        subscribe=grants.subscribe,
+    )
 
 
-def render(caller: meridian.Caller, notice: str = "", refused: bool = False) -> str:
-    # Every account the person may read, and whether they may write it too:
-    # write includes read, so the read set holds them all.
+@pages.page("/", "Accounts", levels=["write", "read"])
+def accounts(request: meridian.Request) -> str:
+    return _accounts(request)
+
+
+@pages.route("/statement", levels="write", methods=["POST"])
+async def statement(request: meridian.Request) -> str:
+    # Sent for the person: the sidecar admits it only in a session opened by
+    # Open, for an account they may write, and records it as theirs.
+    try:
+        opened = await request.plugin.record_holdings_statement(
+            source="reference",
+            external_statement_id=f"reference-{uuid.uuid4()}",
+            as_of_date=time.strftime("%Y-%m-%d", time.gmtime()),
+            read_at_ns=time.time_ns(),
+            expected_rows=0,
+            acting_for=request.caller.header,
+        )
+    except meridian.MeridianError as refused:
+        return _accounts(request, f"Refused: {refused}", "bad")
+    return _accounts(request, f"Opened statement {opened.statement_id} for you.", "good")
+
+
+def _accounts(request: meridian.Request, notice: str = "", tone: str = "good") -> str:
+    """Every account the person may read, and whether they may write it too:
+    write includes read, so the read set holds them all. The template offers
+    the action only under Open, whose session is the one that may write."""
+    caller = request.caller
     rows = [
         {"account": account, "may": "read and write" if caller.may_write(account) else "read"}
         for account in sorted(caller.read | caller.write)
     ]
-    cells = [[html.escape(row[k]) for k in ("account", "may")] for row in rows]
-    fallback = "".join(
-        f"<tr><td><code>{account}</code></td><td>{may}</td></tr>" for account, may in cells
-    )
-    if not fallback:
-        fallback = '<tr><td colspan="2">Nothing is granted to you here.</td></tr>'
-    said = (
-        f'<div class="notice {"bad" if refused else "good"}" role="status">'
-        f"{html.escape(notice)}</div>"
-        if notice
-        else ""
-    )
-    return (
-        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>{TITLE}</title>"
-        f'<link rel="stylesheet" href="{KIT}meridian.css">'
-        f'<script src="{KIT}meridian.js"></script>'
-        "</head><body>"
-        '<main class="page">'
-        '<header class="page-head"><div>'
-        f"<h1>{TITLE}</h1>"
-        f"<p>Signed in as <strong>{html.escape(caller.display_name)}</strong>.</p>"
-        "</div>"
-        '<div class="actions"><form class="inline" method="post" action="/statement">'
-        '<button class="primary">Open an empty statement for me</button></form></div>'
-        "</header>"
-        f"{said}"
-        '<section class="panel">'
-        '<div class="panel-body"><h2>What you may see here</h2>'
-        '<p class="muted">The accounts you may read here, and those you may write.</p>'
-        "</div>"
-        '<om-grid id="access" row-key="account" caption="What you may see here"'
-        ' empty="Nothing is granted to you here.">'
-        "<table><thead><tr><th>Account</th><th>You may</th></tr></thead>"
-        f"<tbody>{fallback}</tbody></table>"
-        "</om-grid>"
-        f'<script type="application/json" id="access-rows">{_script_json(rows)}</script>'
-        "</section>"
-        "</main>"
-        f'<script type="module">{_GRID}</script>'
-        "</body></html>"
-    )
-
-
-def serve(plugin: meridian.Plugin, loop: asyncio.AbstractEventLoop, port: int) -> Any:
-    """Start the page on 127.0.0.1:`port`, in a thread; the returned server's
-    `shutdown()` stops it. Operations run on `loop`, where the plugin lives."""
-
-    class Page(http.server.BaseHTTPRequestHandler):
-        def _caller(self) -> meridian.Caller | None:
-            presented = self.headers.get_all("Meridian-Caller") or []
-            if len(presented) != 1:
-                self._send(401, "Open this page from the dashboard.", "text/plain")
-                return None
-            return meridian.Caller.from_header(presented[0])
-
-        def _send(self, status: int, body: str, kind: str = "text/html") -> None:
-            data = body.encode()
-            self.send_response(status)
-            self.send_header("Content-Type", f"{kind}; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-        def do_GET(self) -> None:  # noqa: N802 - the server's name
-            caller = self._caller()
-            if caller is not None:
-                self._send(200, render(caller))
-
-        def do_POST(self) -> None:  # noqa: N802
-            caller = self._caller()
-            if caller is None:
-                return
-            self.rfile.read(int(self.headers.get("Content-Length") or 0))
-            if self.path != "/statement":
-                self._send(404, "No such action.", "text/plain")
-                return
-            # Sent for the person: the sidecar admits it only if they may
-            # write through this plugin, and the store records it as theirs.
-            opening = plugin.record_holdings_statement(
-                source="reference",
-                external_statement_id=f"reference-{uuid.uuid4()}",
-                as_of_date=time.strftime("%Y-%m-%d", time.gmtime()),
-                read_at_ns=time.time_ns(),
-                expected_rows=0,
-                acting_for=caller.header,
-            )
-            try:
-                opened = asyncio.run_coroutine_threadsafe(opening, loop).result(timeout=15)
-                said = f"Opened statement {opened.statement_id} for you."
-                self._send(200, render(caller, said))
-            except meridian.MeridianError as refused:
-                self._send(200, render(caller, f"Refused: {refused}", refused=True))
-
-        def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
-            pass
-
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Page)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
+    return pages.render("accounts.html", notice=notice, tone=tone, columns=COLUMNS, rows=rows)
