@@ -341,15 +341,17 @@ pub fn query_escaped(value: &str) -> String {
 
 // ── The directory ────────────────────────────────────────────────────────
 
-/// What is never sent: what a build leaves behind, what a checkout keeps, and
-/// what the plugin's own `.dockerignore` keeps out of its image.
+/// What is never sent: what a build leaves behind, what a checkout keeps, the
+/// runtime's plugin harness the plugin's e2e copies into `.e2e` (core's code,
+/// not the plugin's), and what the plugin's own `.dockerignore` keeps out of
+/// its image.
 pub struct Ignored {
     names: Vec<String>,
     suffixes: Vec<String>,
     paths: Vec<String>,
 }
 
-const NEVER: [&str; 11] = [
+const NEVER: [&str; 12] = [
     ".git",
     "__pycache__",
     ".venv",
@@ -361,6 +363,7 @@ const NEVER: [&str; 11] = [
     "dist",
     ".meridian",
     ".DS_Store",
+    ".e2e",
 ];
 
 impl Ignored {

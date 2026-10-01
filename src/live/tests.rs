@@ -45,6 +45,24 @@ fn what_a_build_leaves_and_what_dockerignore_names_is_never_sent() {
 }
 
 #[test]
+fn the_harness_the_plugins_e2e_copies_into_dot_e2e_is_never_sent() {
+    let dir = scratch("e2e");
+    write(&dir, "pyproject.toml", "[project]\n");
+    write(&dir, "src/pkg/page.py", "TITLE = 'one'\n");
+    write(&dir, ".e2e/harness/harness.py", "import os\n");
+    write(&dir, ".e2e/harness/README.md", "core's harness\n");
+    // Without a .dockerignore naming it: the fixed list holds it.
+    assert!(!dir.join(".dockerignore").exists());
+
+    let sent = scan(&dir, &Ignored::of(&dir));
+    assert_eq!(
+        sent.keys().collect::<Vec<_>>(),
+        ["pyproject.toml", "src/pkg/page.py"]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_change_is_the_files_that_differ_and_the_ones_gone() {
     let dir = scratch("change");
     write(&dir, "pyproject.toml", "[project]\n");

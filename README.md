@@ -6,7 +6,7 @@ works with one that is already running. The whole install, step by step, is
 meridian-core's [INSTALL.md](https://github.com/open-meridian/meridian-core/blob/main/INSTALL.md),
 and every command and flag is in the
 [command line reference](https://open-meridian.dev/api/cli/). This is release
-0.1.23.
+0.1.24.
 
 ```
 meridian doctor              # can this machine and this cluster run a deployment?
@@ -335,7 +335,8 @@ r2 crashed, exit 1
 
 Leave it running. Ctrl-C stops watching, and the instance runs on. Run it
 again to pick up where it was. What it never sends: `.git`, `__pycache__`,
-virtual environments, `build`, `dist`, `*.egg-info`, and whatever the plugin's
+virtual environments, `build`, `dist`, `*.egg-info`, `.e2e` (where the
+plugin's e2e copies the runtime's harness), and whatever the plugin's
 `.dockerignore` names. A change to the plugin's dependencies needs a new
 version: the live code runs on the image it was launched from.
 
@@ -396,7 +397,7 @@ binary per target (macOS and Linux, each on x86_64 and arm64), each with its
 published from a push to `main`. `plugin new`'s template is vendored from
 meridian-python's `template/` at a pinned commit (`make vendor-template`;
 `check-vendored-template` fails when it drifts), so a release carries the SDK
-version the new plugin pins: 0.11.0 from 0.1.23.
+version the new plugin pins: 0.12.0 from 0.1.24.
 
 ## Licence
 

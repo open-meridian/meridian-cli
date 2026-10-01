@@ -35,6 +35,12 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   [meridian.Figure("Connections", 3, state="warn", why="...")]`, sent on its
   heartbeat). Build no summary page or tiles of your own; report figures
   only where the plugin has work worth counting.
+- **Hear what the plugin's roles hear with `plugin.receive`**, a handler per
+  row (`custodial_position_updated=...`), and keep nothing of it: the SDK
+  reads the store on every start and after any gap, loss or broken stream,
+  handing what it read on as `heard.caught_up`. A handler sees each change
+  once, in order, and no store number. Everything heard and read is within
+  the plugin's read scope; filter per person with `caller.read` as before.
 
 This file is for any coding agent working on the plugin, and is committed with
 it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the
