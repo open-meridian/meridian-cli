@@ -97,8 +97,10 @@ impl Report {
 }
 
 /// Never read: what a checkout, a build, a virtual environment or an agent
-/// leaves beside the plugin, none of which is the plugin.
-pub(crate) const NOT_THE_PLUGIN: [&str; 18] = [
+/// leaves beside the plugin, none of which is the plugin. `.e2e` is where the
+/// plugin's e2e copies the runtime's plugin harness: core's code, not the
+/// plugin's, and it reads its own environment.
+pub(crate) const NOT_THE_PLUGIN: [&str; 19] = [
     ".git",
     ".venv",
     "venv",
@@ -117,6 +119,7 @@ pub(crate) const NOT_THE_PLUGIN: [&str; 18] = [
     ".idea",
     ".vscode",
     ".sdk-scratch",
+    ".e2e",
 ];
 
 /// Read as text: what a page, its code or its declarations are written in.

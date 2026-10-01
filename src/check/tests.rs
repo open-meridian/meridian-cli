@@ -128,6 +128,29 @@ fn a_freshly_scaffolded_plugin_with_a_test_keeps_every_rule() {
     );
 }
 
+#[test]
+fn the_runtimes_harness_copied_for_e2e_is_not_the_plugin() {
+    let plugin = Scaffolded::new("e2e-harness");
+    // What core's plugin harness reads, copied where its README and the docs
+    // tell an author to copy it.
+    let harness = r#"import os
+
+DASHBOARD = os.environ.get("MERIDIAN_HARNESS_DASHBOARD", "http://dashboard:8080")
+"#;
+    plugin.write(".e2e/harness/harness.py", harness);
+    let report = plugin.check();
+    assert_eq!(
+        failed_rules(&report),
+        Vec::<&str>::new(),
+        "{}",
+        text(&report)
+    );
+
+    // The same file anywhere else is the plugin's, and still checked.
+    plugin.write("e2e/harness/harness.py", harness);
+    assert_eq!(failed_rules(&plugin.check()), vec!["settings-declared"]);
+}
+
 /// One way to break each rule, on a plugin that otherwise keeps them all:
 /// the rule, the file and line it must be found at, and what it must say.
 #[test]
