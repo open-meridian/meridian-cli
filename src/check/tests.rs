@@ -145,10 +145,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.10.1", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.11.0", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.10.1",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.11.0",
         ),
         (
             "tool-meridian",

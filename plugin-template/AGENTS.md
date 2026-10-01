@@ -30,6 +30,11 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   `PageClient.assert_no_account_data`, given that data, holds it to that in
   the tests. An account's identity (its name, custodian, type, owner, note)
   is not its data: a Manage page may list every account as a link target.
+- Manage opens on the plugin's Summary, which core draws: its status, then
+  any figures the plugin reports about its own work (`plugin.figures =
+  [meridian.Figure("Connections", 3, state="warn", why="...")]`, sent on its
+  heartbeat). Build no summary page or tiles of your own; report figures
+  only where the plugin has work worth counting.
 
 This file is for any coding agent working on the plugin, and is committed with
 it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the
