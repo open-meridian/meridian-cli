@@ -259,10 +259,18 @@ meridian connect
 ```
 
 Signs in to the deployment in your browser, however it signs people in, and
-keeps a session here: 30 minutes idle, 12 hours at most. It never takes a
-password. `meridian sign-out` ends it, here and at the deployment.
+asks you to let this computer act as you: a delegation, for up to 90 days,
+listed on the dashboard under Connected clients, where you or a deployment
+admin can revoke it. This computer keeps a ten-minute access token and a
+single-use refresh token, and refreshes by itself, so nothing asks for a
+browser again until the delegation lapses; you are told a week before. It
+never takes a password. `meridian sign-out` revokes it, here and at the
+deployment.
 
-On that session, as the deployment's administrator:
+A session kept by an earlier meridian still works until it lapses, at most
+12 hours; then `meridian connect` again.
+
+On that delegation, as the deployment's administrator:
 
 ```
 meridian plugin new my-plugin            # ./my-plugin, from the SDK's reference plugin

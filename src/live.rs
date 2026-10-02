@@ -1,9 +1,10 @@
 //! The live loop from this side: `plugin dev`, `logs`, `events` and `open`
 //! (spec/live-plugin-development, requirements 10 to 14; W8.5, W8.6, W6.15).
 //!
-//! Everything goes to the dashboard on the person's terminal session, as the
-//! catalogue commands do, and the dashboard relays it to the instance's
-//! sidecar. Nothing here holds a credential for the cluster.
+//! Everything goes to the dashboard on the person's delegation to this
+//! computer ([`crate::credential`]), as the catalogue commands do, and the
+//! dashboard relays it to the instance's sidecar. Nothing here holds a
+//! credential for the cluster.
 //!
 //! A directory is watched by scanning it: a plugin's source is a handful of
 //! files, so reading their modification times four times a second costs
@@ -54,10 +55,10 @@ impl From<String> for Failed {
     }
 }
 
-/// A connected deployment: its address and the terminal session held for it.
+/// A connected deployment: its address and the credential held for it.
 pub struct Deployment<'a> {
     pub address: &'a str,
-    pub session: &'a str,
+    pub session: &'a crate::credential::Credential,
 }
 
 fn client() -> Result<reqwest::Client, Failed> {
@@ -72,10 +73,12 @@ fn client() -> Result<reqwest::Client, Failed> {
 /// What a refusal said, and which kind it is.
 ///
 /// The dashboard answers any `/terminal/` path, its registry's included,
-/// with 401 and `{"error":"invalid_token","reason":…}` when it holds no such
-/// session: lapsed, ended, or unknown to it, as after it restarted. Each is
-/// the same fix, signing in again, so each is said as the session, with the
-/// command that does it.
+/// with 401 and `{"error":"invalid_token","reason":…}` when it does not take
+/// the credential: a delegation revoked, lapsed or wanting a fresh sign-in,
+/// or an older CLI's terminal session lapsed or ended. Each is the same fix,
+/// connecting again, so each is said as the session, with the command that
+/// does it. An access token that merely expired never reaches here: it is
+/// refreshed and the request sent again ([`crate::credential::Credential::send`]).
 pub fn refusal(address: &str, status: reqwest::StatusCode, body: &str) -> Failed {
     if let Some(refused) = crate::release::version_refused(status, body) {
         return Failed::Refused(refused);
@@ -83,8 +86,12 @@ pub fn refusal(address: &str, status: reqwest::StatusCode, body: &str) -> Failed
     let said = serde_json::from_str::<serde_json::Value>(body).ok();
     if status == reqwest::StatusCode::UNAUTHORIZED {
         let why = match said.as_ref().and_then(|v| v["reason"].as_str()) {
-            Some("lapsed") => format!("your session with {address} lapsed"),
+            Some("lapsed") => format!("your connection to {address} lapsed"),
             Some("ended") => format!("your session with {address} was ended"),
+            Some("revoked") => format!("your delegation to this computer at {address} was revoked"),
+            Some("groups") => {
+                format!("{address} needs you to sign in again before this computer acts for you")
+            }
             Some("unknown") => {
                 format!("{address} does not know your session; it may have restarted")
             }
@@ -108,19 +115,21 @@ impl Deployment<'_> {
         path: &str,
         body: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, Failed> {
-        let mut asked = client()?
-            .request(method, format!("{}{path}", self.address))
-            .bearer_auth(self.session);
-        if let Some(body) = body {
-            asked = asked
-                .header("content-type", "application/json")
-                .body(body.to_string());
-        }
-        let answer = asked.send().await.map_err(|failed| {
-            Failed::Refused(format!("could not reach {}: {failed}", self.address))
-        })?;
-        let status = answer.status();
-        let text = answer.text().await.unwrap_or_default();
+        let http = client()?;
+        let url = format!("{}{path}", self.address);
+        let body = body.map(|body| body.to_string());
+        let (status, text, _) = self
+            .session
+            .send(|bearer| {
+                let asked = http.request(method.clone(), &url).bearer_auth(bearer);
+                match &body {
+                    Some(body) => asked
+                        .header("content-type", "application/json")
+                        .body(body.clone()),
+                    None => asked,
+                }
+            })
+            .await?;
         if !status.is_success() {
             return Err(refusal(self.address, status, &text));
         }

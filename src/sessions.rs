@@ -1,6 +1,9 @@
 //! The sessions file: one per deployment, readable only by the person whose
-//! it is, holding the address and the session and nothing else
-//! (spec/the-cli, requirement 14).
+//! it is, holding the address and the one credential for it and nothing
+//! else (spec/the-cli, requirement 14): a delegation's pair -- the client
+//! this computer registered as, an access token and a refresh token, and
+//! when each lapses (decisions/029) -- or, written by a CLI from before
+//! delegations, a terminal session, honoured until it lapses.
 //!
 //! It is called the sessions file and never the configuration, because
 //! `--config` would then mean two things in one tool. Not the system
@@ -10,12 +13,40 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Held {
     pub address: String,
-    pub session: String,
     pub subject: String,
+    /// When the credential lapses, RFC 3339, as the deployment said it.
     pub expires_at: String,
+    /// A terminal session from before delegations; empty for a delegation.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub session: String,
+    /// The client this computer registered as.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub client_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub access_token: String,
+    /// When the access token lapses, in seconds since the epoch.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub access_expires_at_s: u64,
+    /// Single use: refreshing spends it and writes the next one here.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub refresh_token: String,
+    /// When the delegation lapses, in seconds since the epoch.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub expires_at_s: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+impl Held {
+    /// A delegation's pair, as against an older CLI's terminal session.
+    pub fn is_delegation(&self) -> bool {
+        !self.refresh_token.is_empty()
+    }
 }
 
 /// Where the sessions files live: `$XDG_CONFIG_HOME/meridian/sessions`, or
@@ -95,6 +126,44 @@ pub fn write(within: &Path, held: &Held) -> Result<(), String> {
         .map_err(|failed| format!("could not write {}: {failed}", path.display()))
 }
 
+/// Hold a deployment's file exclusively until the returned file is dropped:
+/// what refreshing takes, so two commands at once never present one refresh
+/// token twice -- which would revoke the delegation (spec/clients-act-on-a-persons-delegation,
+/// requirement 21). A file of its own beside the sessions file, since that
+/// one is replaced by a rename and a lock on it would be a lock on a file
+/// nobody reads any more.
+pub fn lock(within: &Path, address: &str) -> Result<std::fs::File, String> {
+    create_private_directory(within)?;
+    let path = within.join(format!(".{}.lock", file_name(address)));
+    let file = open_lock(&path)
+        .map_err(|failed| format!("could not open {}: {failed}", path.display()))?;
+    file.lock()
+        .map_err(|failed| format!("could not lock {}: {failed}", path.display()))?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_lock(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_lock(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+}
+
 pub fn forget(within: &Path, address: &str) -> Result<(), String> {
     match std::fs::remove_file(within.join(file_name(address))) {
         Ok(()) => Ok(()),
@@ -155,10 +224,41 @@ mod tests {
     fn held(address: &str) -> Held {
         Held {
             address: address.into(),
-            session: "s3cr3t".into(),
             subject: "local|ada".into(),
-            expires_at: "2026-09-26T12:00:00Z".into(),
+            expires_at: "2026-12-25T00:00:00Z".into(),
+            client_id: "mdc_test".into(),
+            access_token: "mda_test".into(),
+            access_expires_at_s: 1_790_381_400,
+            refresh_token: "mdr_test".into(),
+            expires_at_s: 1_798_156_800,
+            ..Held::default()
         }
+    }
+
+    #[test]
+    fn a_file_an_older_cli_wrote_is_read_as_its_terminal_session() {
+        let older: Held = serde_json::from_str(
+            r#"{"address":"https://dash.firm.example","session":"s3cr3t","subject":"local|ada","expires_at":"2026-09-26T12:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(!older.is_delegation());
+        assert_eq!(older.session, "s3cr3t");
+        assert!(held("x").is_delegation());
+        let written = serde_json::to_string(&held("x")).unwrap();
+        assert!(!written.contains("\"session\""), "{written}");
+    }
+
+    #[test]
+    fn the_lock_is_exclusive_across_handles() {
+        let within = scratch("lock");
+        let first = lock(&within, "https://dash.firm.example").unwrap();
+        let second = std::fs::OpenOptions::new()
+            .write(true)
+            .open(within.join(".dash.firm.example.json.lock"))
+            .unwrap();
+        assert!(second.try_lock().is_err(), "held by the first");
+        drop(first);
+        assert!(second.try_lock().is_ok(), "free once the first lets go");
     }
 
     #[test]

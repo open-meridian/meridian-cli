@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 
+use crate::credential::Credential;
 use crate::live::Failed;
 
 /// What a plugin says about itself, from its pyproject.toml.
@@ -269,7 +270,7 @@ async fn docker(args: &[&str]) -> Result<(), String> {
 }
 
 /// Build, push and record: the version's digest once recorded.
-pub async fn upload(address: &str, session: &str, dir: &Path) -> Result<String, Failed> {
+pub async fn upload(address: &str, session: &Credential, dir: &Path) -> Result<String, Failed> {
     let pyproject = std::fs::read_to_string(dir.join("pyproject.toml"))
         .map_err(|failed| format!("{} has no pyproject.toml: {failed}", dir.display()))?;
     let metadata = metadata(&pyproject)?;
@@ -306,7 +307,7 @@ pub async fn upload(address: &str, session: &str, dir: &Path) -> Result<String, 
 
 async fn push(
     address: &str,
-    session: &str,
+    session: &Credential,
     metadata: &Metadata,
     image: &Image,
 ) -> Result<String, Failed> {
@@ -320,7 +321,7 @@ async fn push(
         async move {
             let answer = http
                 .head(url)
-                .bearer_auth(session)
+                .bearer_auth(session.bearer().await?)
                 .send()
                 .await
                 .map_err(|failed| unreachable(address, failed))?;
@@ -348,7 +349,7 @@ async fn push(
                 Some(other) => mount_url(&repository, digest, other),
                 None => format!("{repository}/blobs/uploads/"),
             })
-            .bearer_auth(session)
+            .bearer_auth(session.bearer().await?)
             .send()
             .await
             .map_err(|failed| unreachable(address, failed))?;
@@ -378,7 +379,7 @@ async fn push(
         let size = bytes.len();
         let sent = http
             .put(upload_url(address, &location, digest))
-            .bearer_auth(session)
+            .bearer_auth(session.bearer().await?)
             .header("content-type", "application/octet-stream")
             .body(bytes)
             .send()
@@ -397,7 +398,7 @@ async fn push(
     }
     let named = http
         .put(format!("{repository}/manifests/{}", metadata.version))
-        .bearer_auth(session)
+        .bearer_auth(session.bearer().await?)
         .header("content-type", &image.media_type)
         .body(image.manifest.clone())
         .send()
@@ -418,7 +419,7 @@ async fn push(
 /// The other plugins in the catalogue, whose repositories may hold blobs
 /// this one shares. None when the catalogue cannot be read: then every blob
 /// is sent, which is slower and no less right.
-async fn others(address: &str, session: &str, name: &str) -> Vec<String> {
+async fn others(address: &str, session: &Credential, name: &str) -> Vec<String> {
     let held = catalogue(address, session).await.unwrap_or_default();
     let named: std::collections::BTreeSet<String> = held["versions"]
         .as_array()
@@ -439,27 +440,25 @@ pub fn mount_url(repository: &str, digest: &str, other: &str) -> String {
 
 async fn record(
     address: &str,
-    session: &str,
+    session: &Credential,
     metadata: &Metadata,
     digest: &str,
 ) -> Result<(), Failed> {
-    let answer = client()?
-        .post(format!("{address}/terminal/plugins"))
-        .bearer_auth(session)
-        .header("content-type", "application/json")
-        .body(
-            serde_json::json!({
-                "name": metadata.name, "version": metadata.version, "roles": metadata.roles,
-                "interface": metadata.interface,
-                "sdk_version": metadata.sdk_version, "image_digest": digest,
-            })
-            .to_string(),
-        )
-        .send()
-        .await
-        .map_err(|failed| unreachable(address, failed))?;
-    let status = answer.status();
-    let body = answer.text().await.unwrap_or_default();
+    let http = client()?;
+    let body = serde_json::json!({
+        "name": metadata.name, "version": metadata.version, "roles": metadata.roles,
+        "interface": metadata.interface,
+        "sdk_version": metadata.sdk_version, "image_digest": digest,
+    })
+    .to_string();
+    let (status, body, _) = session
+        .send(|bearer| {
+            http.post(format!("{address}/terminal/plugins"))
+                .bearer_auth(bearer)
+                .header("content-type", "application/json")
+                .body(body.clone())
+        })
+        .await?;
     if !status.is_success() {
         return Err(refused(
             address,
@@ -472,15 +471,14 @@ async fn record(
 }
 
 /// The catalogue, as the dashboard answers it.
-pub async fn catalogue(address: &str, session: &str) -> Result<serde_json::Value, Failed> {
-    let answer = client()?
-        .get(format!("{address}/terminal/plugins"))
-        .bearer_auth(session)
-        .send()
-        .await
-        .map_err(|failed| unreachable(address, failed))?;
-    let status = answer.status();
-    let body = answer.text().await.unwrap_or_default();
+pub async fn catalogue(address: &str, session: &Credential) -> Result<serde_json::Value, Failed> {
+    let http = client()?;
+    let (status, body, _) = session
+        .send(|bearer| {
+            http.get(format!("{address}/terminal/plugins"))
+                .bearer_auth(bearer)
+        })
+        .await?;
     if !status.is_success() {
         return Err(refused(address, "", status, &body));
     }
@@ -568,20 +566,20 @@ pub fn declared(catalogue: &serde_json::Value, name: &str, version: &str) -> Opt
 
 async fn post(
     address: &str,
-    session: &str,
+    session: &Credential,
     path: &str,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, Failed> {
-    let answer = client()?
-        .post(format!("{address}{path}"))
-        .bearer_auth(session)
-        .header("content-type", "application/json")
-        .body(body.to_string())
-        .send()
-        .await
-        .map_err(|failed| unreachable(address, failed))?;
-    let status = answer.status();
-    let text = answer.text().await.unwrap_or_default();
+    let http = client()?;
+    let body = body.to_string();
+    let (status, text, _) = session
+        .send(|bearer| {
+            http.post(format!("{address}{path}"))
+                .bearer_auth(bearer)
+                .header("content-type", "application/json")
+                .body(body.clone())
+        })
+        .await?;
     if !status.is_success() {
         return Err(refused(address, "", status, &text));
     }
@@ -600,7 +598,7 @@ pub struct Launch<'a> {
 
 pub async fn launch(
     address: &str,
-    session: &str,
+    session: &Credential,
     asked: &Launch<'_>,
 ) -> Result<serde_json::Value, Failed> {
     post(
@@ -616,7 +614,7 @@ pub async fn launch(
 
 pub async fn stop(
     address: &str,
-    session: &str,
+    session: &Credential,
     instance: &str,
 ) -> Result<serde_json::Value, Failed> {
     post(

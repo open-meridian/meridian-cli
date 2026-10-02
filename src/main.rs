@@ -7,6 +7,7 @@
 mod catalogue;
 mod check;
 mod connect;
+mod credential;
 mod doctor;
 mod down;
 mod live;
@@ -50,13 +51,14 @@ meridian -- bringing a Meridian deployment up
   meridian plugin open --instance <id> [--level manage|open|view]
                              a link to a plugin's page that one browser opens once
   meridian connect [<address>]
-                             sign in to a deployment's dashboard, and keep the session
+                             sign in to a deployment's dashboard and let this computer
+                             act as you, for up to 90 days
                              (default: http://meridian.localhost, the local install)
   meridian sign-out [<address>]
-                             end that session, here and at the deployment
+                             revoke that delegation, here and at the deployment
   meridian upgrade           replace this binary with the latest release; not a
                              deployment, which is upgrade-deployment
-  meridian uninstall         end every session this holds, and remove it
+  meridian uninstall         revoke every delegation this holds, and remove it
   meridian --version         which release this is
 
 Both:
@@ -476,16 +478,18 @@ async fn migrate_command(arguments: &Arguments, words: &[&str]) -> i32 {
     }
 }
 
-/// The session a catalogue command acts through: the one held, or the one
-/// `--deployment` names.
-fn held_session(arguments: &Arguments) -> Result<sessions::Held, String> {
+/// The credential a catalogue command acts through: the one held, or the
+/// one `--deployment` names.
+fn held_session(arguments: &Arguments) -> Result<credential::Credential, String> {
     let within = sessions::directory()?;
     if let Some(given) = arguments.value("--deployment", "--deployment") {
         let address = connect::address(given)?;
-        return sessions::read(&within, &address).ok_or(format!(
-            "not connected to {address}: `{}` first",
-            connect::command_for(&address)
-        ));
+        return sessions::read(&within, &address)
+            .map(|held| credential::Credential::new(within, held))
+            .ok_or(format!(
+                "not connected to {address}: `{}` first",
+                connect::command_for(&address)
+            ));
     }
     let mut every = sessions::all(&within);
     match every.len() {
@@ -493,7 +497,7 @@ fn held_session(arguments: &Arguments) -> Result<sessions::Held, String> {
             "not connected to a deployment: `meridian connect` first, with the address if it is not this machine's"
                 .into(),
         ),
-        1 => Ok(every.remove(0)),
+        1 => Ok(credential::Credential::new(within, every.remove(0))),
         _ => Err(format!(
             "connected to more than one deployment; say which with --deployment: {}",
             every
@@ -526,7 +530,7 @@ async fn catalogue_command(arguments: &Arguments, words: &[&str]) -> i32 {
             return 3;
         }
     };
-    let (address, session) = (held.address.as_str(), held.session.as_str());
+    let (address, session) = (held.address(), &held);
     let done = match words {
         ["upload"] => {
             let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
@@ -572,7 +576,7 @@ async fn catalogue_command(arguments: &Arguments, words: &[&str]) -> i32 {
 async fn approval(
     arguments: &Arguments,
     address: &str,
-    session: &str,
+    session: &credential::Credential,
     name: &str,
     version: &str,
     instance: &str,
@@ -604,7 +608,7 @@ async fn approval(
 async fn launched(
     arguments: &Arguments,
     address: &str,
-    session: &str,
+    session: &credential::Credential,
     name: &str,
     version: &str,
     instance: &str,
@@ -675,8 +679,8 @@ async fn live_command(arguments: &Arguments, words: &[&str]) -> i32 {
         },
     };
     let deployment = live::Deployment {
-        address: &held.address,
-        session: &held.session,
+        address: held.address(),
+        session: &held,
     };
     let json = arguments.set("--json");
     let done = match words {
@@ -1129,7 +1133,7 @@ fn connect_address(words: &[String]) -> Option<String> {
     }
 }
 
-/// `meridian connect [<address>]`: W6.13 from this side.
+/// `meridian connect [<address>]`: W6.13 and W6.17 from this side.
 async fn connect_command(arguments: &Arguments) -> i32 {
     let Some(given) = connect_address(&arguments.words) else {
         eprintln!(
@@ -1159,9 +1163,23 @@ async fn connect_command(arguments: &Arguments) -> i32 {
             return 1;
         }
     };
+    // This computer as a client: the one it registered as, when it holds a
+    // delegation there already, so consenting again renews that one; or a
+    // new registration.
+    let earlier = sessions::read(&within, &address);
+    let client_id = match earlier.as_ref().filter(|held| held.is_delegation()) {
+        Some(held) => held.client_id.clone(),
+        None => match connect::register(&address, &redirect_uri).await {
+            Ok(client_id) => client_id,
+            Err(refusal) => {
+                eprintln!("meridian connect: {refusal}");
+                return 1;
+            }
+        },
+    };
     let pkce = connect::Pkce::new();
     let state = connect::state();
-    let url = connect::authorize_url(&address, &redirect_uri, &pkce, &state);
+    let url = connect::authorize_url(&address, &client_id, &redirect_uri, &pkce, &state);
     println!("Sign in to {address} in your browser. If it did not open, go to:\n\n  {url}\n");
     connect::open_browser(&url);
 
@@ -1176,35 +1194,39 @@ async fn connect_command(arguments: &Arguments) -> i32 {
             return 1;
         }
     };
-    let issued = match connect::exchange(&address, &code, &pkce.verifier, &redirect_uri).await {
-        Ok(issued) => issued,
-        Err(refusal) => {
-            eprintln!("meridian connect: {refusal}");
-            return 1;
-        }
-    };
+    let issued =
+        match connect::exchange(&address, &client_id, &code, &pkce.verifier, &redirect_uri).await {
+            Ok(issued) => issued,
+            Err(refusal) => {
+                eprintln!("meridian connect: {refusal}");
+                return 1;
+            }
+        };
 
-    // One session per deployment on this machine: the one this replaces is
-    // ended at the deployment, not left to lapse there on its own.
-    if let Some(earlier) = sessions::read(&within, &address) {
-        let _ = connect::sign_out(&address, &earlier.session).await;
+    // A terminal session an older CLI left here is ended at the deployment,
+    // not left to lapse there on its own. A delegation it held was renewed
+    // by this consent, and its old tokens with it.
+    if let Some(earlier) = earlier.filter(|held| !held.is_delegation()) {
+        let _ = connect::end_terminal_session(&address, &earlier.session).await;
     }
-    let held = sessions::Held {
-        address: address.clone(),
-        session: issued.session,
-        subject: issued.subject,
-        expires_at: issued.expires_at,
-    };
-    if let Err(refusal) = sessions::write(&within, &held) {
-        // Connected and unable to keep it: end it rather than leave a live
-        // session nobody holds.
-        let _ = connect::sign_out(&address, &held.session).await;
+    let held = issued.held(&address, &client_id, credential::now_s());
+    // Written under the lock, so a command refreshing at this moment reads
+    // this pair after it rather than spending the one it replaces.
+    let written = sessions::lock(&within, &address).and_then(|lock| {
+        let written = sessions::write(&within, &held);
+        drop(lock);
+        written
+    });
+    if let Err(refusal) = written {
+        // Connected and unable to keep it: revoke it rather than leave a live
+        // delegation nobody holds.
+        let _ = connect::sign_out(&held).await;
         eprintln!("meridian connect: {refusal}");
         return 1;
     }
     println!(
-        "Connected to {address} as {}. The session ends after 30 minutes unused, \
-         and at {} at the latest.",
+        "Connected to {address} as {}, until {}. This computer refreshes its access \
+         by itself; `meridian sign-out` ends it.",
         held.subject, held.expires_at
     );
     0
@@ -1259,15 +1281,19 @@ async fn sign_out_command(arguments: &Arguments) -> i32 {
         }
     };
 
-    let told = connect::sign_out(&held.address, &held.session).await;
+    let told = connect::sign_out(&held).await;
     if let Err(refusal) = sessions::forget(&within, &held.address) {
         eprintln!("meridian sign-out: could not forget the session: {refusal}");
         return 1;
     }
     match told {
         Ok(()) => println!("Signed out of {}.", held.address),
-        // Forgotten here either way. What cannot be reached cannot be told,
-        // and the session lapses there by itself within 30 minutes.
+        // Forgotten here either way. What cannot be reached cannot be told.
+        Err(refusal) if held.is_delegation() => println!(
+            "Forgotten here, but {refusal}; revoke this computer's delegation from Connected \
+             clients on the dashboard, or it lapses at {}.",
+            held.expires_at
+        ),
         Err(refusal) => println!(
             "Forgotten here, but {refusal}; the session there lapses on its own within 30 minutes."
         ),
@@ -1340,10 +1366,17 @@ async fn uninstall_command(arguments: &Arguments) -> i32 {
     let held = sessions::all(&within);
     println!("This removes:");
     for session in &held {
-        println!(
-            "  your session with {}, ended there and here",
-            session.address
-        );
+        if session.is_delegation() {
+            println!(
+                "  your delegation to this computer at {}, revoked there and forgotten here",
+                session.address
+            );
+        } else {
+            println!(
+                "  your session with {}, ended there and here",
+                session.address
+            );
+        }
     }
     if within.exists() {
         println!("  {}", within.display());
@@ -1354,8 +1387,13 @@ async fn uninstall_command(arguments: &Arguments) -> i32 {
         return 1;
     }
     for session in &held {
-        match connect::sign_out(&session.address, &session.session).await {
+        match connect::sign_out(session).await {
             Ok(()) => println!("Signed out of {}.", session.address),
+            Err(refusal) if session.is_delegation() => println!(
+                "Forgotten here, but {refusal}; revoke this computer's delegation from Connected \
+                 clients on {}, or it lapses at {}.",
+                session.address, session.expires_at
+            ),
             Err(refusal) => println!(
                 "Forgotten here, but {refusal}; the session with {} lapses there within 30 minutes.",
                 session.address

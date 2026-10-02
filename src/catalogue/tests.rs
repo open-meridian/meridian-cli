@@ -1,4 +1,5 @@
 use super::*;
+use crate::credential::Credential;
 
 const TEMPLATE: &str = include_str!("../../plugin-template/pyproject.toml");
 
@@ -319,9 +320,14 @@ async fn an_upload_on_a_session_the_dashboard_lost_is_the_session_and_exits_3() 
     .await;
     let dir = scratch("lapsed-upload");
     layout(&dir, false);
-    let failed = push(&address, "stale", &a_plugin(), &image(&dir).unwrap())
-        .await
-        .unwrap_err();
+    let failed = push(
+        &address,
+        &Credential::terminal_session(&address, "stale"),
+        &a_plugin(),
+        &image(&dir).unwrap(),
+    )
+    .await
+    .unwrap_err();
     let _ = std::fs::remove_dir_all(&dir);
 
     assert_eq!(failed.code(), 3, "{failed:?}");
@@ -347,9 +353,14 @@ async fn a_lapsed_session_is_seen_on_the_first_look_at_the_registry() {
     let (address, asked) = dashboard(|_, _| (401, NO_SESSION)).await;
     let dir = scratch("lapsed-head");
     layout(&dir, false);
-    let failed = push(&address, "stale", &a_plugin(), &image(&dir).unwrap())
-        .await
-        .unwrap_err();
+    let failed = push(
+        &address,
+        &Credential::terminal_session(&address, "stale"),
+        &a_plugin(),
+        &image(&dir).unwrap(),
+    )
+    .await
+    .unwrap_err();
     let _ = std::fs::remove_dir_all(&dir);
 
     assert_eq!(failed.code(), 3, "{failed:?}");
@@ -373,17 +384,28 @@ async fn every_catalogue_call_says_a_lapsed_session_as_the_session() {
     let (address, _) =
         dashboard(|_, _| (401, r#"{"error":"invalid_token","reason":"lapsed"}"#)).await;
     let lapsed = format!(
-        "your session with {address} lapsed: `meridian connect {address}` to sign in again"
+        "your connection to {address} lapsed: `meridian connect {address}` to sign in again"
     );
-    let failed = catalogue(&address, "stale").await.unwrap_err();
-    assert_eq!(failed, Failed::Session(lapsed.clone()));
-    let failed = record(&address, "stale", &a_plugin(), "sha256:ab")
+    let failed = catalogue(&address, &Credential::terminal_session(&address, "stale"))
         .await
         .unwrap_err();
     assert_eq!(failed, Failed::Session(lapsed.clone()));
-    let failed = stop(&address, "stale", "reference-plugin")
-        .await
-        .unwrap_err();
+    let failed = record(
+        &address,
+        &Credential::terminal_session(&address, "stale"),
+        &a_plugin(),
+        "sha256:ab",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(failed, Failed::Session(lapsed.clone()));
+    let failed = stop(
+        &address,
+        &Credential::terminal_session(&address, "stale"),
+        "reference-plugin",
+    )
+    .await
+    .unwrap_err();
     assert_eq!(failed, Failed::Session(lapsed.clone()));
     let asked = Launch {
         name: "reference-plugin",
@@ -392,7 +414,13 @@ async fn every_catalogue_call_says_a_lapsed_session_as_the_session() {
         roles: &[],
         live: false,
     };
-    let failed = launch(&address, "stale", &asked).await.unwrap_err();
+    let failed = launch(
+        &address,
+        &Credential::terminal_session(&address, "stale"),
+        &asked,
+    )
+    .await
+    .unwrap_err();
     assert_eq!(failed, Failed::Session(lapsed));
 }
 
@@ -405,9 +433,14 @@ async fn anything_else_the_registry_refuses_is_a_refusal_after_what_was_being_do
     .await;
     let dir = scratch("registry-down");
     layout(&dir, false);
-    let failed = push(&address, "live", &a_plugin(), &image(&dir).unwrap())
-        .await
-        .unwrap_err();
+    let failed = push(
+        &address,
+        &Credential::terminal_session(&address, "live"),
+        &a_plugin(),
+        &image(&dir).unwrap(),
+    )
+    .await
+    .unwrap_err();
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(
         failed,

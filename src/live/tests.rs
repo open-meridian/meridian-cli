@@ -141,8 +141,16 @@ fn a_lapsed_session_is_said_apart_with_what_to_run() {
 fn the_dashboards_missing_session_is_said_by_its_reason_with_connect() {
     let local = "http://meridian.localhost";
     for (reason, why) in [
-        ("lapsed", format!("your session with {local} lapsed")),
+        ("lapsed", format!("your connection to {local} lapsed")),
         ("ended", format!("your session with {local} was ended")),
+        (
+            "revoked",
+            format!("your delegation to this computer at {local} was revoked"),
+        ),
+        (
+            "groups",
+            format!("{local} needs you to sign in again before this computer acts for you"),
+        ),
         (
             "unknown",
             format!("{local} does not know your session; it may have restarted"),
@@ -296,9 +304,10 @@ async fn answering_once(body: &'static str) -> (String, tokio::task::JoinHandle<
 async fn open_carries_the_level_asked_and_reads_the_one_it_was_opened_at() {
     let (address, asked) =
         answering_once(r#"{"instance_id":"ref","level":"write","url":"http://ref/x"}"#).await;
+    let held = crate::credential::Credential::terminal_session(&address, "s");
     let deployment = Deployment {
         address: &address,
-        session: "s",
+        session: &held,
     };
     let opened = deployment.open("ref", Some(Level::Open)).await.unwrap();
     assert_eq!(opened.url, "http://ref/x");
@@ -312,9 +321,10 @@ async fn open_carries_the_level_asked_and_reads_the_one_it_was_opened_at() {
 #[tokio::test]
 async fn open_with_no_level_names_none_and_leaves_the_dashboard_to_choose() {
     let (address, asked) = answering_once(r#"{"url":"http://ref/x"}"#).await;
+    let held = crate::credential::Credential::terminal_session(&address, "s");
     let deployment = Deployment {
         address: &address,
-        session: "s",
+        session: &held,
     };
     let opened = deployment.open("ref", None).await.unwrap();
     assert_eq!(opened.level, None);
@@ -328,9 +338,10 @@ async fn open_with_no_level_names_none_and_leaves_the_dashboard_to_choose() {
 async fn a_page_is_read_at_the_level_asked_after_its_path() {
     let (address, asked) =
         answering_once(r#"{"status":200,"level":"admin","body":"<p>x</p>"}"#).await;
+    let held = crate::credential::Credential::terminal_session(&address, "s");
     let deployment = Deployment {
         address: &address,
-        session: "s",
+        session: &held,
     };
     let said = deployment
         .page("ref", "/setup?tab=a", Some(Level::Manage))

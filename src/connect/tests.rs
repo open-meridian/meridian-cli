@@ -41,7 +41,7 @@ fn a_session_goes_over_https_or_stays_on_this_machine() {
 }
 
 #[test]
-fn the_sign_in_address_carries_the_challenge_and_an_encoded_callback() {
+fn the_authorisation_carries_the_client_the_challenge_the_callback_and_the_resource() {
     let pkce = Pkce {
         verifier: VERIFIER.into(),
         challenge: CHALLENGE.into(),
@@ -49,16 +49,25 @@ fn the_sign_in_address_carries_the_challenge_and_an_encoded_callback() {
     assert_eq!(
         authorize_url(
             "https://dash.firm.example",
+            "mdc_laptop",
             "http://127.0.0.1:53682/callback",
             &pkce,
             "st-1"
         ),
         format!(
-            "https://dash.firm.example/terminal/authorize?\
-             redirect_uri=http%3A%2F%2F127.0.0.1%3A53682%2Fcallback&code_challenge={CHALLENGE}\
-             &code_challenge_method=S256&state=st-1"
+            "https://dash.firm.example/oauth/authorize?response_type=code&client_id=mdc_laptop\
+             &redirect_uri=http%3A%2F%2F127.0.0.1%3A53682%2Fcallback&code_challenge={CHALLENGE}\
+             &code_challenge_method=S256&state=st-1\
+             &resource=https%3A%2F%2Fdash.firm.example%2Fterminal"
         )
     );
+}
+
+#[test]
+fn this_computer_is_named_as_meridian_on_its_host() {
+    let name = client_name();
+    assert!(name.starts_with("meridian on "), "{name}");
+    assert!(!name.chars().any(char::is_control), "{name}");
 }
 
 async fn visit(redirect_uri: &str, target: &str) -> String {
@@ -151,29 +160,82 @@ async fn deployment(
     (address, served)
 }
 
+const ISSUED: &str = r#"{"access_token":"mda_a","token_type":"Bearer","expires_in":600,"refresh_token":"mdr_r","subject":"local|ada","delegation_id":"d1","delegation_expires_at":"2026-12-25T00:00:00Z","delegation_expires_in":7776000}"#;
+
 #[tokio::test]
-async fn the_code_and_verifier_are_exchanged_as_the_deployment_expects() {
-    let (address, served) = deployment(
-        "200 OK",
-        r#"{"session":"s3cr3t","subject":"local|ada","idle_seconds":1800,"expires_at":"2026-09-26T12:00:00Z"}"#,
-    )
-    .await;
+async fn this_computer_registers_as_the_cli_with_its_loopback_address() {
+    let (address, served) = deployment("201 Created", r#"{"client_id":"mdc_laptop"}"#).await;
+    let id = register(&address, "http://127.0.0.1:53682/callback")
+        .await
+        .unwrap();
+    assert_eq!(id, "mdc_laptop");
+    let sent = served.await.unwrap();
+    assert!(sent.starts_with("POST /oauth/register "), "{sent}");
+    let body: serde_json::Value =
+        serde_json::from_str(sent.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(body["software_id"], "meridian-cli");
+    assert_eq!(body["token_endpoint_auth_method"], "none");
+    assert_eq!(
+        body["redirect_uris"],
+        serde_json::json!(["http://127.0.0.1:53682/callback"])
+    );
+}
+
+#[tokio::test]
+async fn a_dashboard_from_before_delegations_is_said_as_that() {
+    let (address, _) = deployment("404 Not Found", "").await;
+    let refused = register(&address, "http://127.0.0.1:1/callback").await;
+    assert!(refused
+        .unwrap_err()
+        .contains("does not take delegations yet"));
+}
+
+#[tokio::test]
+async fn the_code_and_verifier_are_exchanged_for_a_pair_as_the_deployment_expects() {
+    let (address, served) = deployment("200 OK", ISSUED).await;
     let issued = exchange(
         &address,
+        "mdc_laptop",
         "the-code",
         VERIFIER,
         "http://127.0.0.1:53682/callback",
     )
     .await
     .unwrap();
-    assert_eq!(issued.session, "s3cr3t");
     assert_eq!(issued.subject, "local|ada");
+    let held = issued.held(&address, "mdc_laptop", 1_000);
+    assert!(held.is_delegation());
+    assert_eq!(held.access_expires_at_s, 1_600);
+    assert_eq!(held.expires_at_s, 1_000 + 7_776_000);
+    assert_eq!(held.expires_at, "2026-12-25T00:00:00Z");
     let sent = served.await.unwrap();
-    assert!(sent.starts_with("POST /terminal/token "), "{sent}");
+    assert!(sent.starts_with("POST /oauth/token "), "{sent}");
+    let resource = format!("{address}/terminal")
+        .replace(':', "%3A")
+        .replace('/', "%2F");
     assert!(
         sent.ends_with(&format!(
-            "code=the-code&code_verifier={VERIFIER}&redirect_uri=http%3A%2F%2F127.0.0.1%3A53682%2Fcallback"
+            "grant_type=authorization_code&code=the-code&code_verifier={VERIFIER}\
+             &redirect_uri=http%3A%2F%2F127.0.0.1%3A53682%2Fcallback&client_id=mdc_laptop\
+             &resource={resource}"
         )),
+        "{sent}"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_refresh_names_why() {
+    let (address, served) = deployment(
+        "400 Bad Request",
+        r#"{"error":"invalid_grant","error_description":"the delegation was revoked; connect again","reason":"revoked"}"#,
+    )
+    .await;
+    let refused = refresh(&address, "mdc_laptop", "mdr_r").await.unwrap_err();
+    assert_eq!(refused.reason, "revoked");
+    assert!(refused.said.contains("was revoked"), "{}", refused.said);
+    let sent = served.await.unwrap();
+    assert!(
+        sent.ends_with("grant_type=refresh_token&refresh_token=mdr_r&client_id=mdc_laptop"),
         "{sent}"
     );
 }
@@ -181,14 +243,45 @@ async fn the_code_and_verifier_are_exchanged_as_the_deployment_expects() {
 #[tokio::test]
 async fn a_refused_code_is_said_with_the_deployments_answer() {
     let (address, _) = deployment("400 Bad Request", r#"{"error":"invalid_grant"}"#).await;
-    let refused = exchange(&address, "x", VERIFIER, "http://127.0.0.1:1/callback").await;
+    let refused = exchange(
+        &address,
+        "mdc_x",
+        "x",
+        VERIFIER,
+        "http://127.0.0.1:1/callback",
+    )
+    .await;
     assert!(refused.unwrap_err().contains("invalid_grant"));
 }
 
 #[tokio::test]
-async fn signing_out_presents_the_session_as_a_bearer() {
+async fn signing_out_revokes_the_delegation_by_its_refresh_token() {
+    let (address, served) = deployment("200 OK", "{}").await;
+    let held = crate::sessions::Held {
+        address: address.clone(),
+        client_id: "mdc_laptop".into(),
+        access_token: "mda_a".into(),
+        refresh_token: "mdr_r".into(),
+        ..Default::default()
+    };
+    sign_out(&held).await.unwrap();
+    let sent = served.await.unwrap();
+    assert!(sent.starts_with("POST /oauth/revoke "), "{sent}");
+    assert!(
+        sent.ends_with("token=mdr_r&token_type_hint=refresh_token&client_id=mdc_laptop"),
+        "{sent}"
+    );
+}
+
+#[tokio::test]
+async fn signing_out_an_older_clis_session_presents_it_as_a_bearer() {
     let (address, served) = deployment("204 No Content", "").await;
-    sign_out(&address, "s3cr3t").await.unwrap();
+    let held = crate::sessions::Held {
+        address: address.clone(),
+        session: "s3cr3t".into(),
+        ..Default::default()
+    };
+    sign_out(&held).await.unwrap();
     let sent = served.await.unwrap();
     assert!(sent.starts_with("POST /terminal/sign-out "), "{sent}");
     assert!(

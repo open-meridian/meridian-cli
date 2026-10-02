@@ -109,6 +109,9 @@ mkdir -p /tmp/config/meridian/sessions
 # A session with a deployment nobody can reach: forgotten here, and said.
 printf '{"address":"http://127.0.0.1:9","session":"not-a-real-one","subject":"local|ada","expires_at":"2026-09-26T12:00:00Z"}' \
     >/tmp/config/meridian/sessions/127.0.0.1_9.json
+# And a delegation's pair with another nobody can reach (decisions/029).
+printf '{"address":"http://127.0.0.1:8","subject":"local|ada","expires_at":"2026-12-25T00:00:00Z","client_id":"mdc_x","access_token":"mda_x","access_expires_at_s":1,"refresh_token":"mdr_x","expires_at_s":1798156800}' \
+    >/tmp/config/meridian/sessions/127.0.0.1_8.json
 
 said="$(/tmp/v/meridian uninstall </dev/null 2>&1)"
 status=$?
@@ -121,6 +124,7 @@ check $status "uninstall --yes: $said"
 check "$([ ! -e /tmp/v/meridian ] && echo 0 || echo 1)" "the binary is gone"
 check "$([ ! -e /tmp/config/meridian ] && echo 0 || echo 1)" "and every session with it, and its directory"
 check "$(holds "$said" "lapses there within 30 minutes")" "an unreachable deployment's session is forgotten here, and said"
+check "$(holds "$said" "revoke this computer's delegation from Connected clients on http://127.0.0.1:8")" "an unreachable deployment's delegation is forgotten here, and how to revoke it said"
 
 echo
 if [ "$failures" != 0 ]; then
