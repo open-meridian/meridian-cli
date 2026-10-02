@@ -6,7 +6,7 @@ works with one that is already running. The whole install, step by step, is
 meridian-core's [INSTALL.md](https://github.com/open-meridian/meridian-core/blob/main/INSTALL.md),
 and every command and flag is in the
 [command line reference](https://open-meridian.dev/api/cli/). This is release
-0.1.24.
+0.1.25.
 
 ```
 meridian doctor              # can this machine and this cluster run a deployment?
