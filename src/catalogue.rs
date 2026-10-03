@@ -9,8 +9,12 @@
 //! registry already holds. The registry keeps blobs per repository, so one
 //! another plugin's repository holds -- the SDK's base, after the first
 //! plugin on it -- is mounted from there rather than sent again.
-//! Then it sends the metadata from the plugin's pyproject.toml and the
-//! image's digest, and the conductor records the version. What a plugin may
+//! Then it sends the metadata from the plugin's pyproject.toml, the
+//! version's declaration as the built image prints it (contract v11: its
+//! secret settings' names, what it receives and does not carry, the storage
+//! it asks for, read with the SDK's `meridian-declaration` from the
+//! `[tool.meridian] declaration` it names), and the image's digest, and the
+//! conductor records the version. What a plugin may
 //! do is its roles', from that metadata; nothing here writes a grant.
 //!
 //! Launch shows the roles a version declares and asks before sending them as
@@ -23,6 +27,7 @@ use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 
+use crate::check::EDGE_ROLES;
 use crate::credential::Credential;
 use crate::live::Failed;
 
@@ -34,6 +39,8 @@ pub struct Metadata {
     pub roles: Vec<String>,
     pub interface: bool,
     pub sdk_version: String,
+    /// The `module:attribute` of its meridian.Declaration, where it names one.
+    pub declaration: Option<String>,
 }
 
 /// A host label, a letter first: a plugin's name, a role, an instance.
@@ -114,6 +121,10 @@ pub fn metadata(pyproject: &str) -> Result<Metadata, String> {
             .get("interface")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        declaration: meridian
+            .get("declaration")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         name,
         version,
         sdk_version,
@@ -132,7 +143,35 @@ pub fn metadata(pyproject: &str) -> Result<Metadata, String> {
             return Err(format!("`{role}` is not a role's form"));
         }
     }
+    if let Some(named) = &metadata.declaration {
+        let (module, attribute) = named.split_once(':').unwrap_or((named, ""));
+        if module.is_empty() || attribute.is_empty() {
+            return Err(format!(
+                "[tool.meridian] declaration `{named}` is not `<module>:<attribute>`"
+            ));
+        }
+    }
     Ok(metadata)
+}
+
+/// The declaration the image printed, held to what the deployment will hold
+/// it to before anything is sent: JSON, and storage asked for only by a
+/// plugin holding an edge role.
+pub fn declaration(printed: &str, roles: &[String]) -> Result<serde_json::Value, String> {
+    let declared: serde_json::Value = serde_json::from_str(printed.trim())
+        .map_err(|failed| format!("the declaration the image printed is not JSON: {failed}"))?;
+    if !declared.is_object() {
+        return Err("the declaration the image printed is not an object".into());
+    }
+    let storage = declared.get("storage").is_some_and(|s| !s.is_null());
+    if storage && !roles.iter().any(|role| EDGE_ROLES.contains(&role.as_str())) {
+        return Err(format!(
+            "the declaration asks for storage, and the plugin holds no edge role: only {} own \
+             storage for their raw records (decisions/028)",
+            EDGE_ROLES.join(", ")
+        ));
+    }
+    Ok(declared)
 }
 
 /// An image's manifest and the blobs it names, from an OCI image layout.
@@ -257,6 +296,23 @@ fn unreachable(address: &str, failed: reqwest::Error) -> Failed {
 }
 
 /// Run a command, saying what it was when it fails.
+/// What `docker <args>` printed on its standard output.
+async fn docker_output(args: &[&str]) -> Result<String, String> {
+    let output = tokio::process::Command::new("docker")
+        .args(args)
+        .output()
+        .await
+        .map_err(|failed| format!("docker could not be run: {failed}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`docker {}` failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 async fn docker(args: &[&str]) -> Result<(), String> {
     let status = tokio::process::Command::new("docker")
         .args(args)
@@ -277,6 +333,23 @@ pub async fn upload(address: &str, session: &Credential, dir: &Path) -> Result<S
     let tag = format!("meridian-plugin/{}:{}", metadata.name, metadata.version);
     eprintln!("Building {tag} from {} ...", dir.display());
     docker(&["build", "-t", &tag, &dir.display().to_string()]).await?;
+    let declared = match &metadata.declaration {
+        None => None,
+        Some(named) => {
+            let printed = docker_output(&[
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--entrypoint",
+                "meridian-declaration",
+                &tag,
+                named,
+            ])
+            .await?;
+            Some(declaration(&printed, &metadata.roles)?)
+        }
+    };
 
     let scratch = std::env::temp_dir().join(format!("meridian-upload-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&scratch);
@@ -301,7 +374,7 @@ pub async fn upload(address: &str, session: &Credential, dir: &Path) -> Result<S
     let pushed = push(address, session, &metadata, &image(&scratch)?).await;
     let _ = std::fs::remove_dir_all(&scratch);
     let digest = pushed?;
-    record(address, session, &metadata, &digest).await?;
+    record(address, session, &metadata, declared.as_ref(), &digest).await?;
     Ok(digest)
 }
 
@@ -442,15 +515,19 @@ async fn record(
     address: &str,
     session: &Credential,
     metadata: &Metadata,
+    declaration: Option<&serde_json::Value>,
     digest: &str,
 ) -> Result<(), Failed> {
     let http = client()?;
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "name": metadata.name, "version": metadata.version, "roles": metadata.roles,
         "interface": metadata.interface,
         "sdk_version": metadata.sdk_version, "image_digest": digest,
-    })
-    .to_string();
+    });
+    if let Some(declaration) = declaration {
+        body["declaration"] = declaration.clone();
+    }
+    let body = body.to_string();
     let (status, body, _) = session
         .send(|bearer| {
             http.post(format!("{address}/terminal/plugins"))

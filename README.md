@@ -288,6 +288,16 @@ loop below. `CLAUDE.md` and the `develop-live` skill lead Claude Code to the
 same text. Commit them with the plugin; `.dockerignore` keeps them out of its
 image.
 
+`upload` sends the version's declaration with it (contract v11): where
+`pyproject.toml`'s `[tool.meridian]` names one, `declaration =
+"<module>:<attribute>"`, it runs the SDK's `meridian-declaration` in the
+image it built, with no network, and sends what it prints: the secret
+settings' names, what the plugin receives and does not carry, and the storage
+it asks for, refused here when a plugin holding no edge role asks for
+storage. `plugin check` holds the same declaration to that (`edge-storage`),
+and a plugin holding a role with a conformance suite (`custody`) to a test
+that runs the suite (`role-suite`), which `--run-tests` then runs.
+
 `launch` shows the roles the version asks for and runs it only once
 you approve them; `--yes` approves for a script that has already read them.
 Its pages are on its own name, `http://my-plugin.plugins.meridian.localhost/`,

@@ -14,8 +14,43 @@ fn the_templates_pyproject_is_metadata() {
             roles: vec![],
             interface: true,
             sdk_version: "0.15.0".into(),
+            declaration: None,
         }
     );
+}
+
+#[test]
+fn a_declaration_is_named_by_module_and_attribute() {
+    let with = TEMPLATE.replace(
+        "[tool.meridian]\n",
+        "[tool.meridian]\ndeclaration = \"reference_plugin.declaration:DECLARATION\"\n",
+    );
+    assert_eq!(
+        metadata(&with).unwrap().declaration.as_deref(),
+        Some("reference_plugin.declaration:DECLARATION")
+    );
+    let refused = metadata(&TEMPLATE.replace(
+        "[tool.meridian]\n",
+        "[tool.meridian]\ndeclaration = \"reference_plugin.declaration\"\n",
+    ))
+    .unwrap_err();
+    assert!(refused.contains("<module>:<attribute>"), "{refused}");
+}
+
+#[test]
+fn the_image_s_declaration_is_json_and_asks_for_storage_only_at_the_edge() {
+    let printed = r#"{"not_carried": [], "secret_settings": ["consumer_key"],
+                      "storage": {"retention_days": 30}}"#;
+    let custody = vec!["custody".to_string()];
+    let held = declaration(printed, &custody).unwrap();
+    assert_eq!(held["storage"]["retention_days"], 30);
+    let refused = declaration(printed, &["operations".to_string()]).unwrap_err();
+    assert!(refused.contains("no edge role"), "{refused}");
+    let none = r#"{"not_carried": [], "secret_settings": [], "storage": null}"#;
+    assert!(declaration(none, &["operations".to_string()]).is_ok());
+    assert!(declaration("Traceback (most recent call last)", &custody)
+        .unwrap_err()
+        .contains("not JSON"));
 }
 
 #[test]
@@ -394,6 +429,7 @@ async fn every_catalogue_call_says_a_lapsed_session_as_the_session() {
         &address,
         &Credential::terminal_session(&address, "stale"),
         &a_plugin(),
+        None,
         "sha256:ab",
     )
     .await

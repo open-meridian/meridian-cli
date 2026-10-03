@@ -23,7 +23,7 @@ mod rules;
 #[cfg(test)]
 mod tests;
 
-pub use rules::RULES;
+pub use rules::{EDGE_ROLES, RULES};
 
 /// One of the plugin's files, as text. `path` is relative to the plugin's
 /// directory, with `/` between its parts on every system.

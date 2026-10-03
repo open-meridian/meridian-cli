@@ -156,7 +156,7 @@ DASHBOARD = os.environ.get("MERIDIAN_HARNESS_DASHBOARD", "http://dashboard:8080"
 #[test]
 fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
     type Breaking = fn(&Scaffolded) -> (String, usize);
-    let breakages: [(&str, Breaking, &str); 12] = [
+    let breakages: [(&str, Breaking, &str); 14] = [
         (
             "template-shape",
             |p| {
@@ -194,6 +194,31 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
                 ("pyproject.toml".into(), line)
             },
             "`trading` is not one of the deployment's roles",
+        ),
+        (
+            "edge-storage",
+            |p| {
+                p.add_after(
+                    "pyproject.toml",
+                    "roles = []",
+                    "declaration = \"checked_plugin.declaration:DECLARATION\"",
+                );
+                p.write(
+                    &format!("src/{MODULE}/declaration.py"),
+                    "from meridian.declaration import Declaration, Storage\n\n\
+                     DECLARATION = Declaration(\n    storage=Storage(retention_days=30),\n)\n",
+                );
+                (format!("src/{MODULE}/declaration.py"), 4)
+            },
+            "the declaration asks for storage, and the plugin holds no edge role",
+        ),
+        (
+            "role-suite",
+            |p| {
+                p.replace("pyproject.toml", "roles = []", "roles = [\"custody\"]");
+                ("tests/".into(), 0)
+            },
+            "it holds `custody`, and no test runs the custody suite",
         ),
         (
             "kit-linked",
@@ -315,7 +340,7 @@ fn a_plugin_breaking_every_rule_is_told_each_with_its_place_and_its_fix() {
     plugin.replace(
         "pyproject.toml",
         "roles = []",
-        "roles = [\"trading\"]\ntags = []",
+        "roles = [\"trading\", \"custody\"]\ntags = []\ndeclaration = \"gone.declaration:DECLARATION\"",
     );
     plugin.write(
         &format!("src/{MODULE}/static/index.html"),
@@ -347,7 +372,7 @@ fn a_plugin_breaking_every_rule_is_told_each_with_its_place_and_its_fix() {
     );
     assert!(said.contains("instead: "), "{said}");
     assert!(
-        said.contains(&format!("9 of {} rules failed", RULES.len() + 1)),
+        said.contains(&format!("11 of {} rules failed", RULES.len() + 1)),
         "{said}"
     );
 
@@ -616,4 +641,32 @@ fn a_directory_that_is_not_there_is_refused_rather_than_checked() {
     assert!(check(Path::new("/nowhere/at/all"), false)
         .err()
         .is_some_and(|refused| refused.contains("is not a directory")));
+}
+
+#[test]
+fn a_custody_plugin_running_its_suite_and_asking_for_storage_keeps_both_rules() {
+    let plugin = Scaffolded::tested("custody-suite");
+    plugin.replace("pyproject.toml", "roles = []", "roles = [\"custody\"]");
+    plugin.add_after(
+        "pyproject.toml",
+        "roles = [",
+        "declaration = \"checked_plugin.declaration:DECLARATION\"",
+    );
+    plugin.write(
+        &format!("src/{MODULE}/declaration.py"),
+        "from meridian.declaration import Declaration, Storage\n\n\
+         DECLARATION = Declaration(storage=Storage(retention_days=30))\n",
+    );
+    plugin.write(
+        "tests/test_suite.py",
+        "from meridian.suites import run\n\n\ndef test_custody():\n    \
+         report = run(\"custody\", {})\n    assert report.passed\n",
+    );
+    let report = plugin.check();
+    assert_eq!(
+        failed_rules(&report),
+        Vec::<&str>::new(),
+        "{}",
+        text(&report)
+    );
 }

@@ -21,7 +21,7 @@ use super::{Failure, Plugin, Rule, Source};
 /// The rules, in the order they are reported: what the project is, what it
 /// declares, its pages, its settings, how it reaches the deployment, and its
 /// tests. Running the tests is `TESTS_PASS`, which only `--run-tests` asks.
-pub const RULES: [Rule; 9] = [
+pub const RULES: [Rule; 11] = [
     Rule {
         id: "template-shape",
         holds: "the project keeps the template's shape",
@@ -31,6 +31,16 @@ pub const RULES: [Rule; 9] = [
         id: "tool-meridian",
         holds: "[tool.meridian] names roles from the fixed list, and no tags",
         check: tool_meridian,
+    },
+    Rule {
+        id: "edge-storage",
+        holds: "only a plugin at the edge asks for storage in its declaration",
+        check: edge_storage,
+    },
+    Rule {
+        id: "role-suite",
+        holds: "a plugin holding a role with a suite runs the suite in its tests",
+        check: role_suite,
     },
     Rule {
         id: "kit-linked",
@@ -93,6 +103,23 @@ pub const ROLES: [&str; 13] = [
     "settlement",
     "signal",
 ];
+
+/// The roles at the edge, which alone may own the storage a deployment
+/// grants an instance for its raw external records (decisions/028).
+pub const EDGE_ROLES: [&str; 7] = [
+    "ccm",
+    "custody",
+    "dgm",
+    "match",
+    "reporting",
+    "servicing",
+    "settlement",
+];
+
+/// The roles whose conformance suite the SDK carries, as this release of the
+/// CLI knows them (contract v11): a plugin holding one is verified for it only
+/// by passing every case (spec/vendor-differences-have-a-place-in-the-contract).
+pub const SUITES: [&str; 1] = ["custody"];
 
 // ── Which files ──────────────────────────────────────────────────────────
 
@@ -617,7 +644,8 @@ fn line_of(text: &str, needle: &str) -> usize {
 // ── tool-meridian ────────────────────────────────────────────────────────
 
 const TOOL_MERIDIAN: &str = "[tool.meridian] with `roles = [...]`, from the deployment's fixed \
-    list, and `interface = true` when it serves a page, as the template's pyproject.toml has it";
+    list, `interface = true` when it serves a page, as the template's pyproject.toml has it, and \
+    `declaration = \"<module>:<attribute>\"` naming its meridian.Declaration (contract v11)";
 
 fn tool_meridian(plugin: &Plugin) -> Vec<Failure> {
     const ID: &str = "tool-meridian";
@@ -712,6 +740,18 @@ fn tool_meridian(plugin: &Plugin) -> Vec<Failure> {
             &format!("`roles = [\"custody\"]`, or `roles = []`: names from {fixed}"),
         )),
     }
+    if let Some(declaration) = section.get("declaration") {
+        if !declaration.is_str() {
+            failures.push(failure(
+                ID,
+                "pyproject.toml",
+                key_line("declaration"),
+                "`declaration` is not text".into(),
+                "`declaration = \"<module>:<attribute>\"`, naming the plugin's \
+                 meridian.Declaration, which `meridian plugin upload` reads from the built image",
+            ));
+        }
+    }
     if let Some(interface) = section.get("interface") {
         if !interface.is_bool() {
             failures.push(failure(
@@ -721,6 +761,137 @@ fn tool_meridian(plugin: &Plugin) -> Vec<Failure> {
                 "`interface` is not true or false".into(),
                 "`interface = true` when the plugin serves a page through its sidecar, and \
                  `false` or nothing when it does not",
+            ));
+        }
+    }
+    failures
+}
+
+// ── What pyproject.toml declares, for the rules below ───────────────────
+
+/// The roles `[tool.meridian]` declares, and the declaration it names
+/// (`declaration = "module:attribute"`, contract v11); nothing where it does
+/// not read, which tool-meridian says.
+fn declared(plugin: &Plugin) -> (Vec<String>, Option<String>) {
+    let Some(table) = plugin
+        .file("pyproject.toml")
+        .and_then(|source| source.text.parse::<toml::Table>().ok())
+    else {
+        return (Vec::new(), None);
+    };
+    let section = table.get("tool").and_then(|t| t.get("meridian"));
+    let roles = section
+        .and_then(|m| m.get("roles"))
+        .and_then(|r| r.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.as_str().map(String::from))
+        .collect();
+    let declaration = section
+        .and_then(|m| m.get("declaration"))
+        .and_then(|d| d.as_str())
+        .map(String::from);
+    (roles, declaration)
+}
+
+/// The source file a `module:attribute` names, as the plugin's layout holds it.
+fn module_file<'a>(plugin: &'a Plugin, named: &str) -> Option<&'a Source> {
+    let module = named
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .replace('.', "/");
+    [
+        format!("src/{module}.py"),
+        format!("src/{module}/__init__.py"),
+        format!("{module}.py"),
+        format!("{module}/__init__.py"),
+    ]
+    .iter()
+    .find_map(|path| plugin.file(path))
+}
+
+// ── edge-storage ─────────────────────────────────────────────────────────
+
+fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
+    const ID: &str = "edge-storage";
+    static STORAGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bStorage\s*\(").unwrap());
+    let (roles, declaration) = declared(plugin);
+    let Some(named) = declaration else {
+        return Vec::new();
+    };
+    if !named.contains(':') {
+        return vec![failure(
+            ID,
+            "pyproject.toml",
+            0,
+            format!("`declaration = \"{named}\"` names no attribute"),
+            "`declaration = \"<module>:<attribute>\"`, the module and the meridian.Declaration in \
+             it, which `meridian plugin upload` reads from the built image",
+        )];
+    }
+    let Some(source) = module_file(plugin, &named) else {
+        return vec![failure(
+            ID,
+            "pyproject.toml",
+            0,
+            format!("`declaration = \"{named}\"` names a module this plugin does not have"),
+            "the module, under src/, that holds the plugin's meridian.Declaration",
+        )];
+    };
+    if roles.iter().any(|role| EDGE_ROLES.contains(&role.as_str())) {
+        return Vec::new();
+    }
+    STORAGE
+        .find(&source.text)
+        .map(|found| {
+            vec![failure(
+                ID,
+                &source.path,
+                line_at(&source.text, found.start()),
+                "the declaration asks for storage, and the plugin holds no edge role".into(),
+                &format!(
+                    "no Storage(...) in the declaration: only a plugin holding an edge role \
+                     ({}) owns storage for its raw records, and the deployment refuses it to \
+                     any other (decisions/028)",
+                    EDGE_ROLES.join(", ")
+                ),
+            )]
+        })
+        .unwrap_or_default()
+}
+
+// ── role-suite ───────────────────────────────────────────────────────────
+
+fn role_suite(plugin: &Plugin) -> Vec<Failure> {
+    const ID: &str = "role-suite";
+    let (roles, _) = declared(plugin);
+    let mut failures = Vec::new();
+    for role in roles.iter().filter(|role| SUITES.contains(&role.as_str())) {
+        let runs = Regex::new(&format!(
+            r#"\brun(?:_async)?\(\s*["']{}["']"#,
+            regex::escape(role)
+        ))
+        .unwrap();
+        let tested = plugin.files.iter().any(|source| {
+            let name = file_name(&source.path);
+            name.ends_with(".py")
+                && is_test(&source.path)
+                && source.text.contains("meridian.suites")
+                && runs.is_match(&source.text)
+        });
+        if !tested {
+            failures.push(failure(
+                ID,
+                "tests/",
+                0,
+                format!("it holds `{role}`, and no test runs the {role} suite"),
+                &format!(
+                    "a test that runs `meridian.suites.run(\"{role}\", producers)`: each case of \
+                     the suite mapped to the plugin's own exchange with its source, run through \
+                     its own conversion, and the report asserted passed. `--run-tests` then \
+                     holds the plugin to every case, as its role requires (contract v11)"
+                ),
             ));
         }
     }
