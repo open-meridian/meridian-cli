@@ -415,7 +415,7 @@ binary per target (macOS and Linux, each on x86_64 and arm64), each with its
 published from a push to `main`. `plugin new`'s template is vendored from
 meridian-python's `template/` at a pinned commit (`make vendor-template`;
 `check-vendored-template` fails when it drifts), so a release carries the SDK
-version the new plugin pins: 0.15.0 from 0.1.27.
+version the new plugin pins: 0.16.0 from 0.1.28.
 
 ## Licence
 
