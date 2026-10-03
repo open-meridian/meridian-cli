@@ -111,6 +111,21 @@ def test_opening_a_statement_is_sent_for_the_person_asking() -> None:
     assert sidecar_pb2.CallerClaims.FromString(params.acting_for.claims).subject == "local|ada"
 
 
+def test_an_agent_opens_a_statement_through_its_tool() -> None:
+    # The route's record makes it a tool on the deployment's MCP surface: an
+    # agent the person delegated to calls it, with no form token, and the
+    # statement is sent for the person all the same.
+    sidecar = Sidecar()
+    answered = client(sidecar).call_tool("open_statement")
+    assert (answered.outcome, answered.data) == ("made", {"statement_id": "STMT-1"})
+    [(_, params)] = sidecar.sent
+    claims = sidecar_pb2.CallerClaims.FromString(params.acting_for.claims)
+    assert (claims.subject, claims.tool_name) == ("local|ada", "open_statement")
+    # An argument the record does not take is refused by name; nothing sent.
+    refused = client(Sidecar()).call_tool("open_statement", {"account": "ACC-9"})
+    assert refused.outcome == "refused" and refused.paths == ["account"]
+
+
 def test_only_a_session_opened_by_open_may_write() -> None:
     sidecar = Sidecar()
     for level in ("read", "admin"):

@@ -156,7 +156,7 @@ DASHBOARD = os.environ.get("MERIDIAN_HARNESS_DASHBOARD", "http://dashboard:8080"
 #[test]
 fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
     type Breaking = fn(&Scaffolded) -> (String, usize);
-    let breakages: [(&str, Breaking, &str); 14] = [
+    let breakages: [(&str, Breaking, &str); 15] = [
         (
             "template-shape",
             |p| {
@@ -168,10 +168,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.16.0", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.17.0", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.16.0",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.17.0",
         ),
         (
             "tool-meridian",
@@ -301,6 +301,16 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
             "it imports nats, to reach the deployment directly",
         ),
         (
+            "tools-cover-routes",
+            |p| {
+                p.replace(&page_py(), "    params=OpenStatement,\n", "");
+                let text = p.read(&page_py());
+                let at = text.find("@pages.route(").expect("the template's route");
+                (page_py(), text[..at].matches('\n').count() + 1)
+            },
+            "/statement changes something and declares no typed record, so no tool is derived from it",
+        ),
+        (
             "tests-exist",
             |p| {
                 std::fs::remove_dir_all(p.path("tests")).unwrap();
@@ -351,6 +361,7 @@ fn a_plugin_breaking_every_rule_is_told_each_with_its_place_and_its_fix() {
         "log = logging.getLogger",
         "import nats\nTOKEN = os.environ.get(\"BROKER_TOKEN\")\nSECRET = meridian.Setting(\"api_key\", str, secret=True)\nprint(settings.values[\"api_key\"])",
     );
+    plugin.replace(&page_py(), "    params=OpenStatement,\n", "");
 
     let report = plugin.check();
     let mut failed = failed_rules(&report);
@@ -372,7 +383,11 @@ fn a_plugin_breaking_every_rule_is_told_each_with_its_place_and_its_fix() {
     );
     assert!(said.contains("instead: "), "{said}");
     assert!(
-        said.contains(&format!("11 of {} rules failed", RULES.len() + 1)),
+        said.contains(&format!(
+            "{} of {} rules failed",
+            RULES.len(),
+            RULES.len() + 1
+        )),
         "{said}"
     );
 
@@ -668,5 +683,70 @@ fn a_custody_plugin_running_its_suite_and_asking_for_storage_keeps_both_rules() 
         Vec::<&str>::new(),
         "{}",
         text(&report)
+    );
+}
+
+// ── tools-cover-routes (contract v12) ────────────────────────────────────
+
+/// A page module declaring `routes`, each one decorator and its view.
+fn routes_page(routes: &str) -> String {
+    format!("import meridian\n\npages = meridian.Pages(\"Checked\")\n\n\n{routes}\n")
+}
+
+fn tools_failures(report: &Report) -> Vec<String> {
+    report
+        .failures
+        .iter()
+        .filter(|f| f.rule == "tools-cover-routes")
+        .map(|f| f.found.clone())
+        .collect()
+}
+
+#[test]
+fn a_route_that_changes_something_with_no_record_fails_and_one_with_a_record_holds() {
+    let plugin = Scaffolded::tested("tools-cover");
+    plugin.write(
+        &format!("src/{MODULE}/more.py"),
+        &routes_page(
+            "@pages.route(\"/sync\", levels=\"write\", methods=[\"POST\"])\n\
+             async def sync(request): ...\n\n\n\
+             @pages.route(\n    \"/typed\",\n    levels=\"write\",\n    methods=[\"POST\"],\n    params=Typed,\n)\n\
+             async def typed(request): ...\n\n\n\
+             @pages.route(\"/read\", levels=\"read\")\n\
+             async def read(request): ...\n\n\n\
+             @pages.route(\"/swapped\", levels=\"write\", methods=[\"PUT\"])\n\
+             async def swapped(request): ...\n\n\n\
+             @pages.tool(replaces=\"/swapped\", method=\"PUT\", params=Typed)\n\
+             async def swapped_tool(request): ...\n",
+        ),
+    );
+    let found = tools_failures(&plugin.check());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].starts_with("/sync changes something"), "{found:?}");
+}
+
+#[test]
+fn a_route_kept_from_agents_says_why_and_a_verified_plugin_keeps_none() {
+    let plugin = Scaffolded::tested("tools-why");
+    plugin.write(
+        &format!("src/{MODULE}/more.py"),
+        &routes_page(
+            "@pages.route(\"/upload\", levels=\"write\", methods=[\"POST\"], tool=False)\n\
+             async def upload(request): ...\n\n\n\
+             @pages.route(\"/file\", levels=\"write\", methods=[\"POST\"], tool=False, why=\"a file a person chooses\")\n\
+             async def file(request): ...\n",
+        ),
+    );
+    let found = tools_failures(&plugin.check());
+    assert_eq!(
+        found,
+        vec!["/upload is kept from agents without saying why".to_string()]
+    );
+    let verified = check_as(&plugin.0, false, true).expect("a directory");
+    let found = tools_failures(&verified);
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(
+        found[1].contains("a verified plugin keeps nothing"),
+        "{found:?}"
     );
 }

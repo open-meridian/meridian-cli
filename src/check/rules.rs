@@ -21,7 +21,7 @@ use super::{Failure, Plugin, Rule, Source};
 /// The rules, in the order they are reported: what the project is, what it
 /// declares, its pages, its settings, how it reaches the deployment, and its
 /// tests. Running the tests is `TESTS_PASS`, which only `--run-tests` asks.
-pub const RULES: [Rule; 11] = [
+pub const RULES: [Rule; 12] = [
     Rule {
         id: "template-shape",
         holds: "the project keeps the template's shape",
@@ -56,6 +56,11 @@ pub const RULES: [Rule; 11] = [
         id: "own-origin",
         holds: "a page loads nothing from another origin",
         check: own_origin,
+    },
+    Rule {
+        id: "tools-cover-routes",
+        holds: "every route that changes something is a tool for agents, or says why not",
+        check: tools_cover_routes,
     },
     Rule {
         id: "settings-declared",
@@ -894,6 +899,155 @@ fn role_suite(plugin: &Plugin) -> Vec<Failure> {
                 ),
             ));
         }
+    }
+    failures
+}
+
+// ── tools-cover-routes ───────────────────────────────────────────────────
+
+/// What a route that changes something is told to write instead.
+const TOOL_ROUTE: &str = "declare its inputs as one typed record, `params=Record` (a frozen \
+    dataclass whose fields are named as its form's inputs, by the data dictionary's paths), so the \
+    SDK derives its tool for agents on the deployment's MCP surface; answer with pages.answer and \
+    refuse with pages.refuse. Or replace the derived tool with @pages.tool(replaces=...), or, \
+    where it cannot be offered to an agent, say so: `tool=False, why=\"...\"` (contract v12)";
+
+/// A route the plugin declares with a decorator: the method it is declared
+/// with, where, and the decorator's arguments.
+struct Declared<'a> {
+    source: &'a Source,
+    line: usize,
+    path: String,
+    arguments: String,
+}
+
+/// Every `@<pages>.page(...)` and `@<pages>.route(...)` in the plugin's
+/// Python, and every `@<pages>.tool(replaces=...)`'s path.
+fn declared_routes(plugin: &Plugin) -> (Vec<Declared<'_>>, Vec<String>) {
+    static DECORATOR: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"@\s*[A-Za-z_][A-Za-z0-9_.]*\.(page|route|tool)\s*\(").unwrap()
+    });
+    static FIRST_STRING: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"^\s*(?:[A-Za-z_][A-Za-z0-9_]*|["']([^"']*)["'])"#).unwrap());
+    static REPLACES: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"\breplaces\s*=\s*(?:["']([^"']*)["']|([A-Za-z_][A-Za-z0-9_]*))"#).unwrap()
+    });
+    let mut routes = Vec::new();
+    let mut replaced = Vec::new();
+    for source in python(plugin) {
+        let text = python_uncommented(&source.text);
+        for found in DECORATOR.captures_iter(&text) {
+            let whole = found.get(0).expect("matched");
+            let arguments = enclosed(&text[whole.end()..]).to_string();
+            if &found[1] == "tool" {
+                if let Some(path) = REPLACES.captures(&arguments) {
+                    replaced.push(
+                        path.get(1)
+                            .or(path.get(2))
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default(),
+                    );
+                }
+                continue;
+            }
+            let first = first_argument(&arguments).trim().to_string();
+            let path = FIRST_STRING
+                .captures(&first)
+                .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+                .unwrap_or(first);
+            routes.push(Declared {
+                source,
+                line: line_at(&text, whole.start()),
+                path,
+                arguments,
+            });
+        }
+    }
+    (routes, replaced)
+}
+
+/// The methods a declaration names; GET where it names none, and a change
+/// assumed where they are named some way the text cannot read.
+fn methods_of(arguments: &str) -> Vec<String> {
+    static METHODS: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\bmethods\s*=\s*([\[(])").unwrap());
+    let Some(found) = METHODS.captures(arguments) else {
+        return vec!["GET".into()];
+    };
+    let at = found.get(1).expect("matched").end();
+    let listed = enclosed(&arguments[at..]);
+    let named: Vec<String> = Regex::new(r#"["']([A-Za-z]+)["']"#)
+        .unwrap()
+        .captures_iter(listed)
+        .map(|c| c[1].to_ascii_uppercase())
+        .collect();
+    if named.is_empty() {
+        vec!["POST".into()]
+    } else {
+        named
+    }
+}
+
+/// A keyword's value in a declaration's arguments, as written, or None.
+fn keyword<'a>(arguments: &'a str, name: &str) -> Option<&'a str> {
+    let found = Regex::new(&format!(r"\b{name}\s*=\s*"))
+        .unwrap()
+        .find(arguments)?;
+    Some(first_argument(&arguments[found.end()..]).trim())
+}
+
+fn tools_cover_routes(plugin: &Plugin) -> Vec<Failure> {
+    const ID: &str = "tools-cover-routes";
+    let (routes, replaced) = declared_routes(plugin);
+    let mut failures = Vec::new();
+    for route in routes {
+        let changing = methods_of(&route.arguments)
+            .iter()
+            .any(|method| method != "GET" && method != "HEAD");
+        if !changing || keyword(&route.arguments, "params").is_some_and(|v| v != "None") {
+            continue;
+        }
+        if replaced.contains(&route.path) {
+            continue;
+        }
+        let offered = keyword(&route.arguments, "tool");
+        if offered == Some("False") {
+            let why = keyword(&route.arguments, "why")
+                .map(|v| v.trim_matches(|c| c == '"' || c == '\''))
+                .unwrap_or_default();
+            if why.trim().is_empty() {
+                failures.push(failure(
+                    ID,
+                    &route.source.path,
+                    route.line,
+                    format!("{} is kept from agents without saying why", route.path),
+                    "`tool=False, why=\"...\"`: why an agent may not do what a person does here",
+                ));
+            } else if plugin.verified {
+                failures.push(failure(
+                    ID,
+                    &route.source.path,
+                    route.line,
+                    format!(
+                        "{} changes something and is kept from agents; a verified plugin keeps \
+                         nothing a person may do at a level from an agent at that level",
+                        route.path
+                    ),
+                    TOOL_ROUTE,
+                ));
+            }
+            continue;
+        }
+        failures.push(failure(
+            ID,
+            &route.source.path,
+            route.line,
+            format!(
+                "{} changes something and declares no typed record, so no tool is derived from it",
+                route.path
+            ),
+            TOOL_ROUTE,
+        ));
     }
     failures
 }

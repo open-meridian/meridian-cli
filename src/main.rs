@@ -100,6 +100,8 @@ plugin check: needs no deployment. Exits 0 when every rule holds, 1 when one doe
 not, each failure with its file, line and what to write instead
       --dir <dir>           the plugin's directory (default: .)
       --run-tests           run its tests too, with pytest
+      --verified            hold it as a verified plugin is: every changing route
+                            a tool for agents, none kept from them
       --json                one JSON object on stdout
 
 plugin migrate: needs no deployment, and docker. Exits 0 when migrated with nothing
@@ -206,10 +208,11 @@ const TAKES_A_VALUE: [&str; 22] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 12] = [
+const SWITCHES: [&str; 13] = [
     "--no-doctor",
     "--force",
     "--run-tests",
+    "--verified",
     "--delete-namespace",
     "--json",
     "--follow",
@@ -419,7 +422,11 @@ fn check_command(arguments: &Arguments, words: &[&str]) -> i32 {
         return 2;
     }
     let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
-    let report = match check::check(&dir, arguments.set("--run-tests")) {
+    let report = match check::check_as(
+        &dir,
+        arguments.set("--run-tests"),
+        arguments.set("--verified"),
+    ) {
         Ok(report) => report,
         Err(refusal) => {
             eprintln!("meridian plugin check: {refusal}");

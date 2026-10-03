@@ -298,6 +298,14 @@ storage. `plugin check` holds the same declaration to that (`edge-storage`),
 and a plugin holding a role with a conformance suite (`custody`) to a test
 that runs the suite (`role-suite`), which `--run-tests` then runs.
 
+From contract v12 a deployment serves one MCP surface, where an agent a
+person delegated to works as them, and a plugin's tools there are derived by
+its SDK from its typed routes. `plugin check` fails a route that changes
+something and declares no typed record of inputs (`params=`), so no tool is
+derived from it, unless it says why it is not offered (`tool=False,
+why="..."`) or a tool replaces it (`tools-cover-routes`); `--verified` holds
+it as a verified plugin is held, keeping no changing route from agents.
+
 `launch` shows the roles the version asks for and runs it only once
 you approve them; `--yes` approves for a script that has already read them.
 Its pages are on its own name, `http://my-plugin.plugins.meridian.localhost/`,

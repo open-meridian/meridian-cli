@@ -36,6 +36,10 @@ pub struct Source {
 pub struct Plugin {
     pub root: PathBuf,
     pub files: Vec<Source>,
+    /// Checked as a verified plugin is (`--verified`): a changing route may
+    /// not be kept from agents (spec/a-deployment-serves-its-mcp,
+    /// requirement 23).
+    pub verified: bool,
 }
 
 impl Plugin {
@@ -182,12 +186,20 @@ pub fn read(root: &Path) -> Result<Plugin, String> {
     Ok(Plugin {
         root: root.to_path_buf(),
         files,
+        verified: false,
     })
 }
 
 /// Every rule over the plugin in `dir`; its tests run only when asked.
 pub fn check(dir: &Path, run_tests: bool) -> Result<Report, String> {
-    let plugin = read(dir)?;
+    check_as(dir, run_tests, false)
+}
+
+/// The same, held as a verified plugin is when `verified`: no changing
+/// route kept from agents.
+pub fn check_as(dir: &Path, run_tests: bool, verified: bool) -> Result<Report, String> {
+    let mut plugin = read(dir)?;
+    plugin.verified = verified;
     let mut report = Report {
         dir: dir.display().to_string(),
         outcomes: Vec::new(),

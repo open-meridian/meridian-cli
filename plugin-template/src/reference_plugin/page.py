@@ -15,6 +15,14 @@ place, and the dashboard's tab row and the plugin agree by construction.
   statement (/statement, at `write` alone), sent with `acting_for` so the
   sidecar decides whether they may.
 
+A route that changes something declares its inputs as one typed record
+(`params=`), and the SDK derives from it a tool an agent the person
+delegated to can call on the deployment's MCP surface, at the route's
+levels: `open_statement` here. Its view answers with `pages.answer` -- the
+page for a browser, the typed record for an agent -- and refuses an agent
+with `pages.refuse`. `meridian plugin check` fails a changing route with no
+record unless it says why it is not offered (`tool=False, why=...`).
+
 Replace them with your plugin's own pages; keep declaring them this way.
 
 A request reaches a view only through this plugin's sidecar, which verified
@@ -37,6 +45,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 import meridian
@@ -69,8 +78,27 @@ def accounts(request: meridian.Request) -> str:
     return _accounts(request)
 
 
-@pages.route("/statement", levels="write", methods=["POST"])
-async def statement(request: meridian.Request) -> str:
+@dataclass(frozen=True)
+class OpenStatement:
+    """What opening a statement takes: nothing."""
+
+
+@dataclass(frozen=True)
+class Opened:
+    """The statement opened."""
+
+    statement_id: str
+
+
+@pages.route(
+    "/statement",
+    levels="write",
+    methods=["POST"],
+    params=OpenStatement,
+    name="open_statement",
+    description="Open an empty holdings statement, for the person.",
+)
+async def statement(request: meridian.Request) -> meridian.Response | str:
     # Sent for the person: the sidecar admits it only in a session opened by
     # Open, for an account they may write, and records it as theirs.
     try:
@@ -83,7 +111,11 @@ async def statement(request: meridian.Request) -> str:
             acting_for=request.caller.header,
         )
     except meridian.MeridianError as refused:
+        if request.tool_name:
+            pages.refuse(f"Refused: {refused}", reason="refused")
         return _accounts(request, f"Refused: {refused}", "bad")
+    if request.tool_name:
+        return pages.answer("accounts.html", Opened(opened.statement_id))
     return _accounts(request, f"Opened statement {opened.statement_id} for you.", "good")
 
 
