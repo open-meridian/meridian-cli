@@ -165,30 +165,84 @@ fn trusting_it_is_one_command_on_each_system() {
     );
     assert!(trust_command("linux", root).contains("update-ca-certificates"));
     assert!(trust_command("windows", root).starts_with("certutil -user -addstore Root"));
-    assert_eq!(
-        node_line(Path::new("/Users/a b/root.pem")),
-        "NODE_EXTRA_CA_CERTS='/Users/a b/root.pem'"
-    );
     assert!(untrust_command("macos", "AB12").contains("delete-certificate -t -Z AB12"));
 }
 
-/// A machine that is asked, and keeps what it was asked.
+#[test]
+fn naming_it_to_apps_is_one_command_on_each_system() {
+    assert_eq!(
+        apps_command("macos", Path::new("/Users/a b/root.pem")),
+        "launchctl setenv NODE_EXTRA_CA_CERTS '/Users/a b/root.pem'"
+    );
+    assert_eq!(
+        apps_command("linux", Path::new("/home/ada/root.pem")),
+        "echo \"export NODE_EXTRA_CA_CERTS=/home/ada/root.pem\" >> ~/.profile"
+    );
+    assert_eq!(
+        apps_command("windows", Path::new(r"C:\Users\ada\root.pem")),
+        r#"setx NODE_EXTRA_CA_CERTS "C:\Users\ada\root.pem""#
+    );
+    assert_eq!(
+        unapps_command("macos"),
+        "launchctl unsetenv NODE_EXTRA_CA_CERTS"
+    );
+    assert!(unapps_command("windows").contains("reg delete HKCU\\Environment"));
+}
+
+#[test]
+fn the_launch_agent_names_the_file_to_launchd_when_it_is_loaded() {
+    let plist = agent_plist(Path::new("/Users/a&b/authority/root.pem"));
+    assert!(plist.contains("<string>com.open-meridian.authority</string>"));
+    assert!(plist.contains(
+        "<string>/bin/launchctl</string>\n    <string>setenv</string>\n    \
+         <string>NODE_EXTRA_CA_CERTS</string>\n    <string>/Users/a&amp;b/authority/root.pem</string>"
+    ));
+    assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
+    // Loaded at each login, never kept running.
+    assert!(!plist.contains("KeepAlive"));
+}
+
+/// A machine that is asked, and keeps what it was asked: its login keychain,
+/// launchd's environment for apps, and a LaunchAgents directory beside the
+/// test's own, never the person's.
 struct Asked {
     os: &'static str,
     refuses: bool,
     said: RefCell<Vec<String>>,
+    launchd: RefCell<Option<String>>,
+    own: Option<String>,
+    agents: PathBuf,
+}
+
+fn agents_of(dir: &Path) -> PathBuf {
+    PathBuf::from(format!("{}-agents", dir.display()))
+}
+
+fn tidy(dir: &Path) {
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(agents_of(dir));
 }
 
 impl Asked {
-    fn on(os: &'static str) -> Self {
+    fn on(os: &'static str, dir: &Path) -> Self {
+        let _ = std::fs::remove_dir_all(agents_of(dir));
         Asked {
             os,
             refuses: false,
             said: RefCell::new(Vec::new()),
+            launchd: RefCell::new(None),
+            own: None,
+            agents: agents_of(dir),
         }
     }
     fn events(&self) -> Vec<String> {
         self.said.borrow().clone()
+    }
+    fn named(&self) -> Option<String> {
+        self.launchd.borrow().clone()
+    }
+    fn plist(&self) -> PathBuf {
+        self.agents.join("com.open-meridian.authority.plist")
     }
 }
 
@@ -209,12 +263,55 @@ impl Trust for Asked {
         self.said.borrow_mut().push(format!("remove {sha1}"));
         Ok(())
     }
+    fn apps_env(&self) -> Option<String> {
+        self.named()
+    }
+    fn own_env(&self) -> Option<String> {
+        self.own.clone()
+    }
+    fn set_apps_env(&self, file: &str) -> Result<(), String> {
+        self.said.borrow_mut().push(format!("setenv {file}"));
+        *self.launchd.borrow_mut() = Some(file.to_string());
+        Ok(())
+    }
+    fn unset_apps_env(&self) -> Result<(), String> {
+        self.said.borrow_mut().push("unsetenv".into());
+        *self.launchd.borrow_mut() = None;
+        Ok(())
+    }
+    fn launch_agents(&self) -> Result<PathBuf, String> {
+        Ok(self.agents.clone())
+    }
+    fn load(&self, plist: &Path) -> Result<(), String> {
+        self.said
+            .borrow_mut()
+            .push(format!("load {}", plist.display()));
+        Ok(())
+    }
+    fn unload(&self, plist: &Path) -> Result<(), String> {
+        self.said
+            .borrow_mut()
+            .push(format!("unload {}", plist.display()));
+        Ok(())
+    }
+}
+
+/// A `NODE_EXTRA_CA_CERTS` file of the person's own, with no newline at its
+/// end.
+fn their_file(dir: &Path) -> String {
+    let theirs = PathBuf::from(format!("{}-theirs.pem", dir.display()));
+    std::fs::write(
+        &theirs,
+        "-----BEGIN CERTIFICATE-----\nTHEIRS\n-----END CERTIFICATE-----",
+    )
+    .unwrap();
+    theirs.display().to_string()
 }
 
 #[test]
 fn on_macos_it_says_what_the_root_is_for_then_asks_once_and_adds_it() {
     let dir = scratch("macos");
-    let machine = Asked::on("macos");
+    let machine = Asked::on("macos", &dir);
     let mut said = Vec::new();
     let ask = |question: &str| {
         machine.said.borrow_mut().push(format!("ask {question}"));
@@ -235,20 +332,283 @@ fn on_macos_it_says_what_the_root_is_for_then_asks_once_and_adds_it() {
     assert!(purpose_at < ask_at && ask_at < add_at, "{events:?}");
     assert!(events[add_at].ends_with("root.pem"));
     assert!(events[purpose_at].contains(".localhost and nothing else"));
+    assert_eq!(
+        events.iter().filter(|e| e.starts_with("ask ")).count(),
+        1,
+        "one question: {events:?}"
+    );
 
     // Once: asked again, it neither asks nor adds, and makes nothing new.
-    let again = Asked::on("macos");
+    let again = Asked::on("macos", &dir);
     let never = |_: &str| -> bool { panic!("asked twice") };
     let held = prepare(&dir, "m", NOW, &again, &never, &mut |_: &str| {}).unwrap();
     assert_eq!(held.authority.root_pem(), prepared.authority.root_pem());
     assert!(again.events().is_empty());
-    let _ = std::fs::remove_dir_all(&dir);
+    tidy(&dir);
+}
+
+#[test]
+fn yes_on_macos_names_the_root_to_apps_now_and_at_each_login() {
+    let dir = scratch("apps");
+    let machine = Asked::on("macos", &dir);
+    let mut said = Vec::new();
+    prepare(
+        &dir,
+        "m",
+        NOW,
+        &machine,
+        &|_: &str| true,
+        &mut |line: &str| said.push(line.to_string()),
+    )
+    .unwrap();
+    let root = root_path(&dir).display().to_string();
+    let plist = machine.plist().display().to_string();
+    assert_eq!(
+        machine.events(),
+        [
+            format!("add {root}"),
+            format!("setenv {root}"),
+            format!("unload {plist}"),
+            format!("load {plist}"),
+        ]
+    );
+    assert_eq!(machine.named().as_deref(), Some(root.as_str()));
+    let written = std::fs::read_to_string(machine.plist()).unwrap();
+    assert!(
+        written.contains(&format!("<string>{root}</string>")),
+        "{written}"
+    );
+    let said = said.join("\n");
+    assert!(said.contains("Restart the Claude app"), "{said}");
+    assert!(
+        said.contains("the Claude Code CLI reads the login keychain"),
+        "{said}"
+    );
+
+    // `meridian authority` says it is in place.
+    let state = apps(&dir, &machine);
+    assert_eq!(
+        state,
+        Apps::Named {
+            file: root_path(&dir),
+            at_login: true
+        }
+    );
+    assert!(state.said().contains("in place"), "{}", state.said());
+
+    // `meridian authority trust` again, as a second install runs it: nothing
+    // asked, nothing changed, and said so.
+    let before = machine.events().len();
+    let mut again = Vec::new();
+    trust_here(
+        &dir,
+        "m",
+        NOW,
+        &machine,
+        &|_: &str| -> bool { panic!("asked again") },
+        &mut |line: &str| again.push(line.to_string()),
+    )
+    .unwrap();
+    assert_eq!(machine.events().len(), before);
+    assert!(
+        again.join("\n").contains("trusted here already"),
+        "{again:?}"
+    );
+
+    // Removed: the LaunchAgent unloaded and gone, launchd names nothing, the
+    // keychain entry and the files gone.
+    let sha1 = Authority::read(&dir).unwrap().unwrap().sha1();
+    let removed = remove(&dir, &machine).unwrap();
+    let events = machine.events()[before..].to_vec();
+    assert_eq!(
+        events,
+        [
+            format!("unload {plist}"),
+            "unsetenv".to_string(),
+            format!("remove {sha1}")
+        ]
+    );
+    assert!(!machine.plist().exists());
+    assert_eq!(machine.named(), None);
+    assert!(!dir.exists());
+    assert!(removed.contains("no longer names it to apps"), "{removed}");
+    tidy(&dir);
+}
+
+#[test]
+fn one_named_already_is_never_replaced_a_file_holding_both_is_asked_for_and_put_back() {
+    let dir = scratch("theirs");
+    let theirs = their_file(&dir);
+    let machine = Asked::on("macos", &dir);
+    *machine.launchd.borrow_mut() = Some(theirs.clone());
+    let questions = RefCell::new(Vec::new());
+    let ask = |question: &str| {
+        questions.borrow_mut().push(question.to_string());
+        true
+    };
+    let mut said = Vec::new();
+    prepare(&dir, "m", NOW, &machine, &ask, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .unwrap();
+    let questions = questions.into_inner();
+    assert_eq!(questions.len(), 2, "{questions:?}");
+    assert!(questions[1].contains(&theirs), "{questions:?}");
+    assert!(said.join("\n").contains("never replaces it"));
+
+    let combined = dir.join("node-extra-ca-certs.pem");
+    assert_eq!(
+        machine.named().as_deref(),
+        Some(combined.display().to_string().as_str())
+    );
+    let both = std::fs::read_to_string(&combined).unwrap();
+    let root = std::fs::read_to_string(root_path(&dir)).unwrap();
+    assert!(both.starts_with("-----BEGIN CERTIFICATE-----\nTHEIRS\n-----END CERTIFICATE-----\n"));
+    assert!(both.ends_with(&root));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("node-extra-ca-certs.before")).unwrap(),
+        theirs
+    );
+    let agent = std::fs::read_to_string(machine.plist()).unwrap();
+    assert!(agent.contains(&format!("<string>{}</string>", combined.display())));
+    assert_eq!(
+        apps(&dir, &machine),
+        Apps::Named {
+            file: combined,
+            at_login: true
+        }
+    );
+
+    // Removed: theirs named again, as it was, and never unset.
+    let before = machine.events().len();
+    let removed = remove(&dir, &machine).unwrap();
+    assert_eq!(machine.named().as_deref(), Some(theirs.as_str()));
+    let events = machine.events()[before..].to_vec();
+    assert!(events.contains(&format!("setenv {theirs}")), "{events:?}");
+    assert!(!events.contains(&"unsetenv".to_string()), "{events:?}");
+    assert!(removed.contains("as before"), "{removed}");
+    assert!(!machine.plist().exists());
+    tidy(&dir);
+    let _ = std::fs::remove_file(theirs);
+}
+
+#[test]
+fn declined_a_file_holding_both_changes_nothing_and_says_what_to_do() {
+    let dir = scratch("theirs-declined");
+    let theirs = their_file(&dir);
+    let machine = Asked::on("macos", &dir);
+    *machine.launchd.borrow_mut() = Some(theirs.clone());
+    let ask = |question: &str| question.starts_with("Trust it now?");
+    let mut said = Vec::new();
+    prepare(&dir, "m", NOW, &machine, &ask, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .unwrap();
+    // The keychain took it; apps were left as they were.
+    assert_eq!(machine.events().len(), 1, "{:?}", machine.events());
+    assert_eq!(machine.named().as_deref(), Some(theirs.as_str()));
+    assert!(!machine.plist().exists());
+    assert!(!dir.join("node-extra-ca-certs.pem").exists());
+    let said = said.join("\n");
+    assert!(said.contains(&format!("cat {theirs} ")), "{said}");
+    assert!(
+        said.contains("launchctl setenv NODE_EXTRA_CA_CERTS ")
+            && said.contains("node-extra-ca-certs.pem"),
+        "{said}"
+    );
+    assert_eq!(apps(&dir, &machine), Apps::Other(theirs.clone()));
+    tidy(&dir);
+    let _ = std::fs::remove_file(theirs);
+}
+
+#[test]
+fn one_in_the_environment_alone_is_kept_too_and_removal_unsets_what_launchd_never_had() {
+    let dir = scratch("own");
+    let theirs = their_file(&dir);
+    let machine = Asked {
+        own: Some(theirs.clone()),
+        ..Asked::on("macos", &dir)
+    };
+    prepare(&dir, "m", NOW, &machine, &|_: &str| true, &mut |_: &str| {}).unwrap();
+    let combined = dir.join("node-extra-ca-certs.pem").display().to_string();
+    assert_eq!(machine.named().as_deref(), Some(combined.as_str()));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("node-extra-ca-certs.before")).unwrap(),
+        ""
+    );
+    remove(&dir, &machine).unwrap();
+    assert_eq!(machine.named(), None);
+    assert!(machine.events().contains(&"unsetenv".to_string()));
+    tidy(&dir);
+    let _ = std::fs::remove_file(theirs);
+}
+
+#[test]
+fn removal_leaves_alone_what_the_person_has_since_named() {
+    let dir = scratch("changed");
+    let machine = Asked::on("macos", &dir);
+    prepare(&dir, "m", NOW, &machine, &|_: &str| true, &mut |_: &str| {}).unwrap();
+    *machine.launchd.borrow_mut() = Some("/Users/ada/firm.pem".into());
+    let before = machine.events().len();
+    remove(&dir, &machine).unwrap();
+    assert_eq!(machine.named().as_deref(), Some("/Users/ada/firm.pem"));
+    let events = machine.events()[before..].to_vec();
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.starts_with("setenv") || e == "unsetenv"),
+        "{events:?}"
+    );
+    assert!(!machine.plist().exists(), "the LaunchAgent goes regardless");
+    tidy(&dir);
+}
+
+#[test]
+fn trust_asks_about_apps_alone_where_the_keychain_took_it_before() {
+    // As a person who trusted it with 0.1.30, which asked about the keychain
+    // alone, and named it to launchd by hand since.
+    let dir = scratch("before-apps");
+    Authority::make("m", NOW).unwrap().write(&dir).unwrap();
+    std::fs::write(dir.join("asked"), "").unwrap();
+    let machine = Asked::on("macos", &dir);
+    let root = root_path(&dir).display().to_string();
+    *machine.launchd.borrow_mut() = Some(root.clone());
+    assert_eq!(
+        apps(&dir, &machine),
+        Apps::Named {
+            file: root_path(&dir),
+            at_login: false
+        }
+    );
+
+    let questions = RefCell::new(Vec::new());
+    let ask = |question: &str| {
+        questions.borrow_mut().push(question.to_string());
+        true
+    };
+    let mut said = Vec::new();
+    trust_here(&dir, "m", NOW, &machine, &ask, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .unwrap();
+    let questions = questions.into_inner();
+    assert_eq!(questions.len(), 1, "{questions:?}");
+    assert!(questions[0].starts_with("Point apps"), "{questions:?}");
+    assert!(
+        !machine.events().iter().any(|e| e.starts_with("add ")),
+        "the keychain is not asked again: {:?}",
+        machine.events()
+    );
+    assert!(machine.plist().exists());
+    assert_eq!(machine.named().as_deref(), Some(root.as_str()));
+    assert!(said.join("\n").contains("is in your login keychain"));
+    tidy(&dir);
 }
 
 #[test]
 fn declined_or_refused_it_says_the_command_and_asks_again_next_time() {
     let dir = scratch("declined");
-    let machine = Asked::on("macos");
+    let machine = Asked::on("macos", &dir);
     let mut said = Vec::new();
     prepare(
         &dir,
@@ -260,13 +620,17 @@ fn declined_or_refused_it_says_the_command_and_asks_again_next_time() {
     )
     .unwrap();
     assert!(machine.events().is_empty(), "nothing added unasked");
-    assert!(said
-        .join("\n")
-        .contains("security add-trusted-cert -r trustRoot"));
+    let said = said.join("\n");
+    assert!(said.contains("security add-trusted-cert -r trustRoot"));
+    assert!(
+        said.contains("launchctl setenv NODE_EXTRA_CA_CERTS"),
+        "{said}"
+    );
+    assert!(!machine.plist().exists());
 
     let refusing = Asked {
         refuses: true,
-        ..Asked::on("macos")
+        ..Asked::on("macos", &dir)
     };
     let mut said = Vec::new();
     prepare(
@@ -278,15 +642,20 @@ fn declined_or_refused_it_says_the_command_and_asks_again_next_time() {
         &mut |line: &str| said.push(line.to_string()),
     )
     .unwrap();
-    assert_eq!(refusing.events().len(), 1);
+    assert_eq!(refusing.events().len(), 1, "{:?}", refusing.events());
     assert!(said.join("\n").contains("the person cancelled"));
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        refusing.named(),
+        None,
+        "apps are not pointed at a root refused"
+    );
+    tidy(&dir);
 }
 
 #[test]
-fn elsewhere_it_prints_the_command_once_and_runs_nothing() {
+fn elsewhere_it_prints_each_step_once_and_runs_nothing() {
     let dir = scratch("linux");
-    let machine = Asked::on("linux");
+    let machine = Asked::on("linux", &dir);
     let mut said = Vec::new();
     let never = |_: &str| -> bool { panic!("nothing to ask on linux") };
     prepare(&dir, "m", NOW, &machine, &never, &mut |line: &str| {
@@ -294,20 +663,57 @@ fn elsewhere_it_prints_the_command_once_and_runs_nothing() {
     })
     .unwrap();
     assert!(machine.events().is_empty());
-    assert!(said.join("\n").contains("update-ca-certificates"));
+    let said = said.join("\n");
+    assert!(said.contains("update-ca-certificates"), "{said}");
+    assert!(
+        said.contains("echo \"export NODE_EXTRA_CA_CERTS="),
+        "{said}"
+    );
     let mut again = Vec::new();
     prepare(&dir, "m", NOW, &machine, &never, &mut |line: &str| {
         again.push(line.to_string())
     })
     .unwrap();
     assert!(again.is_empty(), "{again:?}");
-    let _ = std::fs::remove_dir_all(&dir);
+
+    // `meridian authority trust` says the steps again, every time, and with
+    // one of the person's own named, the file holding both.
+    let theirs = their_file(&dir);
+    let named = Asked {
+        own: Some(theirs.clone()),
+        ..Asked::on("linux", &dir)
+    };
+    let mut steps = Vec::new();
+    trust_here(&dir, "m", NOW, &named, &never, &mut |line: &str| {
+        steps.push(line.to_string())
+    })
+    .unwrap();
+    let steps = steps.join("\n");
+    assert!(steps.contains(&format!("cat {theirs} ")), "{steps}");
+    assert!(
+        steps.contains("node-extra-ca-certs.pem\" >> ~/.profile"),
+        "{steps}"
+    );
+    assert!(named.events().is_empty());
+    assert!(
+        !dir.join("node-extra-ca-certs.pem").exists(),
+        "nothing made"
+    );
+
+    let removed = remove(&dir, &named).unwrap();
+    assert!(named.events().is_empty());
+    assert!(
+        removed.contains("remove the NODE_EXTRA_CA_CERTS line"),
+        "{removed}"
+    );
+    tidy(&dir);
+    let _ = std::fs::remove_file(theirs);
 }
 
 #[test]
 fn removing_it_takes_it_out_of_the_keychain_and_off_the_disk() {
     let dir = scratch("removed");
-    let machine = Asked::on("macos");
+    let machine = Asked::on("macos", &dir);
     let prepared = prepare(&dir, "m", NOW, &machine, &|_: &str| true, &mut |_: &str| {}).unwrap();
     let sha1 = prepared.authority.sha1();
     let said = remove(&dir, &machine).unwrap();
@@ -317,6 +723,7 @@ fn removing_it_takes_it_out_of_the_keychain_and_off_the_disk() {
     assert!(remove(&dir, &machine)
         .unwrap()
         .contains("nothing to remove"));
+    tidy(&dir);
 }
 
 /// A cluster that holds one Secret, or none, and keeps what was applied.

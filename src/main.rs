@@ -61,7 +61,11 @@ meridian -- bringing a Meridian deployment up
                              deployment, which is upgrade-deployment
   meridian authority         this machine's certificate authority, which signs a local
                              deployment's HTTPS: where it is, and how clients trust it
-  meridian authority remove  take it out of the login keychain and off this machine
+  meridian authority trust   trust it here: the login keychain, which browsers and the
+                             Claude Code CLI read, and NODE_EXTRA_CA_CERTS, which the
+                             Claude app reads. Asked first; the install script runs it
+  meridian authority remove  take it out of the login keychain and apps' environment,
+                             and off this machine
   meridian uninstall         revoke every delegation this holds, and remove it
   meridian --version         which release this is
 
@@ -179,7 +183,8 @@ upgrade: this binary, not a deployment
 uninstall:
       --yes                 remove without being asked. Sessions with deployments
                             it cannot reach are forgotten here and lapse there.
-                            This machine's certificate authority goes too
+                            This machine's certificate authority goes too, out of
+                            the login keychain and apps' environment
 
 authority remove:
       --yes                 remove without being asked
@@ -1445,7 +1450,8 @@ async fn uninstall_command(arguments: &Arguments) -> i32 {
     let certificates = authority::directory().ok().filter(|dir| dir.exists());
     if let Some(dir) = &certificates {
         println!(
-            "  this machine's certificate authority, {}, and its place in the login keychain",
+            "  this machine's certificate authority, {}, and its place in the login keychain \
+             and in apps' NODE_EXTRA_CA_CERTS",
             dir.display()
         );
     }
@@ -1506,26 +1512,45 @@ fn machine_name() -> String {
         .unwrap_or_else(|| "this machine".into())
 }
 
+/// Seconds since the epoch, which the authority's certificates are dated by.
+fn seconds_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default()
+}
+
 /// This machine's certificate authority, made the first time, and the
 /// machine asked to trust it once, having been told what it is for.
 fn prepare_authority() -> Result<authority::Prepared, String> {
     let dir = authority::directory()?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_secs())
-        .unwrap_or_default();
     authority::prepare(
         &dir,
         &machine_name(),
-        now,
+        seconds_now(),
         &authority::ThisMachine,
         &approved,
         &mut |line: &str| println!("{line}"),
     )
 }
 
-/// `meridian authority [remove] [--yes]`: where this machine's certificate
-/// authority is and how a client trusts it; or taken away (ruling 5).
+/// `meridian authority trust`: this machine's certificate authority, made the
+/// first time, and trusted here once the person says so, the keychain and apps
+/// on Node both; what the install script runs at a terminal on macOS.
+fn trust_authority(dir: &std::path::Path) -> Result<(), String> {
+    authority::trust_here(
+        dir,
+        &machine_name(),
+        seconds_now(),
+        &authority::ThisMachine,
+        &approved,
+        &mut |line: &str| println!("{line}"),
+    )
+}
+
+/// `meridian authority [trust|remove] [--yes]`: where this machine's
+/// certificate authority is and how a client trusts it; trusted here; or
+/// taken away (ruling 5).
 fn authority_command(arguments: &Arguments) -> i32 {
     let dir = match authority::directory() {
         Ok(dir) => dir,
@@ -1540,14 +1565,24 @@ fn authority_command(arguments: &Arguments) -> i32 {
             Ok(Some(held)) => {
                 let root = authority::root_path(&dir);
                 println!("{}\n", authority::purpose(&dir));
+                let os = std::env::consts::OS;
+                let readers = match os {
+                    "macos" => "A browser and the Claude Code CLI read the login keychain",
+                    _ => "A browser reads the system's roots",
+                };
                 println!(
-                    "Trusting it here:\n  {}",
-                    authority::trust_command(std::env::consts::OS, &root)
+                    "{readers}; trusting it there:\n  {}",
+                    authority::trust_command(os, &root)
                 );
-                println!(
-                    "A Node-based client, Claude Code among them, may need it named:\n  {}",
-                    authority::node_line(&root)
-                );
+                if os == "macos" {
+                    println!("{}", authority::apps(&dir, &authority::ThisMachine).said());
+                } else {
+                    println!(
+                        "The Claude app, like any app on Node, reads {} instead:\n  {}",
+                        authority::NODE_EXTRA_CA_CERTS,
+                        authority::apps_command(os, &root)
+                    );
+                }
                 println!("Its SHA-1 fingerprint: {}", held.sha1());
                 0
             }
@@ -1566,8 +1601,9 @@ fn authority_command(arguments: &Arguments) -> i32 {
         },
         ["remove"] => {
             println!(
-                "This removes this machine's certificate authority, {}, and takes it out of the \
-                 login keychain: deployments it signed for stop being trusted here.",
+                "This removes this machine's certificate authority, {}, takes it out of the \
+                 login keychain, and stops naming it to apps, putting back any \
+                 NODE_EXTRA_CA_CERTS it replaced: deployments it signed for stop being trusted here.",
                 dir.display()
             );
             if !arguments.set("--yes") && !approved("Remove it?") {
@@ -1585,8 +1621,15 @@ fn authority_command(arguments: &Arguments) -> i32 {
                 }
             }
         }
+        ["trust"] => match trust_authority(&dir) {
+            Ok(()) => 0,
+            Err(refusal) => {
+                eprintln!("meridian authority trust: {refusal}");
+                1
+            }
+        },
         _ => {
-            eprintln!("meridian authority: takes nothing, or `remove`\n\n{USAGE}");
+            eprintln!("meridian authority: takes nothing, `trust` or `remove`\n\n{USAGE}");
             2
         }
     }
@@ -1881,6 +1924,7 @@ mod tests {
             .set("--plain-http"));
         let remove = parse(said("authority remove --yes")).unwrap();
         assert_eq!(remove.words, ["remove"]);
+        assert_eq!(parse(said("authority trust")).unwrap().words, ["trust"]);
         assert!(remove.set("--yes"));
         assert!(parse(said("up --http")).is_err());
     }

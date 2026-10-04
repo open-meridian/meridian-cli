@@ -213,17 +213,20 @@ pub async fn up(
     outcome
 }
 
-/// Where the root is, and the line a Node-based client is pointed at it with.
-/// Whether Claude Code reads the macOS keychain without it is not documented,
-/// so both are said plainly until the task's spike says which to recommend.
+/// Where the root is, and who reads it how: a browser from the system's
+/// roots, the Claude Code CLI from the login keychain on macOS, and the Claude
+/// app from `NODE_EXTRA_CA_CERTS`, which `meridian authority` says is in place
+/// or not (found 2026-10-04).
 pub fn trusted_by(dir: &std::path::Path) -> String {
     let root = crate::authority::root_path(dir);
     format!(
         "\nIts certificate is signed by this machine's own authority:\n  {}\n\
-         A client that reads its roots from the system trusts it once the system does. A \
-         Node-based one, Claude Code among them, may need it named in its environment:\n  {}",
+         A browser trusts it once the system does, and on macOS so does the Claude Code CLI, \
+         which reads the login keychain. The Claude app, like any app on Node, reads {} \
+         instead: `meridian authority` says whether it is named to apps here, and `meridian \
+         authority trust` names it.",
         root.display(),
-        crate::authority::node_line(&root)
+        crate::authority::NODE_EXTRA_CA_CERTS
     )
 }
 

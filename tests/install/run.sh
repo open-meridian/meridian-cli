@@ -74,7 +74,22 @@ for case in "Linux x86_64 - x86_64-unknown-linux-musl" \
     chmod 755 /tmp/shim/uname /tmp/shim/sysctl
     said="$(PATH="/tmp/shim:$PATH" MERIDIAN_RELEASES="$RELEASES" MERIDIAN_INSTALL_DIR="/tmp/p-$4" sh "$SCRIPT" 2>&1)"
     check "$(holds "$said" "for $4")" "$1 on $2 (arm64 under Rosetta: $3) gets $4"
+    # No terminal here: nothing is asked, and one line says `up` will ask.
+    asks="$(holds "$said" "\`meridian up\` asks to trust")"
+    if [ "$1" = Darwin ]; then
+        check "$asks" "with nobody to ask on macOS, trusting the authority is left to up, and said"
+    else
+        check "$([ "$asks" != 0 ] && echo 0 || echo 1)" "on Linux nothing is said about trusting it"
+    fi
+    check "$([ "$(holds "$said" "stand-in asked")" != 0 ] && echo 0 || echo 1)" "and authority trust is not run"
 done
+
+# At a terminal on macOS: `meridian authority trust` is run, its answers read
+# from the terminal rather than from the pipe the script came down.
+printf '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac\n' >/tmp/shim/uname
+said="$(script -qec "PATH=/tmp/shim:$PATH MERIDIAN_RELEASES=$RELEASES MERIDIAN_INSTALL_DIR=/tmp/tty sh $SCRIPT </dev/null" /dev/null </dev/null 2>&1)"
+check "$(holds "$said" "stand-in asked: authority trust, its input a terminal: yes")" "at a terminal on macOS, authority trust is run at the terminal: $said"
+
 printf '#!/bin/sh\ncase "$1" in -s) echo MINGW64_NT-10.0 ;; -m) echo x86_64 ;; esac\n' >/tmp/shim/uname
 said="$(PATH="/tmp/shim:$PATH" MERIDIAN_RELEASES="$RELEASES" MERIDIAN_INSTALL_DIR=/tmp/windows sh "$SCRIPT" 2>&1)"
 status=$?
@@ -113,6 +128,19 @@ printf '{"address":"http://127.0.0.1:9","session":"not-a-real-one","subject":"lo
 printf '{"address":"http://127.0.0.1:8","subject":"local|ada","expires_at":"2026-12-25T00:00:00Z","client_id":"mdc_x","access_token":"mda_x","access_expires_at_s":1,"refresh_token":"mdr_x","expires_at_s":1798156800}' \
     >/tmp/config/meridian/sessions/127.0.0.1_8.json
 
+# Off macOS, `authority trust` makes the root in this CLI's own directory and
+# prints each step as a command, changing nothing else.
+said="$(NODE_EXTRA_CA_CERTS=/etc/firm.pem /tmp/v/meridian authority trust </dev/null 2>&1)"
+status=$?
+check $status "authority trust on Linux: $said"
+check "$([ -s /tmp/config/meridian/authority/root.pem ] && echo 0 || echo 1)" "and the root is made"
+check "$(holds "$said" "update-ca-certificates")" "it prints the command that trusts it"
+check "$(holds "$said" "cat /etc/firm.pem /tmp/config/meridian/authority/root.pem > /tmp/config/meridian/authority/node-extra-ca-certs.pem")" "one NODE_EXTRA_CA_CERTS already named is kept, in a file holding both"
+check "$(holds "$said" "export NODE_EXTRA_CA_CERTS=/tmp/config/meridian/authority/node-extra-ca-certs.pem")" "and the command naming that file to apps"
+check "$([ ! -e /tmp/config/meridian/authority/node-extra-ca-certs.pem ] && echo 0 || echo 1)" "a file it only printed is not made"
+said="$(/tmp/v/meridian authority 2>&1)"
+check "$(holds "$said" "The Claude app, like any app on Node, reads NODE_EXTRA_CA_CERTS")" "authority says what the Claude app reads"
+
 said="$(/tmp/v/meridian uninstall </dev/null 2>&1)"
 status=$?
 check "$([ $status != 0 ] && [ -e /tmp/v/meridian ] && [ -e /tmp/config/meridian/sessions/127.0.0.1_9.json ] && echo 0 || echo 1)" "with nobody to ask and no --yes, nothing is removed"
@@ -123,6 +151,7 @@ status=$?
 check $status "uninstall --yes: $said"
 check "$([ ! -e /tmp/v/meridian ] && echo 0 || echo 1)" "the binary is gone"
 check "$([ ! -e /tmp/config/meridian ] && echo 0 || echo 1)" "and every session with it, and its directory"
+check "$(holds "$said" "remove the NODE_EXTRA_CA_CERTS line")" "the authority goes, with the command that stops naming it to apps"
 check "$(holds "$said" "lapses there within 30 minutes")" "an unreachable deployment's session is forgotten here, and said"
 check "$(holds "$said" "revoke this computer's delegation from Connected clients on http://127.0.0.1:8")" "an unreachable deployment's delegation is forgotten here, and how to revoke it said"
 

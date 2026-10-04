@@ -3,8 +3,9 @@
 Serves what the install script and `meridian upgrade` ask GitHub for, and no
 more: /releases/latest redirecting to a tag, and each binary and its
 .sha256 under /releases/download/<tag>/. v9.9.9 is the latest and whole;
-v6.6.6's checksums are wrong. Each binary is a two-line script saying which
-release and target it is.
+v6.6.6's checksums are wrong. Each binary is a script saying which release
+and target it is, or, asked `authority trust` as the install script asks it
+on macOS, what it was asked and whether its input is a terminal.
 """
 
 import hashlib
@@ -21,7 +22,14 @@ TARGETS = [
 FILES = {}
 for tag in ("v9.9.9", "v6.6.6"):
     for target in TARGETS:
-        body = f"#!/bin/sh\necho 'meridian {tag[1:]} (stand-in {target})'\n".encode()
+        body = (
+            "#!/bin/sh\n"
+            'if [ "$1" = authority ]; then\n'
+            '    echo "stand-in asked: $*, its input a terminal: $([ -t 0 ] && echo yes || echo no)"\n'
+            "    exit 0\n"
+            "fi\n"
+            f"echo 'meridian {tag[1:]} (stand-in {target})'\n"
+        ).encode()
         digest = hashlib.sha256(body).hexdigest()
         if tag == "v6.6.6":
             digest = hashlib.sha256(b"something else").hexdigest()

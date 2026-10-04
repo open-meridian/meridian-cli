@@ -45,7 +45,10 @@ curl -fsSL https://raw.githubusercontent.com/open-meridian/meridian-cli/main/ins
 It downloads this machine's binary from the latest release, checks it against
 the `.sha256` published beside it, and puts it in `~/.local/bin` -- no `sudo`.
 `MERIDIAN_INSTALL_DIR` puts it elsewhere and `MERIDIAN_VERSION` picks a
-release. Then:
+release. On macOS, when you are at a terminal, it then runs `meridian authority
+trust`: it makes this machine's own certificate authority (below), says what it
+is for, and asks once to trust it. With no terminal to ask at, it skips that,
+and `meridian up` asks instead. Then:
 
 ```
 meridian --version           # which release this is
@@ -112,10 +115,21 @@ add it to your login keychain, and macOS asks for your password itself (this
 never handles one). Elsewhere it prints the one command that trusts it. The
 deployment's certificate covers its name and `*.plugins.` below it for a year,
 is kept in the Secret `<release>-tls`, and `up` and `upgrade-deployment` issue
-a new one within 30 days of its end. `up` prints where the root is and the
-`NODE_EXTRA_CA_CERTS=<path>` line a Node-based client, Claude Code among them,
-may need. `meridian authority` says the same again; `meridian authority
-remove` takes the root out of the keychain and off this machine.
+a new one within 30 days of its end.
+
+A browser and the Claude Code CLI read the login keychain. The Claude app, like
+any app on Node, does not: it reads `NODE_EXTRA_CA_CERTS`. So on macOS the same
+yes also names the root to apps started from then on (`launchctl setenv`), and
+again at each login (a LaunchAgent, `~/Library/LaunchAgents/com.open-meridian.authority.plist`);
+restart the Claude app afterwards. A `NODE_EXTRA_CA_CERTS` you set already is
+never replaced: it offers a file holding your certificates and the root, kept
+beside the root, and asks before switching to it. Elsewhere each step is
+printed as a command, and nothing is changed.
+
+`meridian authority` says where the root is and whether apps are pointed at
+it; `meridian authority trust` asks again; `meridian authority remove`, and
+`meridian uninstall`, undo all of it: the keychain entry, the LaunchAgent,
+`NODE_EXTRA_CA_CERTS` put back as it was, and the root and its key.
 
 `--plain-http` serves plain HTTP and makes no certificate: it is for the
 cluster tests, and nothing else. `--host` names another name: under

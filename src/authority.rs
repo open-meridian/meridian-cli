@@ -17,8 +17,12 @@
 //! somebody's bank to this machine.
 //!
 //! Trusting it is the machine's, asked once: on macOS the login keychain,
-//! which asks for the person's password itself, so this never handles one;
-//! elsewhere the one command to run is printed. Nothing here does either
+//! which asks for the person's password itself, so this never handles one,
+//! and then apps on Node, the Claude app among them, which read neither the
+//! keychain nor a shell's profile: `NODE_EXTRA_CA_CERTS` named to them through
+//! launchd now and by a LaunchAgent at each login, never replacing one the
+//! person named already (ruled 2026-10-04, with the install script asking).
+//! Elsewhere each step is printed as a command. Nothing here does any of it
 //! without `Trust`, which a test replaces.
 
 use std::io::Write as _;
@@ -523,12 +527,15 @@ pub async fn certify(
 
 /// A path as a shell reads it back.
 fn shell(path: &Path) -> String {
-    let said = path.display().to_string();
+    shell_word(&path.display().to_string())
+}
+
+fn shell_word(said: &str) -> String {
     if said
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || "/._-~".contains(c))
     {
-        said
+        said.to_string()
     } else {
         format!("'{}'", said.replace('\'', r"'\''"))
     }
@@ -561,11 +568,378 @@ pub fn untrust_command(os: &str, sha1: &str) -> String {
     }
 }
 
-/// What an agent running on Node, Claude Code among them, is pointed at the
-/// root with. Whether Claude Code reads the macOS keychain without it is not
-/// documented; the task's spike decides what to recommend.
-pub fn node_line(root: &Path) -> String {
-    format!("NODE_EXTRA_CA_CERTS={}", shell(root))
+// ── For apps on Node ───────────────────────────────────────────────────────
+
+/// What an app on Node reads extra roots from. The Claude desktop app is one,
+/// and reads neither the login keychain nor a shell's profile: found
+/// 2026-10-04, its sign-in to a local deployment failed with "unable to verify
+/// the first certificate" until launchd named the root to it and the app was
+/// restarted. The Claude Code CLI reads the login keychain and needs none.
+pub const NODE_EXTRA_CA_CERTS: &str = "NODE_EXTRA_CA_CERTS";
+
+/// The file holding the certificates `NODE_EXTRA_CA_CERTS` already named and
+/// this root, where one was named before: that one is never replaced, so both
+/// are named together, in this file, once the person says so.
+const COMBINED: &str = "node-extra-ca-certs.pem";
+/// What launchd named before the combined file replaced it, put back when
+/// the authority is removed. Empty when launchd named nothing.
+const BEFORE: &str = "node-extra-ca-certs.before";
+/// The LaunchAgent that names the root to apps again at each login.
+pub const AGENT: &str = "com.open-meridian.authority";
+
+/// Naming a file to apps on Node, as one command a person runs: launchd's
+/// environment for apps started from now on on macOS, the profile a session
+/// starts from on Linux, the user's environment on Windows.
+pub fn apps_command(os: &str, file: &Path) -> String {
+    match os {
+        "macos" => format!("launchctl setenv {NODE_EXTRA_CA_CERTS} {}", shell(file)),
+        "linux" => format!(
+            "echo \"export {NODE_EXTRA_CA_CERTS}={}\" >> ~/.profile",
+            shell(file)
+        ),
+        "windows" => format!("setx {NODE_EXTRA_CA_CERTS} \"{}\"", file.display()),
+        _ => format!(
+            "set {NODE_EXTRA_CA_CERTS}={} where apps are started",
+            shell(file)
+        ),
+    }
+}
+
+/// And taking that back.
+pub fn unapps_command(os: &str) -> String {
+    match os {
+        "macos" => format!("launchctl unsetenv {NODE_EXTRA_CA_CERTS}"),
+        "linux" => format!("remove the {NODE_EXTRA_CA_CERTS} line from ~/.profile"),
+        "windows" => format!("reg delete HKCU\\Environment /v {NODE_EXTRA_CA_CERTS} /f"),
+        _ => format!("unset {NODE_EXTRA_CA_CERTS} where apps are started"),
+    }
+}
+
+/// A file holding `theirs` and the root, as one command.
+fn combine_command(os: &str, theirs: &str, root: &Path, combined: &Path) -> String {
+    match os {
+        "windows" => format!(
+            "type \"{theirs}\" \"{}\" > \"{}\"",
+            root.display(),
+            combined.display()
+        ),
+        _ => format!(
+            "cat {} {} > {}",
+            shell_word(theirs),
+            shell(root),
+            shell(combined)
+        ),
+    }
+}
+
+/// Whether `named` is this authority's own file: its root, or the file
+/// holding both.
+fn ours(dir: &Path, named: &str) -> bool {
+    let named = Path::new(named);
+    named == root_path(dir) || named == dir.join(COMBINED)
+}
+
+/// Another file `NODE_EXTRA_CA_CERTS` already names, which is never replaced:
+/// as launchd gives it to apps on macOS, or else as this process was given it.
+fn theirs(trust: &dyn Trust, dir: &Path) -> Option<String> {
+    let launchd = match trust.os() {
+        "macos" => trust.apps_env(),
+        _ => None,
+    };
+    launchd
+        .filter(|named| !named.is_empty())
+        .or_else(|| trust.own_env())
+        .filter(|named| !named.is_empty() && !ours(dir, named))
+}
+
+/// The commands that name the root to apps, or a file holding it and theirs.
+fn apps_commands(os: &str, dir: &Path, theirs: Option<&str>) -> Vec<String> {
+    let root = root_path(dir);
+    match theirs {
+        None => vec![apps_command(os, &root)],
+        Some(theirs) => {
+            let combined = dir.join(COMBINED);
+            vec![
+                combine_command(os, theirs, &root, &combined),
+                apps_command(os, &combined),
+            ]
+        }
+    }
+}
+
+/// Every step of trusting it, as commands, for a person to run themselves:
+/// all there is off macOS, and what is said there when they say no.
+fn by_hand(trust: &dyn Trust, dir: &Path) -> String {
+    let os = trust.os();
+    let mut said = format!(
+        "To trust it, run:\n  {}\n\
+         The Claude app, like any app on Node, reads its roots from {NODE_EXTRA_CA_CERTS} \
+         instead; to name it there:\n",
+        trust_command(os, &root_path(dir))
+    );
+    for line in apps_commands(os, dir, theirs(trust, dir).as_deref()) {
+        said.push_str(&format!("  {line}\n"));
+    }
+    if os == "macos" {
+        said.push_str(
+            "`meridian authority trust` does all of this, and names it to apps again at each login.",
+        );
+    }
+    said.trim_end().to_string()
+}
+
+/// The LaunchAgent: `launchctl setenv NODE_EXTRA_CA_CERTS <file>` when it is
+/// loaded, which launchd does at each login.
+pub fn agent_plist(file: &Path) -> String {
+    let file = file
+        .display()
+        .to_string()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Written by `meridian authority trust`, so apps on Node, the Claude app among
+     them, trust this machine's own certificate authority. `meridian authority
+     remove` and `meridian uninstall` take it away. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{AGENT}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/launchctl</string>
+    <string>setenv</string>
+    <string>{NODE_EXTRA_CA_CERTS}</string>
+    <string>{file}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+"#
+    )
+}
+
+fn agent_path(agents: &Path) -> PathBuf {
+    agents.join(format!("{AGENT}.plist"))
+}
+
+fn write_agent(agents: &Path, file: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(agents)
+        .map_err(|failed| format!("could not make {}: {failed}", agents.display()))?;
+    let plist = agent_path(agents);
+    std::fs::write(&plist, agent_plist(file))
+        .map_err(|failed| format!("could not write {}: {failed}", plist.display()))?;
+    Ok(plist)
+}
+
+/// `theirs` and the root, in one file: theirs first, as it was.
+fn combine(theirs: &str, root: &Path, combined: &Path) -> Result<(), String> {
+    let mut held = std::fs::read_to_string(theirs)
+        .map_err(|failed| format!("{theirs} could not be read: {failed}"))?;
+    if !held.is_empty() && !held.ends_with('\n') {
+        held.push('\n');
+    }
+    let root = std::fs::read_to_string(root)
+        .map_err(|failed| format!("{} could not be read: {failed}", root.display()))?;
+    held.push_str(&root);
+    std::fs::write(combined, held)
+        .map_err(|failed| format!("could not write {}: {failed}", combined.display()))
+}
+
+/// The step for the Claude app, on macOS: `NODE_EXTRA_CA_CERTS` named for
+/// apps started from now on, and again at each login by a LaunchAgent. One
+/// already naming another file is never replaced: a file holding both is
+/// offered, and asked for first. Whether it is in place afterwards.
+fn point_apps(
+    dir: &Path,
+    trust: &dyn Trust,
+    ask: &dyn Fn(&str) -> bool,
+    say: &mut dyn FnMut(&str),
+) -> bool {
+    let root = root_path(dir);
+    let combined = dir.join(COMBINED);
+    let launchd = trust.apps_env().filter(|named| !named.is_empty());
+    let file = match theirs(trust, dir) {
+        None => match &launchd {
+            Some(named) if Path::new(named) == combined => combined,
+            _ => root,
+        },
+        Some(other) => {
+            say(&format!(
+                "{NODE_EXTRA_CA_CERTS} already names {other}, and this never replaces it. A file \
+                 holding its certificates and this root, kept at {}, would serve both.",
+                combined.display()
+            ));
+            if !ask(&format!(
+                "Make that file, and name it to apps instead of {other}?"
+            )) {
+                say(&format!(
+                    "Left as it is. To do it yourself, and restart the Claude app:\n  {}",
+                    apps_commands("macos", dir, Some(&other)).join("\n  ")
+                ));
+                return false;
+            }
+            if let Err(failed) = combine(&other, &root, &combined) {
+                say(&format!(
+                    "Nothing was changed: {failed}. `meridian authority trust` asks again."
+                ));
+                return false;
+            }
+            // What launchd named before the first switch, put back on removal.
+            if !dir.join(BEFORE).exists() {
+                let _ = std::fs::write(dir.join(BEFORE), launchd.unwrap_or_default());
+            }
+            combined
+        }
+    };
+    let named = file.display().to_string();
+    if let Err(refused) = trust.set_apps_env(&named) {
+        say(&format!(
+            "Apps were not pointed at it: {refused}. To do it yourself:\n  {}",
+            apps_command("macos", &file)
+        ));
+        return false;
+    }
+    let restart = "Restart the Claude app, if it is open, for it to sign in to a local \
+                   deployment; the Claude Code CLI reads the login keychain and needs none of this.";
+    match trust
+        .launch_agents()
+        .and_then(|agents| write_agent(&agents, &file))
+    {
+        Ok(plist) => {
+            // Reloaded, so launchd holds what the file now says.
+            let _ = trust.unload(&plist);
+            let _ = trust.load(&plist);
+            say(&format!(
+                "Apps started from now on are pointed at it with {NODE_EXTRA_CA_CERTS}={named}, \
+                 and {} names it again at each login. {restart}",
+                plist.display()
+            ));
+            true
+        }
+        Err(failed) => {
+            say(&format!(
+                "Apps started from now on are pointed at it with {NODE_EXTRA_CA_CERTS}={named}, \
+                 but nothing names it again at the next login: {failed}. {restart}"
+            ));
+            false
+        }
+    }
+}
+
+/// The step for the Claude app undone: the LaunchAgent unloaded and deleted,
+/// and `NODE_EXTRA_CA_CERTS` put back as it was, where it still names this
+/// authority's file. One the person has since changed is left alone.
+fn unpoint_apps(dir: &Path, trust: &dyn Trust) -> String {
+    let mut said = String::new();
+    if let Ok(agents) = trust.launch_agents() {
+        let plist = agent_path(&agents);
+        if plist.exists() {
+            let _ = trust.unload(&plist);
+            match std::fs::remove_file(&plist) {
+                Ok(()) => said.push_str(&format!("Removed {}.\n", plist.display())),
+                Err(failed) => said.push_str(&format!(
+                    "Could not remove {}: {failed}. Delete it, or each login names a file that \
+                     is gone.\n",
+                    plist.display()
+                )),
+            }
+        }
+    }
+    let Some(named) = trust
+        .apps_env()
+        .filter(|named| !named.is_empty() && ours(dir, named))
+    else {
+        return said;
+    };
+    let before = std::fs::read_to_string(dir.join(BEFORE))
+        .ok()
+        .map(|before| before.trim().to_string())
+        .filter(|before| !before.is_empty());
+    let done = match &before {
+        Some(before) => trust.set_apps_env(before).map(|()| {
+            format!("Apps are pointed at {before} again with {NODE_EXTRA_CA_CERTS}, as before.")
+        }),
+        None => trust
+            .unset_apps_env()
+            .map(|()| format!("{NODE_EXTRA_CA_CERTS} no longer names it to apps.")),
+    };
+    match done {
+        Ok(line) => said.push_str(&format!("{line} Restart the Claude app, if it is open.\n")),
+        Err(refused) => {
+            let fix = match &before {
+                Some(before) => apps_command("macos", Path::new(before)),
+                None => unapps_command("macos"),
+            };
+            said.push_str(&format!(
+                "{NODE_EXTRA_CA_CERTS} still names {named} to apps ({refused}); `{fix}` puts it \
+                 right.\n"
+            ));
+        }
+    }
+    said
+}
+
+/// Whether apps on Node, the Claude app among them, are pointed at the root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Apps {
+    /// `NODE_EXTRA_CA_CERTS` names the root, or the file holding it and
+    /// theirs; and whether the LaunchAgent names it again at each login.
+    Named { file: PathBuf, at_login: bool },
+    /// It names another file.
+    Other(String),
+    /// It names nothing.
+    Unnamed,
+}
+
+/// What launchd names to apps now, and whether the LaunchAgent is there.
+pub fn apps(dir: &Path, trust: &dyn Trust) -> Apps {
+    let at_login = trust
+        .launch_agents()
+        .is_ok_and(|agents| agent_path(&agents).exists());
+    match trust.apps_env().filter(|named| !named.is_empty()) {
+        Some(named) if ours(dir, &named) => Apps::Named {
+            file: PathBuf::from(named),
+            at_login,
+        },
+        Some(named) => Apps::Other(named),
+        None => Apps::Unnamed,
+    }
+}
+
+impl Apps {
+    pub fn said(&self) -> String {
+        match self {
+            Apps::Named {
+                file,
+                at_login: true,
+            } => format!(
+                "For the Claude app: in place. Apps are pointed at it with \
+                 {NODE_EXTRA_CA_CERTS}={}, named again at each login by the LaunchAgent {AGENT}.",
+                file.display()
+            ),
+            Apps::Named {
+                file,
+                at_login: false,
+            } => format!(
+                "For the Claude app: apps are pointed at it now with {NODE_EXTRA_CA_CERTS}={}, \
+                 but nothing names it again at the next login. `meridian authority trust` does.",
+                file.display()
+            ),
+            Apps::Other(named) => format!(
+                "For the Claude app: not in place. {NODE_EXTRA_CA_CERTS} names {named} to apps; \
+                 `meridian authority trust` offers a file holding both."
+            ),
+            Apps::Unnamed => format!(
+                "For the Claude app: not in place. It reads its roots from \
+                 {NODE_EXTRA_CA_CERTS}, which names nothing to apps here; `meridian authority \
+                 trust` names it."
+            ),
+        }
+    }
 }
 
 /// What the root is for, said before anything asks to trust it.
@@ -574,8 +948,8 @@ pub fn purpose(dir: &Path) -> String {
         "This machine has its own certificate authority for Open Meridian:\n\
          \x20 {root}\n\
          It signs the HTTPS certificates of deployments on this machine, at names under \
-         .localhost and nothing else, so a browser and an agent such as Claude Code reach them \
-         over HTTPS without a warning. Its key stays in {dir}, readable by you alone. \
+         .localhost and nothing else, so a browser, the Claude Code CLI and the Claude app reach \
+         them over HTTPS without a warning. Its key stays in {dir}, readable by you alone. \
          `meridian authority remove` takes it away again.",
         root = root_path(dir).display(),
         dir = dir.display(),
@@ -591,16 +965,35 @@ pub trait Trust {
     fn add(&self, root: &Path) -> Result<(), String>;
     /// Take it out of the login keychain, with its trust settings.
     fn remove(&self, sha1: &str) -> Result<(), String>;
+    /// `NODE_EXTRA_CA_CERTS` as launchd gives it to apps: `launchctl getenv`.
+    fn apps_env(&self) -> Option<String>;
+    /// And as this process was given it.
+    fn own_env(&self) -> Option<String>;
+    /// `launchctl setenv NODE_EXTRA_CA_CERTS <file>`: for apps started from
+    /// now on.
+    fn set_apps_env(&self, file: &str) -> Result<(), String>;
+    /// `launchctl unsetenv NODE_EXTRA_CA_CERTS`.
+    fn unset_apps_env(&self) -> Result<(), String>;
+    /// Where the person's LaunchAgents are: `~/Library/LaunchAgents`.
+    fn launch_agents(&self) -> Result<PathBuf, String>;
+    /// `launchctl load <plist>`, and `unload`.
+    fn load(&self, plist: &Path) -> Result<(), String>;
+    fn unload(&self, plist: &Path) -> Result<(), String>;
 }
 
-/// The person's own machine: `security`, run where they can answer it.
+/// The person's own machine: `security` and `launchctl`, run where they can
+/// answer them.
 pub struct ThisMachine;
 
-fn login_keychain() -> Result<PathBuf, String> {
+fn home() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
-        .map(|home| PathBuf::from(home).join("Library/Keychains/login.keychain-db"))
-        .ok_or_else(|| "there is no home directory, so no login keychain".into())
+        .map(PathBuf::from)
+        .ok_or_else(|| "there is no home directory".into())
+}
+
+fn login_keychain() -> Result<PathBuf, String> {
+    Ok(home()?.join("Library/Keychains/login.keychain-db"))
 }
 
 fn security(arguments: &[&std::ffi::OsStr]) -> Result<(), String> {
@@ -614,6 +1007,22 @@ fn security(arguments: &[&std::ffi::OsStr]) -> Result<(), String> {
         true => Ok(()),
         false => Err(format!("security said no ({status})")),
     }
+}
+
+/// `launchctl`, its output kept: what it says is the answer, or why not.
+fn launchctl(arguments: &[&std::ffi::OsStr]) -> Result<String, String> {
+    let output = std::process::Command::new("launchctl")
+        .args(arguments)
+        .output()
+        .map_err(|failed| format!("launchctl could not be run: {failed}"))?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    }
+    let said = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(match said.is_empty() {
+        true => format!("launchctl said no ({})", output.status),
+        false => format!("launchctl said: {said}"),
+    })
 }
 
 impl Trust for ThisMachine {
@@ -643,6 +1052,46 @@ impl Trust for ThisMachine {
             keychain.as_os_str(),
         ])
     }
+
+    fn apps_env(&self) -> Option<String> {
+        if self.os() != "macos" {
+            return None;
+        }
+        launchctl(&["getenv".as_ref(), NODE_EXTRA_CA_CERTS.as_ref()])
+            .ok()
+            .filter(|named| !named.is_empty())
+    }
+
+    fn own_env(&self) -> Option<String> {
+        std::env::var(NODE_EXTRA_CA_CERTS)
+            .ok()
+            .filter(|named| !named.is_empty())
+    }
+
+    fn set_apps_env(&self, file: &str) -> Result<(), String> {
+        launchctl(&[
+            "setenv".as_ref(),
+            NODE_EXTRA_CA_CERTS.as_ref(),
+            file.as_ref(),
+        ])
+        .map(|_| ())
+    }
+
+    fn unset_apps_env(&self) -> Result<(), String> {
+        launchctl(&["unsetenv".as_ref(), NODE_EXTRA_CA_CERTS.as_ref()]).map(|_| ())
+    }
+
+    fn launch_agents(&self) -> Result<PathBuf, String> {
+        Ok(home()?.join("Library/LaunchAgents"))
+    }
+
+    fn load(&self, plist: &Path) -> Result<(), String> {
+        launchctl(&["load".as_ref(), plist.as_os_str()]).map(|_| ())
+    }
+
+    fn unload(&self, plist: &Path) -> Result<(), String> {
+        launchctl(&["unload".as_ref(), plist.as_os_str()]).map(|_| ())
+    }
 }
 
 /// The authority, ready to sign.
@@ -651,10 +1100,59 @@ pub struct Prepared {
     pub dir: PathBuf,
 }
 
+/// The authority in `dir`, or a new one made and written there.
+fn held_or_made(dir: &Path, machine: &str, now_s: u64) -> Result<Authority, String> {
+    match Authority::read(dir)? {
+        Some(held) => Ok(held),
+        None => {
+            let made = Authority::make(machine, now_s)?;
+            made.write(dir)?;
+            Ok(made)
+        }
+    }
+}
+
+/// What the root is for, and then whether to trust it: on macOS the login
+/// keychain and, after it, apps on Node, when the person says yes; anywhere
+/// else, or when they say no, each step as a command instead. Remembered
+/// once the keychain took it, or once the commands were said.
+fn ask_once(dir: &Path, trust: &dyn Trust, ask: &dyn Fn(&str) -> bool, say: &mut dyn FnMut(&str)) {
+    say(&purpose(dir));
+    let asked = if trust.os() == "macos" {
+        if ask(
+            "Trust it now? macOS asks for your password to add it to your login keychain, and \
+             apps started from now on, the Claude app among them, are pointed at it",
+        ) {
+            match trust.add(&root_path(dir)) {
+                Ok(()) => {
+                    say("Added to your login keychain, trusted for HTTPS.");
+                    point_apps(dir, trust, ask, say);
+                    true
+                }
+                Err(refused) => {
+                    say(&format!(
+                        "It was not added: {refused}. {}",
+                        by_hand(trust, dir)
+                    ));
+                    false
+                }
+            }
+        } else {
+            say(&format!("Not trusted. {}", by_hand(trust, dir)));
+            false
+        }
+    } else {
+        say(&by_hand(trust, dir));
+        true
+    };
+    if asked {
+        let _ = std::fs::write(dir.join(ASKED), "");
+    }
+}
+
 /// The authority in `dir`, made if there is none; and the machine asked to
-/// trust it, once, having been told what it is for. On macOS that is the
-/// login keychain, when the person says yes to `ask`; anywhere else, or when
-/// they say no, the command that does it is said instead.
+/// trust it, once, having been told what it is for. `up` and
+/// `upgrade-deployment --https` come here.
 pub fn prepare(
     dir: &Path,
     machine: &str,
@@ -663,43 +1161,9 @@ pub fn prepare(
     ask: &dyn Fn(&str) -> bool,
     say: &mut dyn FnMut(&str),
 ) -> Result<Prepared, String> {
-    let authority = match Authority::read(dir)? {
-        Some(held) => held,
-        None => {
-            let made = Authority::make(machine, now_s)?;
-            made.write(dir)?;
-            made
-        }
-    };
+    let authority = held_or_made(dir, machine, now_s)?;
     if !dir.join(ASKED).exists() {
-        let root = root_path(dir);
-        let command = trust_command(trust.os(), &root);
-        say(&purpose(dir));
-        let asked = if trust.os() == "macos" {
-            if ask("Add it to your login keychain now? macOS asks for your password itself") {
-                match trust.add(&root) {
-                    Ok(()) => {
-                        say("Added to your login keychain, trusted for HTTPS.");
-                        true
-                    }
-                    Err(refused) => {
-                        say(&format!(
-                            "It was not added: {refused}. To add it later:\n  {command}"
-                        ));
-                        false
-                    }
-                }
-            } else {
-                say(&format!("Not added. To add it later:\n  {command}"));
-                false
-            }
-        } else {
-            say(&format!("To trust it, run:\n  {command}"));
-            true
-        };
-        if asked {
-            let _ = std::fs::write(dir.join(ASKED), "");
-        }
+        ask_once(dir, trust, ask, say);
     }
     Ok(Prepared {
         authority,
@@ -707,17 +1171,65 @@ pub fn prepare(
     })
 }
 
-/// The authority taken away: out of the login keychain on macOS, its files
-/// removed. What was done, to say.
+/// `meridian authority trust`, which the install script runs: the authority
+/// made if there is none, and trusted here. Asked as `up` asks, the first
+/// time; where the keychain took it before and apps are not pointed at it
+/// yet, asked about apps alone; where both are done, said so. Off macOS,
+/// each step as a command, every time.
+pub fn trust_here(
+    dir: &Path,
+    machine: &str,
+    now_s: u64,
+    trust: &dyn Trust,
+    ask: &dyn Fn(&str) -> bool,
+    say: &mut dyn FnMut(&str),
+) -> Result<(), String> {
+    held_or_made(dir, machine, now_s)?;
+    if !dir.join(ASKED).exists() {
+        ask_once(dir, trust, ask, say);
+    } else if trust.os() != "macos" {
+        say(&by_hand(trust, dir));
+    } else if let Apps::Named { at_login: true, .. } = apps(dir, trust) {
+        say(&format!(
+            "This machine's certificate authority is trusted here already: in your login \
+             keychain, and named to apps, the Claude app among them, with {NODE_EXTRA_CA_CERTS}."
+        ));
+    } else {
+        say(&format!(
+            "This machine's certificate authority, {}, is in your login keychain, which a browser \
+             and the Claude Code CLI read. The Claude app, like any app on Node, reads \
+             {NODE_EXTRA_CA_CERTS} instead.",
+            root_path(dir).display()
+        ));
+        if ask("Point apps started from now on at it, and again at each login?") {
+            point_apps(dir, trust, ask, say);
+        } else {
+            say(&format!(
+                "Not pointed. To do it yourself, and restart the Claude app:\n  {}",
+                apps_commands("macos", dir, theirs(trust, dir).as_deref()).join("\n  ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The authority taken away: on macOS, apps no longer pointed at it, as
+/// before it, and out of the login keychain; elsewhere, the commands that
+/// undo what the person was told to run; and its files removed. What was
+/// done, to say.
 pub fn remove(dir: &Path, trust: &dyn Trust) -> Result<String, String> {
+    let mut said = match trust.os() {
+        "macos" => unpoint_apps(dir, trust),
+        _ => String::new(),
+    };
     let root = std::fs::read_to_string(root_path(dir)).ok();
     if root.is_none() && !dir.exists() {
-        return Ok(format!(
+        said.push_str(&format!(
             "There is no certificate authority at {}; nothing to remove.",
             dir.display()
         ));
+        return Ok(said);
     }
-    let mut said = String::new();
     if let Some(root_pem) = root {
         let sha1 = Authority {
             root_pem,
@@ -735,8 +1247,10 @@ pub fn remove(dir: &Path, trust: &dyn Trust) -> Result<String, String> {
             }
         } else {
             said.push_str(&format!(
-                "If this machine was told to trust it, take that back with:\n  {}\n",
-                untrust_command(trust.os(), &sha1)
+                "If this machine was told to trust it, take that back with:\n  {}\n\
+                 and if {NODE_EXTRA_CA_CERTS} names it or a file holding it:\n  {}\n",
+                untrust_command(trust.os(), &sha1),
+                unapps_command(trust.os())
             ));
         }
     }

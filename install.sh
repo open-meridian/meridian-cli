@@ -8,6 +8,14 @@
 # sudo, and nothing outside that directory. Afterwards `meridian upgrade`
 # moves it to a newer release and `meridian uninstall` removes it.
 #
+# On macOS, with a person at a terminal, it then runs `meridian authority
+# trust`: this machine's own certificate authority, which signs a local
+# deployment's HTTPS, made, said what it is for, and trusted only if they say
+# yes -- the login keychain, and NODE_EXTRA_CA_CERTS for apps such as the
+# Claude app. Its answers come from the terminal, since through `curl | sh`
+# standard input is this script. With nobody to ask, it is skipped, and
+# `meridian up` asks instead.
+#
 # Settings, all optional:
 #   MERIDIAN_INSTALL_DIR  where it goes (default: ~/.local/bin)
 #   MERIDIAN_VERSION      a release, e.g. 0.2.0 (default: the latest)
@@ -33,7 +41,8 @@ main() {
     esac
     command -v curl >/dev/null 2>&1 || fail "this needs curl"
 
-    target="$(target_of "$(uname -s)" "$(uname -m)")"
+    os="$(uname -s)"
+    target="$(target_of "$os" "$(uname -m)")"
     name="meridian-${target}"
 
     if [ -n "${MERIDIAN_VERSION:-}" ]; then
@@ -76,6 +85,22 @@ main() {
         *) say "${dir} is not on your PATH. Add it, in your shell's profile:
   export PATH=\"${dir}:\$PATH\"" ;;
     esac
+
+    if [ "$os" = Darwin ]; then
+        trust_here "${dir}/meridian"
+    fi
+}
+
+# This machine's certificate authority, trusted if the person at the terminal
+# says so. Never a reason for the install to fail: it is asked again later.
+trust_here() {
+    if (: </dev/tty) 2>/dev/null; then
+        say ""
+        "$1" authority trust </dev/tty ||
+            say "Not trusted yet; \`meridian authority trust\` asks again."
+    else
+        say "\`meridian up\` asks to trust this machine's certificate authority when it first serves a deployment over HTTPS."
+    fi
 }
 
 # The release binary for an OS and a machine, as `uname` names them.
