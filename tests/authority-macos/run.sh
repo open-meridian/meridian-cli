@@ -69,6 +69,9 @@ named() { launchctl getenv NODE_EXTRA_CA_CERTS 2>/dev/null || true; }
 loaded() { launchctl list "$label"; }
 in_system_keychain() { security find-certificate -a -Z "$system_keychain" 2>/dev/null | grep -q "$1"; }
 sha1_of() { openssl x509 -noout -fingerprint -sha1 -in "$1" | sed 's/.*=//; s/://g'; }
+# limit <seconds> <command...>: killed if it has not finished by then, so a
+# dialog waiting for a person fails the run instead of hanging it.
+limit() { perl -e 'alarm shift @ARGV; exec @ARGV or die "exec: $!"' "$@"; }
 
 # ── Whether to run at all ───────────────────────────────────────────────────
 
@@ -117,7 +120,7 @@ server=""
 cleanup() {
     [ -n "$server" ] && kill "$server" 2>/dev/null
     if [ -e "$bin" ] && [ -e "$authority" ]; then
-        PATH="$trusted_path" "$bin" authority remove --yes >/dev/null 2>&1
+        PATH="$trusted_path" limit 120 "$bin" authority remove --yes >/dev/null 2>&1
     fi
     if [ -e "$plist" ]; then
         launchctl unload "$plist" 2>/dev/null
@@ -126,8 +129,8 @@ cleanup() {
     case "$(named)" in "$scratch"/* | "$authority"/*) launchctl unsetenv NODE_EXTRA_CA_CERTS ;; esac
     for left in "$MERIDIAN_E2E_STANDIN"/*.pem; do
         [ -e "$left" ] || continue
-        sudo security remove-trusted-cert -d "$left" 2>/dev/null
-        sudo security delete-certificate -Z "$(sha1_of "$left")" "$system_keychain" >/dev/null 2>&1
+        limit 60 sudo security remove-trusted-cert -d "$left" 2>/dev/null
+        limit 60 sudo security delete-certificate -Z "$(sha1_of "$left")" "$system_keychain" >/dev/null 2>&1
     done
     [ -e "$bin" ] && [ $on_runner = no ] && rm -f "$bin"
     rm -rf "$scratch"
@@ -201,16 +204,27 @@ macos_trusts() { # macos_trusts <cert> <name>: macOS's own evaluation, for TLS a
 if [ "$keychain" = standin ]; then
     echo
     echo "== The login keychain's dialog, with nobody to answer it"
+    # On a person's Mac, macOS asks for their password here; cancelled, the
+    # CLI says it was not added and how to do it by hand. On a runner nobody
+    # can answer or cancel it: either macOS refuses at once, or the dialog
+    # waits, and after a minute the terminal is hung up on, as a person
+    # closing it would. Either way nothing past the keychain may happen.
     t="$scratch/1-refused.txt"
-    install "$t" 180 "$plain_path"
+    install "$t" 60 "$plain_path"
     status=$?
-    check "$(is "$status" 0)" "install.sh finishes though the keychain step does not (status $status; 124 is a dialog waiting for a person)"
     check "$(holds "$t" "Installed meridian")" "install.sh installed the release"
-    check "$(holds "$t" "Trust it now?")" "the CLI asked, at the terminal install.sh gave it"
+    check "$(holds "$t" "macOS asks for your password to add it to your login keychain")" "the CLI said what it asks for, at the terminal install.sh gave it"
     check "$(is "$(asked "$t")" 1)" "and asked once (answered $(asked "$t"))"
-    check "$(holds "$t" "It was not added: security said no")" "the keychain step was refused, and the CLI said so"
-    check "$(holds "$t" "To trust it, run:")" "and said how to do it by hand"
-    check "$(holds "$t" "security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db")" "naming the login keychain command"
+    if [ "$status" = 124 ]; then
+        echo "   (the keychain step waited for a person: a dialog nobody on a runner can answer)"
+        check "$(holds "$t" "security add-trusted-cert -r trustRoot -k $login_keychain")" "it was waiting on the login keychain step"
+    else
+        check "$(is "$status" 0)" "install.sh finishes though the keychain step does not (status $status)"
+        check "$(holds "$t" "It was not added: security said no")" "the keychain step was refused, and the CLI said so"
+        check "$(holds "$t" "To trust it, run:")" "and said how to do it by hand"
+        check "$(holds "$t" "security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db")" "naming the login keychain command"
+    fi
+    check "$(lacks "$t" "Added to your login keychain")" "the CLI did not claim it was trusted"
     check "$(lacks "$t" "Apps started from now on")" "and pointed no apps at a root it could not trust"
     check "$(not test -e "$plist")" "no LaunchAgent"
     check "$(is "$(named)" "")" "NODE_EXTRA_CA_CERTS still names nothing"
@@ -269,10 +283,11 @@ echo
 echo "== meridian uninstall"
 t="$scratch/1-uninstall.txt"
 sha1="$(sha1_of "$root")"
-PATH="$trusted_path" "$bin" uninstall --yes >"$t" 2>&1
+PATH="$trusted_path" limit 120 "$bin" uninstall --yes >"$t" 2>&1
 status=$?
 printf '%s\n' "--- $t" && cat "$t" && printf '%s\n' "---"
-check "$(is "$status" 0)" "it finishes (status $status)"
+[ "$keychain" = standin ] && printf '%s\n' "--- the stand-in's calls" && cat "$MERIDIAN_E2E_STANDIN/calls" && printf '%s\n' "---"
+check "$(is "$status" 0)" "it finishes (status $status; 142 is killed after two minutes)"
 check "$(holds "$t" "Removed it from your login keychain.")" "out of the keychain"
 check "$(holds "$t" "Removed $plist.")" "the LaunchAgent removed"
 check "$(holds "$t" "NODE_EXTRA_CA_CERTS no longer names it to apps.")" "and NODE_EXTRA_CA_CERTS unset"
@@ -314,7 +329,7 @@ check $? "an HTTPS server from the new root"
 check "$(ok node_get "$(named)")" "Node with the file holding both reaches it: $(node_get "$(named)")"
 
 t="$scratch/2-remove.txt"
-PATH="$trusted_path" "$bin" authority remove --yes >"$t" 2>&1
+PATH="$trusted_path" limit 120 "$bin" authority remove --yes >"$t" 2>&1
 status=$?
 printf '%s\n' "--- $t" && cat "$t" && printf '%s\n' "---"
 check "$(is "$status" 0)" "meridian authority remove --yes (status $status)"
@@ -324,7 +339,7 @@ check "$(not test -e "$authority")" "the root, its key and the file holding both
 check "$(not test -e "$plist")" "the LaunchAgent is gone"
 check "$(not loaded)" "launchd has it no longer"
 
-PATH="$trusted_path" "$bin" uninstall --yes >/dev/null 2>&1
+PATH="$trusted_path" limit 120 "$bin" uninstall --yes >/dev/null 2>&1
 check "$(not test -e "$bin")" "meridian uninstall removes the binary"
 check "$(is "$(named)" "$theirs")" "and leaves theirs named"
 launchctl unsetenv NODE_EXTRA_CA_CERTS

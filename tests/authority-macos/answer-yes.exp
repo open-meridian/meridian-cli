@@ -16,8 +16,9 @@ set timeout [lindex $argv 1]
 set command [lrange $argv 2 end]
 set asked 0
 
+# -a: logged though log_user keeps it off this script's own output.
 log_user 0
-log_file -noappend $transcript
+log_file -a -noappend $transcript
 spawn -noecho {*}$command
 
 proc record {transcript asked} {
@@ -35,6 +36,9 @@ expect {
     timeout {
         record $transcript $asked
         send_user "answer-yes: nothing was said for $timeout seconds, after $asked answers\n"
+        # What it was waiting on, for the transcript, before it is hung up on.
+        catch {exec sh -c {ps -axo pid,command | grep -E 'SecurityAgent|security add-trusted-cert|authorizationhost' | grep -v grep}} waiting
+        send_user "answer-yes: waiting: $waiting\n"
         close
         wait
         exit 124

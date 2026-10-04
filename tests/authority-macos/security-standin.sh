@@ -21,6 +21,16 @@ real=/usr/bin/security
 system=/Library/Keychains/System.keychain
 state="${MERIDIAN_E2E_STANDIN:?run.sh sets MERIDIAN_E2E_STANDIN}"
 
+# Each sudo call, killed after a minute and its outcome recorded, so a dialog
+# waiting where nobody can answer it is a failure the CLI reports, not a hang.
+standin() {
+    local status=0
+    perl -e 'alarm shift @ARGV; exec @ARGV or die "exec: $!"' 60 sudo "$real" "$@" \
+        2>>"$state/calls" || status=$?
+    printf '  -> sudo security %s: status %s\n' "$*" "$status" >>"$state/calls"
+    return "$status"
+}
+
 case "${1:-}" in
     add-trusted-cert)
         # add-trusted-cert -r trustRoot -k <login keychain> <root>
@@ -28,7 +38,7 @@ case "${1:-}" in
         root="${!#}"
         sha1="$(openssl x509 -noout -fingerprint -sha1 -in "$root" | sed 's/.*=//; s/://g')"
         cp "$root" "$state/$sha1.pem"
-        exec sudo "$real" add-trusted-cert -d -r trustRoot -k "$system" "$root"
+        standin add-trusted-cert -d -r trustRoot -k "$system" "$root"
         ;;
     delete-certificate)
         # delete-certificate -t -Z <SHA-1> <login keychain>
@@ -40,10 +50,10 @@ case "${1:-}" in
             previous="$argument"
         done
         if [ -f "$state/$sha1.pem" ]; then
-            sudo "$real" remove-trusted-cert -d "$state/$sha1.pem" || true
-            rm -f "$state/$sha1.pem"
+            standin remove-trusted-cert -d "$state/$sha1.pem" || true
         fi
-        exec sudo "$real" delete-certificate -Z "$sha1" "$system"
+        standin delete-certificate -Z "$sha1" "$system"
+        rm -f "$state/$sha1.pem"
         ;;
     *)
         exec "$real" "$@"
