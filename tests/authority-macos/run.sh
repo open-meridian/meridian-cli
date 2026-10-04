@@ -17,9 +17,11 @@
 # The login keychain (MERIDIAN_E2E_KEYCHAIN):
 #   standin  the default on GitHub Actions. Adding a trust setting to a
 #            person's login keychain waits on macOS's password dialog, which
-#            nobody can answer on a runner. So the real step runs first and is
-#            refused, and the run checks the CLI reports that and goes no
-#            further; then security-standin.sh stands in for the person, put
+#            nobody can answer on a runner. So the real step runs first: on a
+#            runner the dialog waits (SecurityAgent), and after a minute the
+#            terminal is hung up on, as a person closing it would; a refusal
+#            instead would have to be reported. Either way the CLI must go no
+#            further. Then security-standin.sh stands in for the person, put
 #            first on PATH as `security`, trusting the root in the System
 #            keychain with sudo instead. The shipped binary has no test-only
 #            path: everything it does is what it does on a person's Mac.
@@ -67,7 +69,8 @@ lacks() { case "$(cat "$1" 2>/dev/null)" in *"$2"*) echo 1 ;; *) echo 0 ;; esac;
 is() { [ "$1" = "$2" ] && echo 0 || echo 1; }
 named() { launchctl getenv NODE_EXTRA_CA_CERTS 2>/dev/null || true; }
 loaded() { launchctl list "$label"; }
-in_system_keychain() { security find-certificate -a -Z "$system_keychain" 2>/dev/null | grep -q "$1"; }
+in_keychain() { security find-certificate -a -Z "$1" 2>/dev/null | grep -q "$2"; }
+in_system_keychain() { in_keychain "$system_keychain" "$1"; }
 sha1_of() { openssl x509 -noout -fingerprint -sha1 -in "$1" | sed 's/.*=//; s/://g'; }
 # limit <seconds> <command...>: killed if it has not finished by then, so a
 # dialog waiting for a person fails the run instead of hanging it.
@@ -129,7 +132,6 @@ cleanup() {
     case "$(named)" in "$scratch"/* | "$authority"/*) launchctl unsetenv NODE_EXTRA_CA_CERTS ;; esac
     for left in "$MERIDIAN_E2E_STANDIN"/*.pem; do
         [ -e "$left" ] || continue
-        limit 60 sudo security remove-trusted-cert -d "$left" 2>/dev/null
         limit 60 sudo security delete-certificate -Z "$(sha1_of "$left")" "$system_keychain" >/dev/null 2>&1
     done
     [ -e "$bin" ] && [ $on_runner = no ] && rm -f "$bin"
@@ -229,6 +231,12 @@ if [ "$keychain" = standin ]; then
     check "$(not test -e "$plist")" "no LaunchAgent"
     check "$(is "$(named)" "")" "NODE_EXTRA_CA_CERTS still names nothing"
     check "$(not test -e "$authority/asked")" "and it is not marked as asked, so it asks again"
+    # What the waiting step left: its dialog, and the root, which
+    # add-trusted-cert puts in the login keychain before asking to trust it.
+    # Taken away, so neither stands in for the stand-in below.
+    sudo killall SecurityAgent 2>/dev/null
+    limit 30 security delete-certificate -Z "$(sha1_of "$root")" "$login_keychain" >/dev/null 2>&1
+    check "$(not in_keychain "$login_keychain" "$(sha1_of "$root")")" "the untrusted root it left in the login keychain is taken out again"
 
     echo
     echo "== Before anything trusts the root"

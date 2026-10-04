@@ -5,7 +5,8 @@
 # `security add-trusted-cert -r trustRoot -k <login keychain>`, and macOS asks
 # the person at the screen for their password before it changes their trust
 # settings. A runner has nobody at the screen, so run.sh first lets the real
-# step be refused and checks the CLI says so. Then, for the rest of the run,
+# step wait on that dialog and checks the CLI went no further. Then, for the
+# rest of the run,
 # this file is put first on PATH as `security`: the CLI is the shipped
 # binary, unchanged, asking for exactly what it asks a person's Mac for
 # (recorded in $MERIDIAN_E2E_STANDIN/calls), and the trust is put where a
@@ -49,9 +50,10 @@ case "${1:-}" in
             if [ "$previous" = -Z ]; then sha1="$argument"; fi
             previous="$argument"
         done
-        if [ -f "$state/$sha1.pem" ]; then
-            standin remove-trusted-cert -d "$state/$sha1.pem" || true
-        fi
+        # The certificate out of the System keychain. Its admin trust setting
+        # stays, naming a certificate no keychain holds: on a runner,
+        # `remove-trusted-cert -d` hung in run 37205612295 and was hung up on
+        # in 37206379234, and with the root gone nothing can chain to it.
         standin delete-certificate -Z "$sha1" "$system"
         rm -f "$state/$sha1.pem"
         ;;

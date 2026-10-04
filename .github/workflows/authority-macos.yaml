@@ -18,8 +18,9 @@
 # what anybody installs, and building it would cost a release build per run.
 #
 # The login keychain: a person's trust prompt cannot be answered on a runner.
-# The run lets that step be refused and checks the CLI reports it; then a
-# stand-in for the person, a `security` first on PATH in the test alone,
+# The run lets that step wait on its dialog, hangs up after a minute, and
+# checks the CLI went no further (no apps pointed, not marked as asked); then
+# a stand-in for the person, a `security` first on PATH in the test alone,
 # trusts the root in the System keychain with sudo. The shipped binary has no
 # test-only path. run.sh's header has the whole of it.
 
