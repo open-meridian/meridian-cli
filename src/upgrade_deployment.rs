@@ -19,7 +19,8 @@
 //! happened on 2026-09-28, and nothing said so.
 //!
 //! It never prints the deployment's values: they hold its enrolment code.
-//! The one thing read from them is `image`.
+//! What is read from them is `image`, and where the deployment is reached:
+//! its Ingress's name and the Secret its certificate is in.
 
 pub mod run;
 pub mod watch;
@@ -44,6 +45,13 @@ pub struct Asked {
     pub chart_version: Option<String>,
     /// As given, for Helm; and as a duration, for this command's own wait.
     pub timeout: String,
+    /// `--https`: move a local deployment to HTTPS, with a certificate from
+    /// this machine's authority, in the same approved upgrade (task
+    /// kernel/a-development-deployment-serves-https, ruling 4).
+    pub https: bool,
+    /// This machine's authority, where it has one: made for `--https`, and
+    /// otherwise what renews a certificate it issued.
+    pub authority: Option<std::sync::Arc<crate::authority::Authority>>,
 }
 
 impl Asked {
@@ -187,6 +195,76 @@ pub fn image_in(values: &str) -> Image {
         repository: scalar(&values["image"]["repository"]),
         tag: scalar(&values["image"]["tag"]),
     }
+}
+
+/// Where a values document says the deployment is reached, when it has an
+/// Ingress: its name, and the Secret its certificate is in, if any. Nothing
+/// else is read out of the deployment's own values.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Reached {
+    pub host: String,
+    pub secret: Option<String>,
+}
+
+pub fn reached_in(values: &str) -> Option<Reached> {
+    let values: serde_json::Value = serde_yaml::from_str(&document(values)).unwrap_or_default();
+    let ingress = &values["ingress"];
+    if ingress["enabled"] != true {
+        return None;
+    }
+    let host = scalar(&ingress["host"])?;
+    Some(Reached {
+        host,
+        secret: scalar(&ingress["tls"]["secretName"]),
+    })
+}
+
+/// The name whose certificate this upgrade looks after: with `--https`, the
+/// local deployment's, which it moves; without, one whose certificate this
+/// machine wrote, which it renews when near its end. Refused with `--https`
+/// where there is no local name to move.
+pub fn certificate_host(
+    asked: &Asked,
+    reached: Option<&Reached>,
+) -> Result<Option<String>, Finding> {
+    let local = reached.filter(|reached| crate::authority::is_local(&reached.host));
+    if asked.https {
+        return match (reached, local) {
+            (_, Some(reached)) => Ok(Some(reached.host.clone())),
+            (Some(reached), None) => Err(Finding::Stops {
+                what: format!(
+                    "--https moves a local deployment, and {} is reached at {}",
+                    asked.release, reached.host
+                ),
+                fix: "A name outside .localhost has a certificate of its own, named in \
+                      ingress.tls.secretName; this machine's authority signs nothing else."
+                    .into(),
+            }),
+            (None, None) => Err(Finding::Stops {
+                what: format!(
+                    "--https moves a local deployment, and {} has no Ingress",
+                    asked.release
+                ),
+                fix: "It is reached by a port-forward, which stays plain HTTP to 127.0.0.1. \
+                      `meridian up` installs one through the cluster's ingress controller."
+                    .into(),
+            }),
+        };
+    }
+    let ours = crate::authority::secret_name(&asked.release);
+    Ok(local
+        .filter(|reached| reached.secret.as_deref() == Some(ours.as_str()))
+        .map(|reached| reached.host.clone()))
+}
+
+/// The certificate step of an upgrade, before Helm runs.
+#[derive(Debug, Clone)]
+pub struct CertificateStep {
+    pub host: String,
+    /// A new certificate to write, and why; None keeps the one held.
+    pub new: Option<(crate::authority::Leaf, String)>,
+    /// Until when the one held serves, when it is kept.
+    pub kept_until_s: Option<u64>,
 }
 
 // ── What the cluster says ───────────────────────────────────────────────────
@@ -628,6 +706,10 @@ pub struct Plan {
     pub to_image: String,
     /// Pods left over from a restart, which the cleanup removes.
     pub left_over: Vec<String>,
+    /// The certificate looked after first, where there is one to.
+    pub certificate: Option<CertificateStep>,
+    /// `--https`: the local name moved to HTTPS by the upgrade's values.
+    pub https: Option<String>,
 }
 
 /// The same command, as somebody would type it.
@@ -650,6 +732,18 @@ pub fn helm_arguments(asked: &Asked, plan: &Plan) -> Vec<String> {
     ]
     .iter()
     .map(|each| each.to_string())
+    .chain(plan.https.iter().flat_map(|host| {
+        // Kept by every later upgrade: --set values are the deployment's own.
+        [
+            "--set".to_string(),
+            format!(
+                "ingress.tls.secretName={}",
+                crate::authority::secret_name(&asked.release)
+            ),
+            "--set".to_string(),
+            format!("dashboard.url=https://{host}"),
+        ]
+    }))
     .collect()
 }
 
@@ -677,10 +771,39 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
                 .collect::<String>()
         ),
     };
+    let mut certificate = String::new();
+    if let Some(step) = &plan.certificate {
+        let plugins = format!("*.plugins.{}", step.host);
+        certificate = match (&step.new, step.kept_until_s) {
+            (Some((leaf, why)), _) => format!(
+                "\x20 First it will write a certificate for {} and {plugins}, from this machine's \
+                 authority, until {} ({why}), as the Secret {}.\n",
+                step.host,
+                crate::authority::date(leaf.ends_s),
+                crate::authority::secret_name(&asked.release)
+            ),
+            (None, Some(until)) => format!(
+                "\x20 Its certificate for {} serves until {}, and is kept.\n",
+                step.host,
+                crate::authority::date(until)
+            ),
+            (None, None) => String::new(),
+        };
+    }
+    if let Some(host) = &plan.https {
+        certificate.push_str(&format!(
+            "\x20 Its address becomes https://{host}. People and clients signed in at \
+             http://{host} sign in again there.\n"
+        ));
+    }
+    if !certificate.is_empty() {
+        certificate.push('\n');
+    }
     format!(
         "Upgrading {release} in {namespace}:\n\
          \x20 from  {chart} {from} (revision {revision}), running {from_images}\n\
          \x20 to    {chart} {to}, running {to_image}\n\n\
+         {certificate}\
          \x20 helm {command}\n\
          {left_over}",
         release = asked.release,
@@ -1192,6 +1315,8 @@ pub struct Report {
     pub not_cleaned: Vec<String>,
     /// Launched plugins to relaunch, which nothing relaunches for the person.
     pub relaunch: Vec<Relaunch>,
+    /// What the certificate step did, said.
+    pub certificate: Option<String>,
 }
 
 pub fn report_text(asked: &Asked, report: &Report) -> String {
@@ -1199,6 +1324,9 @@ pub fn report_text(asked: &Asked, report: &Report) -> String {
         "\nUpgraded {} in {}: {} -> {}, now revision {}.\n",
         asked.release, asked.namespace, report.from, report.to, report.revision
     );
+    if let Some(certificate) = &report.certificate {
+        said.push_str(&format!("{certificate}\n"));
+    }
     match &report.migrated {
         Some(job) => said.push_str(&format!("Migrated: job/{job} completed.\n")),
         None => said.push_str(&format!(

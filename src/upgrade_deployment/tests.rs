@@ -87,6 +87,25 @@ impl Machine for Stand {
     fn now_s(&self) -> u64 {
         0
     }
+
+    /// Kept as the command and what kind of document it was given, never
+    /// the document: a Secret's key is in it.
+    async fn run_with_input(
+        &self,
+        program: &str,
+        arguments: &[&str],
+        input: &str,
+    ) -> Result<String, Failure> {
+        let kind = serde_json::from_str::<serde_json::Value>(input)
+            .ok()
+            .and_then(|document| document["kind"].as_str().map(String::from))
+            .unwrap_or_default();
+        self.asked
+            .lock()
+            .expect("a test's own lock")
+            .push(format!("{program} {} <<{kind}", arguments.join(" ")));
+        Ok(String::new())
+    }
 }
 
 const CHART: &str = "oci://ghcr.io/open-meridian/charts/meridian-runtime";
@@ -111,6 +130,8 @@ fn asked() -> Asked {
         chart: CHART.into(),
         chart_version: None,
         timeout: "10m".into(),
+        https: false,
+        authority: None,
     }
 }
 
@@ -1593,4 +1614,166 @@ fn a_live_plugin_is_moved_by_plugin_dev_and_an_unnamed_one_by_placeholders() {
         "{text}"
     );
     assert!(text.contains("names the plugin and version"), "{text}");
+}
+
+// ── HTTPS for a local deployment ─────────────────────────────────────────
+
+const SECRET: &str =
+    "kubectl get secret meridian-tls -n meridian --ignore-not-found -o jsonpath={.data.tls\\.crt}";
+const WRITE_SECRET: &str =
+    "kubectl apply --server-side --force-conflicts --field-manager meridian -f - <<Secret";
+const SETS: &str =
+    " --set ingress.tls.secretName=meridian-tls --set dashboard.url=https://meridian.localhost";
+
+fn https(authority: &std::sync::Arc<crate::authority::Authority>) -> Asked {
+    Asked {
+        https: true,
+        authority: Some(authority.clone()),
+        ..asked()
+    }
+}
+
+fn this_machines() -> std::sync::Arc<crate::authority::Authority> {
+    std::sync::Arc::new(crate::authority::Authority::make("m", 0).unwrap())
+}
+
+#[tokio::test]
+async fn https_writes_the_certificate_first_then_one_upgrade_moves_the_address() {
+    let authority = this_machines();
+    let asked = https(&authority);
+    let stand = upgrading()
+        .answering(SECRET, Ok(""))
+        .answering(&format!("{UPGRADE}{SETS}"), Ok("upgraded"));
+    let mut said = Vec::new();
+    let Checked::Upgrade(plan) = check(&stand, &asked, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    else {
+        panic!("refused: {said:?}");
+    };
+    assert_eq!(plan.https.as_deref(), Some("meridian.localhost"));
+    assert!(
+        !stand.asked().contains(&WRITE_SECRET.to_string()),
+        "nothing written by a check"
+    );
+    let text = plan_text(&asked, &plan);
+    assert!(
+        text.contains(
+            "write a certificate for meridian.localhost and *.plugins.meridian.localhost"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("becomes https://meridian.localhost"),
+        "{text}"
+    );
+    assert!(text.contains(SETS.trim()), "{text}");
+
+    let report = apply(&stand, &asked, &plan, &pace(), &mut |_: &str| {})
+        .await
+        .unwrap();
+    let commands = stand.asked();
+    let written = commands
+        .iter()
+        .position(|c| c == WRITE_SECRET)
+        .expect("written");
+    let upgraded = commands
+        .iter()
+        .position(|c| c == &format!("{UPGRADE}{SETS}"))
+        .expect("upgraded with the address");
+    assert!(written < upgraded, "{commands:#?}");
+    assert!(report_text(&asked, &report).contains("Issued a certificate for meridian.localhost"));
+}
+
+#[tokio::test]
+async fn https_at_the_version_it_is_at_already_is_still_one_upgrade() {
+    let authority = this_machines();
+    let stand = healthy()
+        .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
+        .answering(SECRET, Ok(""));
+    let mut said = Vec::new();
+    let checked = check(&stand, &https(&authority), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await;
+    let Checked::Upgrade(plan) = checked else {
+        panic!("not an upgrade: {said:?}");
+    };
+    assert_eq!(plan.to.version, "0.1.182");
+    assert!(said.join("\n").contains("moves its address to https"));
+}
+
+#[tokio::test]
+async fn https_for_a_firms_own_name_is_refused_and_nothing_is_changed() {
+    let authority = this_machines();
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .instead(
+            OWN_VALUES,
+            Ok(r#"{"ingress":{"enabled":true,"host":"meridian.firm.example"}}"#),
+        );
+    let mut said = Vec::new();
+    let checked = check(&stand, &https(&authority), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await;
+    assert!(matches!(checked, Checked::Refused));
+    assert!(said.join("\n").contains("meridian.firm.example"));
+    assert!(!stand.changed_anything());
+    assert!(!stand.asked().iter().any(|c| c.contains("<<")));
+}
+
+#[tokio::test]
+async fn a_certificate_this_machine_wrote_is_renewed_when_due_without_being_asked() {
+    let authority = this_machines();
+    let elsewhere = crate::authority::Authority::make("m", 0).unwrap();
+    let theirs = elsewhere.issue("meridian.localhost", 0).unwrap();
+    let encoded = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(&theirs.cert_pem)
+    };
+    let stand = healthy()
+        .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
+        .instead(
+            OWN_VALUES,
+            Ok(r#"{"ingress":{"enabled":true,"host":"meridian.localhost","tls":{"secretName":"meridian-tls"}}}"#),
+        )
+        .answering(SECRET, Ok(&encoded));
+    let asked = Asked {
+        authority: Some(authority),
+        ..asked()
+    };
+    let mut said = Vec::new();
+    let Checked::Upgrade(plan) = check(&stand, &asked, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    else {
+        panic!("not renewed: {said:?}");
+    };
+    let step = plan.certificate.as_ref().expect("a certificate step");
+    assert!(step
+        .new
+        .as_ref()
+        .is_some_and(|(_, why)| why.contains("another authority")));
+    // Renewing sets no values: the address is where it was.
+    assert!(plan.https.is_none());
+    assert!(!helm_arguments(&asked, &plan).iter().any(|a| a == "--set"));
+}
+
+#[test]
+fn where_it_is_reached_is_read_and_nothing_else() {
+    let reached = reached_in(
+        r#"{"deployment":{"enrolmentCode":"ENROL-DO-NOT-PRINT"},
+            "ingress":{"enabled":true,"host":"meridian.localhost","tls":{"secretName":"meridian-tls"}}}"#,
+    )
+    .unwrap();
+    assert_eq!(reached.host, "meridian.localhost");
+    assert_eq!(reached.secret.as_deref(), Some("meridian-tls"));
+    assert!(!format!("{reached:?}").contains("ENROL"));
+    assert_eq!(
+        reached_in(r#"{"ingress":{"enabled":false,"host":"x.localhost"}}"#),
+        None
+    );
 }

@@ -32,6 +32,18 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "ti
 base64 = "0.22"
 rand = "0.8"
 sha2 = "0.10"
+# The local certificate authority a development deployment's HTTPS is signed
+# by, made in-process (task kernel/a-development-deployment-serves-https):
+# no mkcert, nothing downloaded. aws-lc-rs signs, as it already does for
+# reqwest's TLS, so no second C library; x509-parser reads back what was made,
+# to sign with it and to know when a certificate is near its end.
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "x509-parser"] }
+x509-parser = "0.18"
+# The certificates' dates, as rcgen takes them. In the tree already.
+time = { version = "0.3", default-features = false, features = ["std"] }
+# The root's SHA-1, which is how macOS's `security` names a certificate to
+# delete. RustCrypto's, beside sha2.
+sha1 = "0.10"
 
 [dev-dependencies]
 # test-util: a paused clock, so a wait of minutes is tested in no time.

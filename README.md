@@ -98,12 +98,30 @@ the two values the platform gave you, waits for the dashboard, and prints the
 wizard's address.
 
 Where the cluster has an ingress controller — Rancher Desktop's Traefik, say —
-it is reached through the chart's Ingress as `http://meridian.localhost`.
+it is reached through the chart's Ingress as `https://meridian.localhost`.
 Every browser sends that name, and every plugin's page on a name below it, to
 this machine, so the address stays after `up` ends and plugin pages work.
-`--host` names another: under `.localhost` it is plain HTTP, and any other
-name — your firm's — is reached over HTTPS, with the Secrets holding its
-certificates named in a values file:
+
+It is HTTPS because an agent signs in to the deployment's MCP over nothing
+else. The certificate comes from this machine's own certificate authority,
+which `up` makes the first time, in `~/.config/meridian/authority` with its
+key readable by you alone, named for Open Meridian and this machine, valid for
+ten years and able to sign names under `.localhost` and nothing else. Before
+asking anything, it says what the authority is for; on macOS it then offers to
+add it to your login keychain, and macOS asks for your password itself (this
+never handles one). Elsewhere it prints the one command that trusts it. The
+deployment's certificate covers its name and `*.plugins.` below it for a year,
+is kept in the Secret `<release>-tls`, and `up` and `upgrade-deployment` issue
+a new one within 30 days of its end. `up` prints where the root is and the
+`NODE_EXTRA_CA_CERTS=<path>` line a Node-based client, Claude Code among them,
+may need. `meridian authority` says the same again; `meridian authority
+remove` takes the root out of the keychain and off this machine.
+
+`--plain-http` serves plain HTTP and makes no certificate: it is for the
+cluster tests, and nothing else. `--host` names another name: under
+`.localhost` it is served as above, and any other name — your firm's — is
+reached over HTTPS, with the Secrets holding its certificates named in a
+values file:
 
 ```yaml
 # ingress.yaml
@@ -231,6 +249,15 @@ the deployment no longer runs, or launched while the rollout was under way,
 with the `plugin stop` and `plugin launch` (or `plugin dev`) that move it. It
 relaunches nothing itself.
 
+`--https` moves a local deployment, reached at a name under `.localhost`, to
+HTTPS in the same approved upgrade: the certificate first, from this machine's
+authority (made and trusted the first time, as `up` does), then the upgrade
+with `--set ingress.tls.secretName=<release>-tls --set
+dashboard.url=https://<name>`, at the version it is on if there is no newer
+one. People and clients signed in at the `http://` address sign in again. A
+certificate this machine wrote is renewed within 30 days of its end with or
+without `--https`.
+
 A pod left over from a restart is not waited for: one stopped for good,
 `Succeeded` or `Failed`, and made by a ReplicaSet its Deployment has since
 replaced. A node restart leaves one for each pod it ran, on whatever image it
@@ -308,7 +335,7 @@ it as a verified plugin is held, keeping no changing route from agents.
 
 `launch` shows the roles the version asks for and runs it only once
 you approve them; `--yes` approves for a script that has already read them.
-Its pages are on its own name, `http://my-plugin.plugins.meridian.localhost/`,
+Its pages are on its own name, `https://my-plugin.plugins.meridian.localhost/`,
 opened from the dashboard's home by a button for each level you hold on it:
 Manage (`admin`), Open (`write`) and View (`read`).
 

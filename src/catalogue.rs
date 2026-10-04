@@ -272,7 +272,7 @@ pub fn upload_url(address: &str, location: &str, digest: &str) -> String {
 }
 
 fn client() -> Result<reqwest::Client, Failed> {
-    reqwest::Client::builder()
+    crate::authority::trusted_here(reqwest::Client::builder())
         // Long enough for a layer of a few hundred megabytes on a slow link.
         .timeout(Duration::from_secs(900))
         .redirect(reqwest::redirect::Policy::none())

@@ -21,10 +21,22 @@ pub fn reached_at(values: &str) -> Option<String> {
     if ingress["enabled"] != true {
         return None;
     }
+    let tls = ingress["tls"]["secretName"]
+        .as_str()
+        .is_some_and(|secret| !secret.is_empty());
     ingress["host"]
         .as_str()
         .filter(|host| !host.is_empty())
-        .map(up::address_of)
+        .map(|host| up::address_of(host, tls))
+}
+
+/// Whether the release's certificate is the one `up` wrote from this
+/// machine's authority, in a Secret of its own beside the release: Helm does
+/// not know it, so uninstalling leaves it unless this removes it.
+pub fn wrote_a_certificate(values: &str, release: &str) -> bool {
+    let values: serde_json::Value = serde_json::from_str(values).unwrap_or_default();
+    values["ingress"]["tls"]["secretName"].as_str()
+        == Some(crate::authority::secret_name(release).as_str())
 }
 
 async fn run(program: &str, arguments: &[&str]) -> Result<String, String> {
@@ -63,6 +75,9 @@ pub async fn down(asked: &Down) -> Result<String, String> {
     )
     .await;
     let present = values.is_ok();
+    let certificate = values
+        .as_deref()
+        .is_ok_and(|values| wrote_a_certificate(values, release));
     if !present && !asked.delete_namespace {
         return Err(format!(
             "there is no release {release} in the namespace {namespace}, so nothing to uninstall"
@@ -74,6 +89,24 @@ pub async fn down(asked: &Down) -> Result<String, String> {
     if present {
         run("helm", &["uninstall", release, "--namespace", namespace]).await?;
         said.push_str(&format!("Uninstalled {release} from {namespace}.\n"));
+    }
+    if certificate && !asked.delete_namespace {
+        let secret = crate::authority::secret_name(release);
+        run(
+            "kubectl",
+            &[
+                "delete",
+                "secret",
+                &secret,
+                "--namespace",
+                namespace,
+                "--ignore-not-found",
+            ],
+        )
+        .await?;
+        said.push_str(&format!(
+            "Deleted the Secret {secret}, which held the certificate `meridian up` wrote for it.\n"
+        ));
     }
     if asked.delete_namespace {
         run("kubectl", &["delete", "namespace", namespace]).await?;

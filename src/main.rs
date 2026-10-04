@@ -4,6 +4,7 @@
 //! deployment's own wizard are the whole path there, and anything this makes
 //! convenient is possible without it (spec/the-cli, requirement 16).
 
+mod authority;
 mod catalogue;
 mod check;
 mod connect;
@@ -53,11 +54,14 @@ meridian -- bringing a Meridian deployment up
   meridian connect [<address>]
                              sign in to a deployment's dashboard and let this computer
                              act as you, for up to 90 days
-                             (default: http://meridian.localhost, the local install)
+                             (default: https://meridian.localhost, the local install)
   meridian sign-out [<address>]
                              revoke that delegation, here and at the deployment
   meridian upgrade           replace this binary with the latest release; not a
                              deployment, which is upgrade-deployment
+  meridian authority         this machine's certificate authority, which signs a local
+                             deployment's HTTPS: where it is, and how clients trust it
+  meridian authority remove  take it out of the login keychain and off this machine
   meridian uninstall         revoke every delegation this holds, and remove it
   meridian --version         which release this is
 
@@ -88,6 +92,11 @@ up:
                             cluster with no ingress controller
       --development         install it for development: it may run plugin code as
                             it is being written, and says so on every page
+                            At a name under .localhost it is served over HTTPS, with
+                            a certificate from this machine's own authority, made
+                            and trusted the first time (`meridian authority`)
+      --plain-http          serve plain HTTP and make no certificate: for the
+                            cluster tests, and nothing else
       --port <n>            the local port a port-forward uses (default: 8443)
       --timeout <d>         how long to give Helm (default: 10m)
       --no-doctor           skip the checks. A check nobody runs does not exist
@@ -154,6 +163,11 @@ what it will do and asks
                             Never an older one
       --timeout <d>         how long to wait for the migration and for every
                             component on the new image (default: 10m)
+      --https               move a local deployment, at a name under .localhost, to
+                            HTTPS: a certificate from this machine's authority, then
+                            the upgrade setting its address to https://<name>. A
+                            certificate it wrote is renewed within 30 days of its end
+                            with or without this
       --yes                 upgrade without being asked. For a script that has read
                             what it will do
 
@@ -164,7 +178,11 @@ upgrade: this binary, not a deployment
 
 uninstall:
       --yes                 remove without being asked. Sessions with deployments
-                            it cannot reach are forgotten here and lapse there
+                            it cannot reach are forgotten here and lapse there.
+                            This machine's certificate authority goes too
+
+authority remove:
+      --yes                 remove without being asked
 
 connect:
   <address> is the dashboard's: https://<host>, or http://127.0.0.1:<port> for a
@@ -208,7 +226,7 @@ const TAKES_A_VALUE: [&str; 22] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 13] = [
+const SWITCHES: [&str; 15] = [
     "--no-doctor",
     "--force",
     "--run-tests",
@@ -218,6 +236,8 @@ const SWITCHES: [&str; 13] = [
     "--follow",
     "--no-ingress",
     "--development",
+    "--plain-http",
+    "--https",
     "--yes",
     "-h",
     "--help",
@@ -235,7 +255,10 @@ fn parse(said: Vec<String>) -> Result<Arguments, String> {
         if !argument.starts_with('-') {
             // Only these take words. Anywhere else a stray one is refused
             // rather than ignored, as it always was.
-            if matches!(command.as_str(), "plugin" | "connect" | "sign-out") {
+            if matches!(
+                command.as_str(),
+                "plugin" | "connect" | "sign-out" | "authority"
+            ) {
                 words.push(argument);
                 continue;
             }
@@ -360,6 +383,7 @@ async fn main() {
             std::process::exit(upgrade_deployment_command(&arguments, &intended.namespace).await)
         }
         "uninstall" => std::process::exit(uninstall_command(&arguments).await),
+        "authority" => std::process::exit(authority_command(&arguments)),
         "--version" | "version" => println!("{}", release::version_line()),
         "-h" | "--help" | "help" | "" => print!("{USAGE}"),
         other => {
@@ -1081,7 +1105,33 @@ async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i
             .value("--chart-version", "--chart-version")
             .map(String::from),
         timeout: timeout.into(),
+        https: arguments.set("--https"),
+        authority: None,
     };
+    // This machine's authority: made and trusted for --https, the certificate
+    // step coming before the upgrade; otherwise only read, to renew a
+    // certificate it wrote.
+    let mut asked = asked;
+    // Where the authority is, when --https made or found it: said at the end.
+    let mut prepared = None;
+    asked.authority = if asked.https {
+        match prepare_authority() {
+            Ok(ready) => {
+                prepared = Some(ready.dir);
+                Some(std::sync::Arc::new(ready.authority))
+            }
+            Err(refusal) => {
+                eprintln!("meridian upgrade-deployment: {refusal}. Nothing was changed.");
+                return 1;
+            }
+        }
+    } else {
+        authority::directory()
+            .ok()
+            .and_then(|dir| authority::Authority::read(&dir).ok().flatten())
+            .map(std::sync::Arc::new)
+    };
+    let asked = asked;
     // The steps as they go: a block redrawn in place on a terminal, and
     // lines anywhere else.
     let mut watch = watch::to_stdout(format!(
@@ -1121,6 +1171,10 @@ async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i
     match applied {
         Ok(report) => {
             print!("{}", upgrade_deployment::report_text(&asked, &report));
+            if let (Some(host), Some(dir)) = (&plan.https, &prepared) {
+                println!("\nIt is at https://{host} now.");
+                println!("{}", up::run::trusted_by(dir));
+            }
             0
         }
         Err(refusal) => {
@@ -1134,7 +1188,7 @@ async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i
 /// deployment `meridian up` installs on this machine by default.
 fn connect_address(words: &[String]) -> Option<String> {
     match words {
-        [] => Some(up::address_of(up::LOCAL_HOST)),
+        [] => Some(up::local_address()),
         [given] => Some(given.clone()),
         _ => None,
     }
@@ -1388,6 +1442,13 @@ async fn uninstall_command(arguments: &Arguments) -> i32 {
     if within.exists() {
         println!("  {}", within.display());
     }
+    let certificates = authority::directory().ok().filter(|dir| dir.exists());
+    if let Some(dir) = &certificates {
+        println!(
+            "  this machine's certificate authority, {}, and its place in the login keychain",
+            dir.display()
+        );
+    }
     println!("  {}", exe.display());
     if !arguments.set("--yes") && !approved("Remove them?") {
         eprintln!("meridian uninstall: not approved, so nothing was removed. Where there is no terminal to ask at, --yes approves");
@@ -1408,6 +1469,15 @@ async fn uninstall_command(arguments: &Arguments) -> i32 {
         }
         let _ = sessions::forget(&within, &session.address);
     }
+    if let Some(dir) = &certificates {
+        match authority::remove(dir, &authority::ThisMachine) {
+            Ok(said) => print!("{said}"),
+            Err(refusal) => {
+                eprintln!("meridian uninstall: {refusal}");
+                return 1;
+            }
+        }
+    }
     if within.exists() {
         if let Err(failed) = std::fs::remove_dir_all(&within) {
             eprintln!("meridian uninstall: {}: {failed}", within.display());
@@ -1424,6 +1494,102 @@ async fn uninstall_command(arguments: &Arguments) -> i32 {
     }
     println!("Removed meridian {}.", release::VERSION);
     0
+}
+
+/// This machine's name, which its certificate authority is named for.
+fn machine_name() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "this machine".into())
+}
+
+/// This machine's certificate authority, made the first time, and the
+/// machine asked to trust it once, having been told what it is for.
+fn prepare_authority() -> Result<authority::Prepared, String> {
+    let dir = authority::directory()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default();
+    authority::prepare(
+        &dir,
+        &machine_name(),
+        now,
+        &authority::ThisMachine,
+        &approved,
+        &mut |line: &str| println!("{line}"),
+    )
+}
+
+/// `meridian authority [remove] [--yes]`: where this machine's certificate
+/// authority is and how a client trusts it; or taken away (ruling 5).
+fn authority_command(arguments: &Arguments) -> i32 {
+    let dir = match authority::directory() {
+        Ok(dir) => dir,
+        Err(refusal) => {
+            eprintln!("meridian authority: {refusal}");
+            return 1;
+        }
+    };
+    let words: Vec<&str> = arguments.words.iter().map(String::as_str).collect();
+    match words.as_slice() {
+        [] => match authority::Authority::read(&dir) {
+            Ok(Some(held)) => {
+                let root = authority::root_path(&dir);
+                println!("{}\n", authority::purpose(&dir));
+                println!(
+                    "Trusting it here:\n  {}",
+                    authority::trust_command(std::env::consts::OS, &root)
+                );
+                println!(
+                    "A Node-based client, Claude Code among them, may need it named:\n  {}",
+                    authority::node_line(&root)
+                );
+                println!("Its SHA-1 fingerprint: {}", held.sha1());
+                0
+            }
+            Ok(None) => {
+                println!(
+                    "This machine has no certificate authority yet. `meridian up` makes one the \
+                     first time it serves a deployment at a name under .localhost, and keeps it in {}.",
+                    dir.display()
+                );
+                0
+            }
+            Err(refusal) => {
+                eprintln!("meridian authority: {refusal}");
+                1
+            }
+        },
+        ["remove"] => {
+            println!(
+                "This removes this machine's certificate authority, {}, and takes it out of the \
+                 login keychain: deployments it signed for stop being trusted here.",
+                dir.display()
+            );
+            if !arguments.set("--yes") && !approved("Remove it?") {
+                eprintln!("meridian authority remove: not approved, so nothing was removed. Where there is no terminal to ask at, --yes approves");
+                return 1;
+            }
+            match authority::remove(&dir, &authority::ThisMachine) {
+                Ok(said) => {
+                    print!("{said}");
+                    0
+                }
+                Err(refusal) => {
+                    eprintln!("meridian authority remove: {refusal}");
+                    1
+                }
+            }
+        }
+        _ => {
+            eprintln!("meridian authority: takes nothing, or `remove`\n\n{USAGE}");
+            2
+        }
+    }
 }
 
 async fn examined(intended: &Intended) -> (String, i32) {
@@ -1492,6 +1658,8 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
             .into(),
         ingress: None,
         development: arguments.set("--development"),
+        tls_secret: None,
+        plain_http: arguments.set("--plain-http"),
     };
     let ingress_host = match arguments.set("--no-ingress") {
         true => None,
@@ -1524,6 +1692,7 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
         params.as_deref(),
         first_run_code.as_deref(),
         ingress_host.as_deref(),
+        &prepare_authority,
     )
     .await
     {
@@ -1615,7 +1784,7 @@ mod tests {
     fn connect_with_no_address_signs_in_to_the_local_install() {
         assert_eq!(
             connect_address(&[]).as_deref(),
-            Some("http://meridian.localhost")
+            Some("https://meridian.localhost")
         );
         assert_eq!(
             connect_address(&["https://dash.firm.example".into()]).as_deref(),
@@ -1700,6 +1869,20 @@ mod tests {
             Some("view")
         );
         assert!(parse(said("plugin open --instance ref --level")).is_err());
+    }
+
+    #[test]
+    fn https_plain_http_and_the_authority_are_said_plainly() {
+        assert!(parse(said("upgrade-deployment --https --yes"))
+            .unwrap()
+            .set("--https"));
+        assert!(parse(said("up --id DEP-X --plain-http"))
+            .unwrap()
+            .set("--plain-http"));
+        let remove = parse(said("authority remove --yes")).unwrap();
+        assert_eq!(remove.words, ["remove"]);
+        assert!(remove.set("--yes"));
+        assert!(parse(said("up --http")).is_err());
     }
 
     #[test]

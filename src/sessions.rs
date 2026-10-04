@@ -52,6 +52,13 @@ impl Held {
 /// Where the sessions files live: `$XDG_CONFIG_HOME/meridian/sessions`, or
 /// `~/.config/meridian/sessions`, or `%APPDATA%\meridian\sessions`.
 pub fn directory() -> Result<PathBuf, String> {
+    Ok(configuration()?.join("sessions"))
+}
+
+/// This CLI's own directory, which the sessions and the local certificate
+/// authority are kept below: `$XDG_CONFIG_HOME/meridian`, or
+/// `~/.config/meridian`, or `%APPDATA%\meridian`.
+pub fn configuration() -> Result<PathBuf, String> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|held| !held.is_empty())
         .map(PathBuf::from)
@@ -65,8 +72,8 @@ pub fn directory() -> Result<PathBuf, String> {
                 .filter(|held| !held.is_empty())
                 .map(|home| PathBuf::from(home).join(".config"))
         })
-        .ok_or("there is no home directory to keep a session in")?;
-    Ok(base.join("meridian").join("sessions"))
+        .ok_or("there is no home directory to keep this CLI's files in")?;
+    Ok(base.join("meridian"))
 }
 
 /// A deployment's address as a file name: its host and port, and nothing a
@@ -173,7 +180,7 @@ pub fn forget(within: &Path, address: &str) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn create_private_directory(path: &Path) -> Result<(), String> {
+pub(crate) fn create_private_directory(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
     std::fs::DirBuilder::new()
         .recursive(true)
@@ -186,14 +193,14 @@ fn create_private_directory(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn create_private_directory(path: &Path) -> Result<(), String> {
+pub(crate) fn create_private_directory(path: &Path) -> Result<(), String> {
     // Under %APPDATA%, which is the person's own profile.
     std::fs::create_dir_all(path)
         .map_err(|failed| format!("could not make {}: {failed}", path.display()))
 }
 
 #[cfg(unix)]
-fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt as _;
     std::fs::OpenOptions::new()
         .write(true)
@@ -203,7 +210,7 @@ fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 #[cfg(not(unix))]
-fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

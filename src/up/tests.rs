@@ -14,6 +14,8 @@ fn install() -> Install {
         timeout: "10m".into(),
         ingress: None,
         development: false,
+        tls_secret: None,
+        plain_http: false,
     }
 }
 
@@ -306,18 +308,54 @@ fn development_is_asked_for_only_when_said() {
 }
 
 #[test]
-fn a_local_name_is_reached_over_http_and_any_other_over_https() {
+fn a_name_with_a_certificate_is_reached_over_https_and_only_a_local_one_without() {
+    // A development deployment's local name has this machine's certificate.
     assert_eq!(
-        address_of("meridian.localhost"),
+        address_of("meridian.localhost", true),
+        "https://meridian.localhost"
+    );
+    // Without one, plain HTTP, which the chart serves for the cluster tests.
+    assert_eq!(
+        address_of("meridian.localhost", false),
         "http://meridian.localhost"
     );
-    assert_eq!(address_of("localhost"), "http://localhost");
-    assert_eq!(
-        address_of("meridian.firm.example"),
-        "https://meridian.firm.example"
+    assert_eq!(address_of("localhost", false), "http://localhost");
+    // Any other name is HTTPS, with a certificate or with none.
+    for tls in [true, false] {
+        assert_eq!(
+            address_of("meridian.firm.example", tls),
+            "https://meridian.firm.example"
+        );
+        // Not a suffix match on the text: `notlocalhost` is somebody's domain.
+        assert_eq!(address_of("notlocalhost", tls), "https://notlocalhost");
+    }
+}
+
+#[test]
+fn a_local_certificate_and_plain_http_are_values_only_when_said() {
+    let through = Install {
+        ingress: Some(Ingress {
+            host: "meridian.localhost".into(),
+            class: "traefik".into(),
+        }),
+        ..install()
+    };
+    let values = values_document(&through);
+    assert!(
+        !values.contains("tls") && !values.contains("plainHttp"),
+        "{values}"
     );
-    // Not a suffix match on the text: `notlocalhost` is somebody's domain.
-    assert_eq!(address_of("notlocalhost"), "https://notlocalhost");
+    let served = Install {
+        tls_secret: Some("meridian-tls".into()),
+        ..through.clone()
+    };
+    assert!(values_document(&served)
+        .ends_with("className: \"traefik\"\n  tls:\n    secretName: \"meridian-tls\"\n"));
+    let tested = Install {
+        plain_http: true,
+        ..through
+    };
+    assert!(values_document(&tested).contains("  plainHttp: true\n"));
 }
 
 #[test]

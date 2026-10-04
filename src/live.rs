@@ -62,7 +62,7 @@ pub struct Deployment<'a> {
 }
 
 fn client() -> Result<reqwest::Client, Failed> {
-    reqwest::Client::builder()
+    crate::authority::trusted_here(reqwest::Client::builder())
         .timeout(Duration::from_secs(60))
         .redirect(reqwest::redirect::Policy::none())
         .default_headers(crate::release::naming_this_version())

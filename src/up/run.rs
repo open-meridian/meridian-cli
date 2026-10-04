@@ -27,7 +27,9 @@ impl Wizard {
     fn new(address: String) -> Result<Self, String> {
         Ok(Self {
             address,
-            client: reqwest::Client::builder()
+            // This machine's own root beside the system's, so the wizard is
+            // answered whether or not the person has trusted it yet.
+            client: crate::authority::trusted_here(reqwest::Client::builder())
                 // A redirect followed silently is a cookie dropped: the second
                 // request would go without the session the first one started.
                 .redirect(reqwest::redirect::Policy::none())
@@ -95,12 +97,17 @@ impl Wizard {
 }
 
 /// `meridian up`, from an empty namespace to the wizard.
+///
+/// `prepare` is this machine's certificate authority, made and trusted the
+/// first time it is asked for: only when the deployment is reached through an
+/// ingress controller at a name under `.localhost`, and not with plain HTTP.
 pub async fn up(
     install: &super::Install,
     port: u16,
     params: Option<&str>,
     first_run_code: Option<&str>,
     ingress_host: Option<&str>,
+    prepare: &dyn Fn() -> Result<crate::authority::Prepared, String>,
 ) -> Result<(), String> {
     // Read before anything is installed: a file with a password in it should
     // be refused on the person's own machine, not after a release exists.
@@ -139,6 +146,34 @@ pub async fn up(
             ),
         }
     }
+
+    // HTTPS at a local name, from this machine's own authority: an MCP client
+    // signs in over nothing else (task kernel/a-development-deployment-serves-
+    // https). The Secret first, so the controller has it when the Ingress
+    // arrives; a certificate near its end is renewed here too.
+    let mut prepared = None;
+    if let Some(ingress) = install.ingress.clone() {
+        if install.plain_http {
+            println!(
+                "Served over plain HTTP at {}, with no certificate: for testing alone.",
+                ingress.host
+            );
+        } else if crate::authority::is_local(&ingress.host) {
+            let ready = prepare()?;
+            namespace(&install).await?;
+            let certified = crate::authority::certify(
+                &crate::machine::ThisMachine,
+                &ready.authority,
+                &install.release,
+                &install.namespace,
+                &ingress.host,
+            )
+            .await?;
+            println!("{}", certified.said(&ingress.host));
+            install.tls_secret = Some(crate::authority::secret_name(&install.release));
+            prepared = Some(ready);
+        }
+    }
     let install = &install;
 
     println!(
@@ -154,7 +189,10 @@ pub async fn up(
     wait_for_rollout(install, &service).await?;
 
     let (address, mut forward) = match &install.ingress {
-        Some(ingress) => (super::address_of(&ingress.host), None),
+        Some(ingress) => (
+            super::address_of(&ingress.host, install.tls_secret.is_some()),
+            None,
+        ),
         None => (
             format!("http://127.0.0.1:{port}"),
             Some(port_forward(install, &service, port).await?),
@@ -169,7 +207,36 @@ pub async fn up(
     if outcome.is_ok() && forward.is_none() {
         println!("\nThe dashboard stays at {address}.");
     }
+    if let Some(ready) = &prepared {
+        println!("{}", trusted_by(&ready.dir));
+    }
     outcome
+}
+
+/// Where the root is, and the line a Node-based client is pointed at it with.
+/// Whether Claude Code reads the macOS keychain without it is not documented,
+/// so both are said plainly until the task's spike says which to recommend.
+pub fn trusted_by(dir: &std::path::Path) -> String {
+    let root = crate::authority::root_path(dir);
+    format!(
+        "\nIts certificate is signed by this machine's own authority:\n  {}\n\
+         A client that reads its roots from the system trusts it once the system does. A \
+         Node-based one, Claude Code among them, may need it named in its environment:\n  {}",
+        root.display(),
+        crate::authority::node_line(&root)
+    )
+}
+
+/// The namespace, made if it is not there yet, so the certificate's Secret
+/// can be written before Helm installs anything.
+async fn namespace(install: &super::Install) -> Result<(), String> {
+    let name = install.namespace.as_str();
+    if kubectl(install, &["get", "namespace", name]).await.is_ok() {
+        return Ok(());
+    }
+    kubectl(install, &["create", "namespace", name])
+        .await
+        .map(|_| ())
 }
 
 fn read_params(path: &str) -> Result<BTreeMap<String, String>, String> {

@@ -77,6 +77,21 @@ pub trait Machine: Send + Sync {
 
     /// This machine's clock, in seconds since the epoch.
     fn now_s(&self) -> u64;
+
+    /// Run a command with `input` on its standard input, which is where a
+    /// Secret's key goes rather than into an argument every process can read.
+    /// None by default: only what writes a certificate needs it.
+    async fn run_with_input(
+        &self,
+        program: &str,
+        arguments: &[&str],
+        _input: &str,
+    ) -> Result<String, Failure> {
+        Err(Failure::Said(format!(
+            "`{program} {}` needs a standard input this machine does not give",
+            arguments.join(" ")
+        )))
+    }
 }
 
 #[derive(Debug, Clone, Default)]

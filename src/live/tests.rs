@@ -139,7 +139,7 @@ fn a_lapsed_session_is_said_apart_with_what_to_run() {
 
 #[test]
 fn the_dashboards_missing_session_is_said_by_its_reason_with_connect() {
-    let local = "http://meridian.localhost";
+    let local = "https://meridian.localhost";
     for (reason, why) in [
         ("lapsed", format!("your connection to {local} lapsed")),
         ("ended", format!("your session with {local} was ended")),

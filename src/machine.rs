@@ -64,6 +64,46 @@ impl Machine for ThisMachine {
         })
     }
 
+    async fn run_with_input(
+        &self,
+        program: &str,
+        arguments: &[&str],
+        input: &str,
+    ) -> Result<String, Failure> {
+        use tokio::io::AsyncWriteExt as _;
+        let mut child = match tokio::process::Command::new(program)
+            .args(arguments)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(failed) if failed.kind() == std::io::ErrorKind::NotFound => {
+                return Err(Failure::Missing(program.to_string()))
+            }
+            Err(failed) => return Err(Failure::Said(format!("{program}: {failed}"))),
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(input.as_bytes())
+                .await
+                .map_err(|failed| Failure::Said(format!("{program}: {failed}")))?;
+        }
+        let output = child
+            .wait_with_output()
+            .await
+            .map_err(|failed| Failure::Said(format!("{program}: {failed}")))?;
+        if output.status.success() {
+            return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+        }
+        Err(Failure::Said(format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    }
+
     fn now_s(&self) -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

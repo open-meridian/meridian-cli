@@ -8,12 +8,13 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
+use super::certificate_host;
 use super::watch::{Step, Watch};
 use super::{
     chart_of, direction, image_in, installed, jobs, left_by_a_restart, leftovers, migration,
-    plugin_floors, pods, progress, release_finding, restarted, restarts, running_images,
-    skip_policy, target_image, to_relaunch, workloads, Asked, Chart, Direction, Installed,
-    JobState, Plan, Report, HELM_MINIMUM,
+    plugin_floors, pods, progress, reached_in, release_finding, restarted, restarts,
+    running_images, skip_policy, target_image, to_relaunch, workloads, Asked, CertificateStep,
+    Chart, Direction, Installed, JobState, Plan, Report, HELM_MINIMUM,
 };
 use crate::doctor::{checks, Failure, Finding, Machine};
 
@@ -258,11 +259,54 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         "{} {} is published ({})",
         to.name, to.version, to.app_version
     )));
+
+    // The deployment's own values, of which only `image` and where it is
+    // reached are read; the rest of them, its enrolment code among them, is
+    // never kept or printed.
+    let own_values = machine
+        .run(
+            "helm",
+            &[
+                "get",
+                "values",
+                &asked.release,
+                "--namespace",
+                &asked.namespace,
+                "-o",
+                "json",
+            ],
+        )
+        .await
+        .unwrap_or_default();
+    let certificate = match certificate(machine, asked, &own_values).await {
+        Ok((step, found)) => {
+            findings.extend(found);
+            step
+        }
+        Err(stops) => {
+            findings.push(stops);
+            return refuse(&findings, say);
+        }
+    };
+    let renewing = certificate.as_ref().is_some_and(|step| step.new.is_some());
+
     match direction(&from, &to) {
         Direction::Down(stops) => {
             findings.push(stops);
             return refuse(&findings, say);
         }
+        // Already there, and an upgrade at the same version is what moves
+        // the address or renews the certificate: one approved change.
+        Direction::Current if asked.https || renewing => findings.push(Finding::Fine(format!(
+            "{} is at {} already; this upgrade keeps it there and {}",
+            asked.release,
+            to.version,
+            if asked.https {
+                "moves its address to https"
+            } else {
+                "renews its certificate"
+            }
+        ))),
         Direction::Current => {
             for finding in &findings {
                 say.say(&format!("{finding}"));
@@ -293,22 +337,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         .unwrap_or_default();
     // A published chart's tag is its appVersion: the commit both were built at.
     charts.tag = charts.tag.or_else(|| Some(to.app_version.clone()));
-    let own = machine
-        .run(
-            "helm",
-            &[
-                "get",
-                "values",
-                &asked.release,
-                "--namespace",
-                &asked.namespace,
-                "-o",
-                "json",
-            ],
-        )
-        .await
-        .map(|values| image_in(&values))
-        .unwrap_or_default();
+    let own = image_in(&own_values);
     let (to_image, pinned) = target_image(&charts, &own);
     findings.extend(pinned);
 
@@ -323,13 +352,76 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     for finding in &findings {
         say.say(&format!("{finding}"));
     }
+    let https = asked
+        .https
+        .then(|| certificate.as_ref().map(|step| step.host.clone()))
+        .flatten();
     Checked::Upgrade(Box::new(Plan {
         from_images: running_images(&running, &to_image),
         left_over: left_by_a_restart(&running, &held_pods),
         from,
         to,
         to_image,
+        certificate,
+        https,
     }))
+}
+
+/// The certificate this upgrade looks after, if any, with what was found
+/// about it. Issues a new one in memory where one is due; writes nothing.
+async fn certificate(
+    machine: &dyn Machine,
+    asked: &Asked,
+    own_values: &str,
+) -> Result<(Option<CertificateStep>, Vec<Finding>), Finding> {
+    use crate::authority::{date, needs, Needs};
+    let Some(host) = certificate_host(asked, reached_in(own_values).as_ref())? else {
+        return Ok((None, Vec::new()));
+    };
+    let Some(authority) = &asked.authority else {
+        if asked.https {
+            return Err(Finding::Stops {
+                what: "this machine has no certificate authority to sign with".into(),
+                fix: "`meridian up` on a name under .localhost makes one.".into(),
+            });
+        }
+        return Ok((
+            None,
+            vec![Finding::Worth {
+                what: format!("the certificate for {host} is not this machine's to renew"),
+                why: "It was written by another machine, or before this one's authority was \
+                      removed. `meridian upgrade-deployment --https` issues one from here."
+                    .into(),
+            }],
+        ));
+    };
+    match needs(machine, authority, &asked.release, &asked.namespace, &host).await {
+        Ok(Needs::Nothing { ends_s }) => Ok((
+            Some(CertificateStep {
+                host: host.clone(),
+                new: None,
+                kept_until_s: Some(ends_s),
+            }),
+            vec![Finding::Fine(format!(
+                "the certificate for {host} serves until {}",
+                date(ends_s)
+            ))],
+        )),
+        Ok(Needs::New { leaf, why }) => Ok((
+            Some(CertificateStep {
+                host: host.clone(),
+                new: Some((leaf, why.clone())),
+                kept_until_s: None,
+            }),
+            vec![Finding::Fine(format!(
+                "a certificate for {host} from this machine's authority is due: {why}"
+            ))],
+        )),
+        Err(failed) => Err(Finding::Stops {
+            what: format!("no certificate could be issued for {host}: {failed}"),
+            fix: "`meridian authority` says where this machine's authority is.".into(),
+        }),
+    }
 }
 
 /// The release's workloads, and the ReplicaSets that say which of a
@@ -380,6 +472,29 @@ pub async fn apply(
     );
     let before = restarts(&before_pods);
     let before_names: BTreeSet<String> = before_pods.into_iter().map(|pod| pod.name).collect();
+
+    // The certificate first, so the controller has it when the Ingress
+    // names it.
+    let mut certified = None;
+    if let Some(step) = &plan.certificate {
+        use crate::authority::Certified;
+        certified = match (&step.new, step.kept_until_s) {
+            (Some((leaf, why)), _) => {
+                crate::authority::write_secret(machine, release, namespace, leaf)
+                    .await
+                    .map_err(|failed| format!("{failed}\nNothing else was changed."))?;
+                let said = Certified::Issued {
+                    ends_s: leaf.ends_s,
+                    why: why.clone(),
+                }
+                .said(&step.host);
+                watch.say(&said);
+                Some(said)
+            }
+            (None, Some(ends_s)) => Some(Certified::Kept { ends_s }.said(&step.host)),
+            (None, None) => None,
+        };
+    }
 
     let arguments = super::helm_arguments(asked, plan);
     let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
@@ -505,6 +620,7 @@ pub async fn apply(
         restarted: restarted(&before, &held_pods, namespace),
         // Said, and never done: relaunching a plugin is the person's call.
         relaunch: to_relaunch(&held_pods, Some(&before_names)),
+        certificate: certified,
         ..Report::default()
     };
 

@@ -41,6 +41,13 @@ pub struct Install {
     /// Installed for development: it may run plugin code as it is being
     /// written, and says so on every page (ruling 2). Only when asked.
     pub development: bool,
+    /// The Secret holding the certificate the Ingress serves, which `up`
+    /// writes for a name under `.localhost` from this machine's own authority
+    /// (task kernel/a-development-deployment-serves-https).
+    pub tls_secret: Option<String>,
+    /// Plain HTTP on the Ingress, with no certificate: for the cluster tests,
+    /// and nothing else (the chart's `ingress.plainHttp`, ruling 3).
+    pub plain_http: bool,
 }
 
 /// How the deployment is reached through the cluster's ingress controller.
@@ -86,12 +93,20 @@ pub fn check_id(id: &str) -> Result<(), String> {
 /// to this machine. `connect` given no address signs in to it.
 pub const LOCAL_HOST: &str = "meridian.localhost";
 
-/// The address a name is reached at through the Ingress: plain HTTP for a
-/// name under `.localhost`, which never leaves this machine, and HTTPS for any
-/// other, since the chart serves plain HTTP only to a local install.
-pub fn address_of(host: &str) -> String {
-    let local = host == "localhost" || host.ends_with(".localhost");
-    format!("{}://{host}", if local { "http" } else { "https" })
+/// Where that deployment is reached: over HTTPS, signed by this machine's own
+/// authority, as `up` serves it.
+pub fn local_address() -> String {
+    address_of(LOCAL_HOST, true)
+}
+
+/// The address a name is reached at through the Ingress: HTTPS wherever it
+/// has a certificate, which any name but one under `.localhost` must, and a
+/// local one has from this machine's own authority; plain HTTP only for a
+/// local name served without one, which the chart does for the cluster tests
+/// alone (task kernel/a-development-deployment-serves-https, ruling 3).
+pub fn address_of(host: &str, tls: bool) -> String {
+    let plain = !tls && crate::authority::is_local(host);
+    format!("{}://{host}", if plain { "http" } else { "https" })
 }
 
 /// Which IngressClass to use, from `kubectl get ingressclass` as `name<TAB>is-default`
@@ -141,6 +156,13 @@ pub fn values_document(install: &Install) -> String {
         out.push_str("  enabled: true\n");
         out.push_str(&format!("  host: {}\n", quoted(&ingress.host)));
         out.push_str(&format!("  className: {}\n", quoted(&ingress.class)));
+        if install.plain_http {
+            out.push_str("  plainHttp: true\n");
+        }
+        if let Some(secret) = &install.tls_secret {
+            out.push_str("  tls:\n");
+            out.push_str(&format!("    secretName: {}\n", quoted(secret)));
+        }
     }
     if let Some(image) = &install.image {
         let (repository, tag) = image.rsplit_once(':').unwrap_or((image.as_str(), "latest"));

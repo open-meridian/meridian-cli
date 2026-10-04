@@ -312,7 +312,15 @@ fn plain_http_is_for_this_machine_alone_including_names_under_localhost() {
 
 #[test]
 fn the_command_to_run_is_bare_for_the_local_install() {
-    assert_eq!(command_for("http://meridian.localhost"), "meridian connect");
+    assert_eq!(
+        command_for("https://meridian.localhost"),
+        "meridian connect"
+    );
+    // The plain HTTP a cluster test serves is not the local install's.
+    assert_eq!(
+        command_for("http://meridian.localhost"),
+        "meridian connect http://meridian.localhost"
+    );
     assert_eq!(
         command_for("https://meridian.firm.example"),
         "meridian connect https://meridian.firm.example"
