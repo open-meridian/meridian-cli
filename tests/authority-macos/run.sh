@@ -16,15 +16,20 @@
 #
 # The login keychain (MERIDIAN_E2E_KEYCHAIN):
 #   standin  the default on GitHub Actions. Adding a trust setting to a
-#            person's login keychain waits on macOS's password dialog, which
-#            nobody can answer on a runner. So the real step runs first: on a
-#            runner the dialog waits (SecurityAgent), and after a minute the
-#            terminal is hung up on, as a person closing it would; a refusal
-#            instead would have to be reported. Either way the CLI must go no
-#            further. Then security-standin.sh stands in for the person, put
-#            first on PATH as `security`, trusting the root in the System
-#            keychain with sudo instead. The shipped binary has no test-only
-#            path: everything it does is what it does on a person's Mac.
+#            person's login keychain asks for their password in macOS's
+#            dialog, which nobody can answer on a runner. So the real step
+#            runs first, and the CLI must not wait for ever: where it sees no
+#            dialog can be shown (an SSH session, or launchd's session not
+#            Aqua) it runs no `security` and prints the command; where one
+#            can, as on a runner (SecurityAgent shows it), it stops `security`
+#            after its two-minute limit and says so. Either way it goes no
+#            further, and install.sh finishes. Then security-standin.sh stands
+#            in for the person answering the dialog, put first on PATH as
+#            `security`, trusting the root in the System keychain with sudo
+#            instead; where no dialog can be shown there is nobody's answer to
+#            stand in for, and the run says so and fails. The shipped binary
+#            has no test-only path: everything it does is what it does on a
+#            person's Mac.
 #   login    the default elsewhere. The real login keychain, and the person
 #            running it answers macOS's dialog.
 # Off a runner, the CLI's files and the binary go in a scratch directory
@@ -208,30 +213,40 @@ if [ "$keychain" = standin ]; then
     echo "== The login keychain's dialog, with nobody to answer it"
     # On a person's Mac, macOS asks for their password here; cancelled, the
     # CLI says it was not added and how to do it by hand. On a runner nobody
-    # can answer or cancel it: either macOS refuses at once, or the dialog
-    # waits, and after a minute the terminal is hung up on, as a person
-    # closing it would. Either way nothing past the keychain may happen.
+    # can answer or cancel it. Where the CLI sees no dialog can be shown it
+    # runs nothing and prints the command; where one can, the dialog waits
+    # and the CLI stops `security` after two minutes and says so; a refusal
+    # instead is reported too. The terminal is hung up on only after nothing
+    # was said for longer than that limit, which is a failure: the CLI waited.
     t="$scratch/1-refused.txt"
-    install "$t" 60 "$plain_path"
+    install "$t" 200 "$plain_path"
     status=$?
     check "$(holds "$t" "Installed meridian")" "install.sh installed the release"
-    check "$(holds "$t" "macOS asks for your password to add it to your login keychain")" "the CLI said what it asks for, at the terminal install.sh gave it"
-    check "$(is "$(asked "$t")" 1)" "and asked once (answered $(asked "$t"))"
-    if [ "$status" = 124 ]; then
-        echo "   (the keychain step waited for a person: a dialog nobody on a runner can answer)"
-        check "$(holds "$t" "security add-trusted-cert -r trustRoot -k $login_keychain")" "it was waiting on the login keychain step"
+    no_dialog=no
+    if [ "$(holds "$t" "none can be shown here")" = 0 ]; then
+        no_dialog=yes
+        echo "   (the CLI saw no dialog can be shown here: launchctl managername says $(launchctl managername 2>&1))"
+        check "$(is "$(asked "$t")" 0)" "it asked nothing it could not do (answered $(asked "$t"))"
+        check "$(holds "$t" "so the keychain was not asked")" "and said the keychain was not asked"
+        check "$(not in_keychain "$login_keychain" "$(sha1_of "$root")")" "nor was it: the root is not in the login keychain"
     else
-        check "$(is "$status" 0)" "install.sh finishes though the keychain step does not (status $status)"
-        check "$(holds "$t" "It was not added: security said no")" "the keychain step was refused, and the CLI said so"
-        check "$(holds "$t" "To trust it, run:")" "and said how to do it by hand"
-        check "$(holds "$t" "security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db")" "naming the login keychain command"
+        check "$(holds "$t" "macOS asks for your password to add it to your login keychain")" "the CLI said what it asks for, at the terminal install.sh gave it"
+        check "$(is "$(asked "$t")" 1)" "and asked once (answered $(asked "$t"))"
+        if [ "$(holds "$t" "was not answered within 2 minutes, so security was stopped")" = 0 ]; then
+            echo "   (the keychain step met a dialog nobody on a runner can answer, and the CLI stopped it at its limit)"
+        else
+            check "$(holds "$t" "It was not added: security said no")" "the keychain step was refused, and the CLI said so"
+        fi
     fi
+    check "$(is "$status" 0)" "install.sh finishes though the keychain step does not (status $status; 124 is the CLI waiting)"
+    check "$(holds "$t" "To trust it, run:")" "the CLI said how to do it by hand"
+    check "$(holds "$t" "security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db $root")" "the exact login keychain command"
     check "$(lacks "$t" "Added to your login keychain")" "the CLI did not claim it was trusted"
     check "$(lacks "$t" "Apps started from now on")" "and pointed no apps at a root it could not trust"
     check "$(not test -e "$plist")" "no LaunchAgent"
     check "$(is "$(named)" "")" "NODE_EXTRA_CA_CERTS still names nothing"
     check "$(not test -e "$authority/asked")" "and it is not marked as asked, so it asks again"
-    # What the waiting step left: its dialog, and the root, which
+    # What the stopped step left: its dialog, and the root, which
     # add-trusted-cert puts in the login keychain before asking to trust it.
     # Taken away, so neither stands in for the stand-in below.
     sudo killall SecurityAgent 2>/dev/null
@@ -245,6 +260,14 @@ if [ "$keychain" = standin ]; then
     check "$(not node_get)" "Node refuses it: $(node_get)"
     check "$(not system_curl)" "macOS's curl refuses it"
     check "$(not macos_trusts "$scratch/leaf.pem" "$name")" "macOS does not trust it"
+
+    if [ "$no_dialog" = yes ]; then
+        # The stand-in answers a dialog for the person; here none is shown,
+        # so trusting through it would claim what the CLI never did.
+        check 1 "the trusted path: this Mac can show no dialog, so the stand-in has no answer to stand in for"
+        echo "authority-macos: $failures checks FAILED"
+        exit 1
+    fi
 fi
 
 echo

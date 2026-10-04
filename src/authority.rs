@@ -22,8 +22,12 @@
 //! keychain nor a shell's profile: `NODE_EXTRA_CA_CERTS` named to them through
 //! launchd now and by a LaunchAgent at each login, never replacing one the
 //! person named already (ruled 2026-10-04, with the install script asking).
-//! Elsewhere each step is printed as a command. Nothing here does any of it
-//! without `Trust`, which a test replaces.
+//! Elsewhere each step is printed as a command, and on macOS too where no
+//! dialog can reach the person (an SSH session, or a session that is not on
+//! the Mac's screen): there the keychain's dialog would wait for ever, found
+//! on a GitHub macOS runner, so `security` is not run at all. Where it is run,
+//! it is given [`DIALOG_LIMIT`] and stopped after it. Nothing here does any
+//! of it without `Trust`, which a test replaces.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -45,7 +49,8 @@ pub const RENEW_WITHIN_DAYS: u64 = 30;
 const ROOT: &str = "root.pem";
 const KEY: &str = "root-key.pem";
 /// Written once the machine has been asked to trust the root and it worked,
-/// or, where this cannot run the step itself, once the command was printed.
+/// or, off macOS, where this never runs the step itself, once the commands
+/// were printed. Never where macOS could show no dialog: asked again there.
 const ASKED: &str = "asked";
 
 /// The name constraint: every name a root of this CLI's may sign.
@@ -960,6 +965,9 @@ pub fn purpose(dir: &Path) -> String {
 pub trait Trust {
     /// `macos`, `linux`, `windows`, as `std::env::consts::OS` says.
     fn os(&self) -> &str;
+    /// Why macOS could show no dialog here for the person to answer, so the
+    /// keychain is not asked at all; `None` where it could.
+    fn no_dialog(&self) -> Option<String>;
     /// Add the root to the login keychain, which asks for the person's
     /// password itself. Only on macOS, and only after the person said yes.
     fn add(&self, root: &Path) -> Result<(), String>;
@@ -996,17 +1004,75 @@ fn login_keychain() -> Result<PathBuf, String> {
     Ok(home()?.join("Library/Keychains/login.keychain-db"))
 }
 
+/// How long `security` is given for its dialog to be answered: time for a
+/// person to find it and type their password, and an end where nobody can.
+const DIALOG_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Why no dialog of macOS's could reach the person from this session, or
+/// `None` where one could: an SSH session (`SSH_CONNECTION` or `SSH_TTY`), or
+/// one launchd does not call `Aqua`, the session on the Mac's own screen.
+/// Where launchd cannot say, `None`: the time limit is the backstop.
+fn no_dialog_here(ssh: bool, manager: Option<&str>) -> Option<String> {
+    if ssh {
+        return Some(
+            "this is an SSH session, and macOS shows its dialog on the Mac's own screen".into(),
+        );
+    }
+    match manager.map(str::trim) {
+        Some(name) if !name.is_empty() && name != "Aqua" => Some(format!(
+            "launchd calls this session {name}, not Aqua, the session on the Mac's own screen"
+        )),
+        _ => None,
+    }
+}
+
+/// A limit as it is said: `2 minutes`, `a second`.
+fn spoken(limit: std::time::Duration) -> String {
+    let seconds = limit.as_secs();
+    match (seconds / 60, seconds % 60) {
+        (1, 0) => "a minute".into(),
+        (minutes, 0) if minutes > 1 => format!("{minutes} minutes"),
+        (0, 1) => "a second".into(),
+        _ => format!("{seconds} seconds"),
+    }
+}
+
+/// `program`, its three streams inherited, stopped if it has not finished
+/// within `limit`: a dialog nobody answers fails the step instead of
+/// waiting for ever.
+fn run_within(
+    program: &str,
+    arguments: &[&std::ffi::OsStr],
+    limit: std::time::Duration,
+) -> Result<(), String> {
+    let mut child = std::process::Command::new(program)
+        .args(arguments)
+        .spawn()
+        .map_err(|failed| format!("{program} could not be run: {failed}"))?;
+    let ends = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => return Err(format!("{program} said no ({status})")),
+            Ok(None) if std::time::Instant::now() >= ends => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "macOS's dialog for your password was not answered within {}, so {program} \
+                     was stopped",
+                    spoken(limit)
+                ));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+            Err(failed) => return Err(format!("{program} could not be waited for: {failed}")),
+        }
+    }
+}
+
 fn security(arguments: &[&std::ffi::OsStr]) -> Result<(), String> {
     // Inherited, all three: macOS asks for the password in its own dialog,
     // and says why it refused here.
-    let status = std::process::Command::new("security")
-        .args(arguments)
-        .status()
-        .map_err(|failed| format!("security could not be run: {failed}"))?;
-    match status.success() {
-        true => Ok(()),
-        false => Err(format!("security said no ({status})")),
-    }
+    run_within("security", arguments, DIALOG_LIMIT)
 }
 
 /// `launchctl`, its output kept: what it says is the answer, or why not.
@@ -1028,6 +1094,19 @@ fn launchctl(arguments: &[&std::ffi::OsStr]) -> Result<String, String> {
 impl Trust for ThisMachine {
     fn os(&self) -> &str {
         std::env::consts::OS
+    }
+
+    fn no_dialog(&self) -> Option<String> {
+        if self.os() != "macos" {
+            return None;
+        }
+        let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+        let ssh = set("SSH_CONNECTION") || set("SSH_TTY");
+        let manager = match ssh {
+            true => None,
+            false => launchctl(&["managername".as_ref()]).ok(),
+        };
+        no_dialog_here(ssh, manager.as_deref())
     }
 
     fn add(&self, root: &Path) -> Result<(), String> {
@@ -1112,14 +1191,29 @@ fn held_or_made(dir: &Path, machine: &str, now_s: u64) -> Result<Authority, Stri
     }
 }
 
+/// Where macOS could show no dialog: what is not done, and each step as a
+/// command, for a session on the Mac's own screen.
+fn no_dialog_said(why: &str, trust: &dyn Trust, dir: &Path) -> String {
+    format!(
+        "Not trusted yet: macOS asks for your password in a dialog on this Mac's own screen, and \
+         none can be shown here ({why}), so the keychain was not asked. In Terminal on this Mac's \
+         screen, run `meridian authority trust`, or each step yourself. {}",
+        by_hand(trust, dir)
+    )
+}
+
 /// What the root is for, and then whether to trust it: on macOS the login
 /// keychain and, after it, apps on Node, when the person says yes; anywhere
-/// else, or when they say no, each step as a command instead. Remembered
-/// once the keychain took it, or once the commands were said.
+/// else, or when they say no, or where macOS could show no dialog, each step
+/// as a command instead. Remembered once the keychain took it, or, off
+/// macOS, once the commands were said.
 fn ask_once(dir: &Path, trust: &dyn Trust, ask: &dyn Fn(&str) -> bool, say: &mut dyn FnMut(&str)) {
     say(&purpose(dir));
     let asked = if trust.os() == "macos" {
-        if ask(
+        if let Some(why) = trust.no_dialog() {
+            say(&no_dialog_said(&why, trust, dir));
+            false
+        } else if ask(
             "Trust it now? macOS asks for your password to add it to your login keychain, and \
              apps started from now on, the Claude app among them, are pointed at it",
         ) {
@@ -1237,13 +1331,21 @@ pub fn remove(dir: &Path, trust: &dyn Trust) -> Result<String, String> {
         }
         .sha1();
         if trust.os() == "macos" {
-            match trust.remove(&sha1) {
-                Ok(()) => said.push_str("Removed it from your login keychain.\n"),
-                Err(refused) => said.push_str(&format!(
-                    "It was not in your login keychain, or could not be taken out ({refused}). \
-                     If Keychain Access lists it, `{}` removes it.\n",
+            match trust.no_dialog() {
+                Some(why) => said.push_str(&format!(
+                    "Not taken out of your login keychain: macOS asks for your password in a \
+                     dialog on this Mac's own screen, and none can be shown here ({why}). In \
+                     Terminal on this Mac's screen, `{}` takes it out.\n",
                     untrust_command("macos", &sha1)
                 )),
+                None => match trust.remove(&sha1) {
+                    Ok(()) => said.push_str("Removed it from your login keychain.\n"),
+                    Err(refused) => said.push_str(&format!(
+                        "It was not in your login keychain, or could not be taken out \
+                         ({refused}). If Keychain Access lists it, `{}` removes it.\n",
+                        untrust_command("macos", &sha1)
+                    )),
+                },
             }
         } else {
             said.push_str(&format!(

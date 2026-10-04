@@ -112,7 +112,10 @@ key readable by you alone, named for Open Meridian and this machine, valid for
 ten years and able to sign names under `.localhost` and nothing else. Before
 asking anything, it says what the authority is for; on macOS it then offers to
 add it to your login keychain, and macOS asks for your password itself (this
-never handles one). Elsewhere it prints the one command that trusts it. The
+never handles one), giving you two minutes to answer it. Over SSH, or anywhere
+else macOS cannot show you that dialog, it asks nothing and prints the
+command to run in Terminal on the Mac's own screen, and asks again next time.
+Elsewhere it prints the one command that trusts it. The
 deployment's certificate covers its name and `*.plugins.` below it for a year,
 is kept in the Secret `<release>-tls`, and `up` and `upgrade-deployment` issue
 a new one within 30 days of its end.

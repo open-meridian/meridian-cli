@@ -208,6 +208,8 @@ fn the_launch_agent_names_the_file_to_launchd_when_it_is_loaded() {
 struct Asked {
     os: &'static str,
     refuses: bool,
+    /// Why macOS could show no dialog here, as an SSH session would say.
+    no_dialog: Option<&'static str>,
     said: RefCell<Vec<String>>,
     launchd: RefCell<Option<String>>,
     own: Option<String>,
@@ -229,6 +231,7 @@ impl Asked {
         Asked {
             os,
             refuses: false,
+            no_dialog: None,
             said: RefCell::new(Vec::new()),
             launchd: RefCell::new(None),
             own: None,
@@ -249,6 +252,9 @@ impl Asked {
 impl Trust for Asked {
     fn os(&self) -> &str {
         self.os
+    }
+    fn no_dialog(&self) -> Option<String> {
+        self.no_dialog.map(String::from)
     }
     fn add(&self, root: &Path) -> Result<(), String> {
         self.said
@@ -650,6 +656,149 @@ fn declined_or_refused_it_says_the_command_and_asks_again_next_time() {
         "apps are not pointed at a root refused"
     );
     tidy(&dir);
+}
+
+#[test]
+fn where_no_dialog_can_be_shown_it_asks_nothing_runs_nothing_says_the_command_and_asks_again() {
+    // As over SSH: macOS's dialog would wait on a screen nobody here sees.
+    let dir = scratch("no-dialog");
+    let machine = Asked {
+        no_dialog: Some("this is an SSH session"),
+        ..Asked::on("macos", &dir)
+    };
+    let mut said = Vec::new();
+    let never = |_: &str| -> bool { panic!("asked where nothing can be done") };
+    trust_here(&dir, "m", NOW, &machine, &never, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .unwrap();
+    assert!(machine.events().is_empty(), "{:?}", machine.events());
+    let said = said.join("\n");
+    assert!(
+        said.contains("none can be shown here (this is an SSH session)"),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db {}",
+            root_path(&dir).display()
+        )),
+        "the exact command: {said}"
+    );
+    assert!(
+        said.contains("launchctl setenv NODE_EXTRA_CA_CERTS"),
+        "{said}"
+    );
+    assert!(!said.contains("Added to your login keychain"), "{said}");
+    assert!(!dir.join("asked").exists(), "not marked as done");
+    assert!(!machine.plist().exists());
+    assert_eq!(machine.named(), None);
+
+    // `up` too says it, and asks nothing.
+    let mut again = Vec::new();
+    prepare(&dir, "m", NOW, &machine, &never, &mut |line: &str| {
+        again.push(line.to_string())
+    })
+    .unwrap();
+    assert!(
+        again.join("\n").contains("none can be shown here"),
+        "{again:?}"
+    );
+    assert!(machine.events().is_empty());
+
+    // At the Mac's own screen, it asks and adds.
+    let at_screen = Asked::on("macos", &dir);
+    trust_here(
+        &dir,
+        "m",
+        NOW,
+        &at_screen,
+        &|_: &str| true,
+        &mut |_: &str| {},
+    )
+    .unwrap();
+    assert!(
+        at_screen.events()[0].starts_with("add "),
+        "{:?}",
+        at_screen.events()
+    );
+    assert!(dir.join("asked").exists());
+
+    // Removed where no dialog can be shown: the keychain is not asked, and the
+    // command is said; the files go as ever.
+    let away = Asked {
+        no_dialog: Some("this is an SSH session"),
+        ..Asked::on("macos", &dir)
+    };
+    let sha1 = Authority::read(&dir).unwrap().unwrap().sha1();
+    let removed = remove(&dir, &away).unwrap();
+    assert!(
+        !away.events().iter().any(|e| e.starts_with("remove")),
+        "{:?}",
+        away.events()
+    );
+    assert!(
+        removed.contains(&format!(
+            "security delete-certificate -t -Z {sha1} ~/Library/Keychains/login.keychain-db"
+        )),
+        "{removed}"
+    );
+    assert!(
+        removed.contains("Not taken out of your login keychain"),
+        "{removed}"
+    );
+    assert!(!dir.exists());
+    tidy(&dir);
+}
+
+#[test]
+fn a_dialog_is_reachable_only_at_the_macs_own_screen() {
+    assert!(no_dialog_here(true, None)
+        .unwrap()
+        .contains("an SSH session"));
+    assert!(no_dialog_here(true, Some("Aqua")).is_some(), "SSH first");
+    assert_eq!(no_dialog_here(false, Some("Aqua")), None);
+    assert_eq!(no_dialog_here(false, Some("Aqua\n")), None);
+    for elsewhere in ["Background", "LoginWindow", "StandardIO", "System"] {
+        let why = no_dialog_here(false, Some(elsewhere)).expect(elsewhere);
+        assert!(why.contains(elsewhere) && why.contains("not Aqua"), "{why}");
+    }
+    // launchd said nothing: the time limit is the backstop.
+    assert_eq!(no_dialog_here(false, None), None);
+    assert_eq!(no_dialog_here(false, Some("")), None);
+}
+
+#[test]
+fn security_is_stopped_at_its_time_limit_and_says_so() {
+    let started = std::time::Instant::now();
+    let stopped =
+        run_within("sleep", &["30".as_ref()], std::time::Duration::from_secs(1)).unwrap_err();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        stopped,
+        "macOS's dialog for your password was not answered within a second, so sleep was stopped"
+    );
+    assert_eq!(
+        run_within("true", &[], std::time::Duration::from_secs(10)),
+        Ok(())
+    );
+    assert!(run_within("false", &[], std::time::Duration::from_secs(10))
+        .unwrap_err()
+        .starts_with("false said no"));
+    assert!(run_within(
+        "meridian-no-such-program",
+        &[],
+        std::time::Duration::from_secs(1)
+    )
+    .unwrap_err()
+    .contains("could not be run"));
+    assert_eq!(spoken(DIALOG_LIMIT), "2 minutes");
+    assert_eq!(spoken(std::time::Duration::from_secs(60)), "a minute");
+    assert_eq!(spoken(std::time::Duration::from_secs(90)), "90 seconds");
 }
 
 #[test]

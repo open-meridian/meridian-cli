@@ -5,9 +5,11 @@
 # `security add-trusted-cert -r trustRoot -k <login keychain>`, and macOS asks
 # the person at the screen for their password before it changes their trust
 # settings. A runner has nobody at the screen, so run.sh first lets the real
-# step wait on that dialog and checks the CLI went no further. Then, for the
-# rest of the run,
-# this file is put first on PATH as `security`: the CLI is the shipped
+# step meet that dialog, which the CLI stops at its two-minute limit, and
+# checks the CLI went no further. Then, for the rest of the run, this file
+# stands in for the person answering the dialog, put first on PATH as
+# `security`: never where the CLI saw no dialog could be shown, since there
+# it runs no `security` and there is no answer to stand in for. The CLI is the shipped
 # binary, unchanged, asking for exactly what it asks a person's Mac for
 # (recorded in $MERIDIAN_E2E_STANDIN/calls), and the trust is put where a
 # runner can put it without a dialog -- the System keychain, with sudo.

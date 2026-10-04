@@ -18,11 +18,15 @@
 # what anybody installs, and building it would cost a release build per run.
 #
 # The login keychain: a person's trust prompt cannot be answered on a runner.
-# The run lets that step wait on its dialog, hangs up after a minute, and
-# checks the CLI went no further (no apps pointed, not marked as asked); then
-# a stand-in for the person, a `security` first on PATH in the test alone,
-# trusts the root in the System keychain with sudo. The shipped binary has no
-# test-only path. run.sh's header has the whole of it.
+# The run lets that step meet its dialog and checks the CLI does not wait for
+# ever: it stops `security` at its two-minute limit and says so (or, where it
+# sees no dialog can be shown, runs none and prints the command), install.sh
+# finishes, and the CLI went no further (no apps pointed, not marked as
+# asked). Then a stand-in for the person answering the dialog, a `security`
+# first on PATH in the test alone, trusts the root in the System keychain
+# with sudo. The shipped binary has no test-only path. run.sh's header has
+# the whole of it. The binary is a published release's, so a change to the
+# CLI is tested here from the release that ships it.
 
 name: authority-macos
 
@@ -69,6 +73,7 @@ jobs:
       - name: What it runs on
         run: |
           sw_vers
+          launchctl managername
           node --version
           /usr/bin/curl --version | head -1
           openssl version
