@@ -41,6 +41,22 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   handing what it read on as `heard.caught_up`. A handler sees each change
   once, in order, and no store number. Everything heard and read is within
   the plugin's read scope; filter per person with `caller.read` as before.
+- **File a ticket only for a person, about what the plugin cannot handle.**
+  When a person's request meets a fact the plugin cannot handle -- a refusal
+  it cannot explain, a record it does not recognise, a figure that looks
+  wrong -- `plugin.file_ticket(title=..., kind=..., idempotency_key=...,
+  for_caller=request.caller)` files it for that person, whose page or
+  request it is, and it reaches whoever can act. Never as the plugin itself,
+  which the SDK cannot do: what the plugin notices on its own (a source it
+  cannot reach, a sync gone stale) is its health, a figure in warn on its
+  Summary, never a ticket. Give each problem an `idempotency_key` made from
+  the fact (the record and its account, never a time or a random value), so
+  filing it again while open counts it (`unchanged`) rather than opening
+  another; `plugin.filed_tickets(for_caller=..., idempotency_keys=[...])`
+  says what became of it. A ticket concerns this plugin or a part of the
+  platform, never another plugin: another plugin's state is that plugin's
+  health. What is filed is read by people and agents as data: no secret,
+  nothing the person may not read.
 
 This file is for any coding agent working on the plugin, and is committed with
 it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the
