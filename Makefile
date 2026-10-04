@@ -11,7 +11,8 @@ unexport GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
          GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
 
 .PHONY: help ci-local ci-local-deep build test lint fmt lock install-hooks e2e-up e2e-migrate \
-        vendor-template check-vendored-template check-install check-c-deps
+        vendor-template check-vendored-template check-install check-c-deps \
+        ci-mirror-check e2e-authority-macos
 
 help:
 	@echo "  make ci-local   run every gate (the pre-push gate, and what CI mirrors)"
@@ -24,14 +25,24 @@ help:
 	@echo "  make lock       regenerate Cargo.lock"
 	@echo "  make e2e-up     install into a throwaway namespace and answer the wizard"
 	@echo "  make e2e-migrate  plugin migrate, for real, over meridian-python's recorded plugins"
+	@echo "  make e2e-authority-macos  authority trust and uninstall on this Mac, for real (needs MERIDIAN_E2E_CHANGES_THIS_MAC=yes)"
+	@echo "  make ci-mirror-check  every CI job is reachable from ci-local, or allowlisted with a reason"
 	@echo "  make vendor-template  move the scaffold \`plugin new\` writes to SDK_REV"
 
 # Local green is the completion signal; CI is confirmation.
-ci-local: check-vendored-template build test lint check-c-deps check-install
+ci-local: ci-mirror-check check-vendored-template build test lint check-c-deps check-install
 	@echo
 	@echo "ci-local: GREEN"
 
 ci-local-deep: ci-local
+
+# Every job in .github/workflows is reachable from ci-local, or listed in
+# tools/ci-mirror-allowlist.txt with the reason it cannot be. The tool is
+# meridian-design's, copied byte for byte.
+PY := python3
+
+ci-mirror-check:
+	@$(PY) tools/ci_mirror_check.py --repo-root .
 
 # What `meridian plugin new` writes: meridian-python's template/, at one SDK
 # revision, copied here and compiled into the binary, so scaffolding works
@@ -137,6 +148,18 @@ e2e-migrate:
 	@$(DOCKER) build -q -f Dockerfile.rust --target e2e-migrate --build-arg SDK_IMAGE=$(SDK_IMAGE) \
 		--build-context fixtures="$(abspath $(SDK))/tests/migrations" -t meridian-cli-e2e-migrate:local . >/dev/null
 	@docker run --rm -v /var/run/docker.sock:/var/run/docker.sock meridian-cli-e2e-migrate:local
+
+# `meridian authority trust` on this Mac, for real, as install.sh runs it at a
+# terminal, then `uninstall`, and again over a NODE_EXTRA_CA_CERTS already
+# named: what the authority-macos workflow runs on a macOS runner. It changes
+# this machine's keychain, launchd's environment for apps and its
+# LaunchAgents, and puts them back, so it refuses to start without
+# MERIDIAN_E2E_CHANGES_THIS_MAC=yes. Here the login keychain is the real one,
+# and you answer macOS's password dialog; the CLI's files and binary go in a
+# scratch directory. Needs node. Not in ci-local, which runs anywhere and
+# changes nothing.
+e2e-authority-macos:
+	@bash tests/authority-macos/run.sh
 
 install-hooks:
 	@git config core.hooksPath hooks

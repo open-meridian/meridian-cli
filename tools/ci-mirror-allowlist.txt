@@ -1,0 +1,14 @@
+# Jobs that CI runs and `make ci-local` cannot.
+#
+# Format: job-id<TAB>reason. A bare job id is rejected; the reason is the point.
+# Every entry here is a hole in "green locally means green in CI", so each one
+# has to be worth the hole.
+#
+# The bar: a job belongs here only when reproducing it locally is impossible
+# rather than merely inconvenient. Needing a credential, a hosted service, or a
+# machine of another kind is impossible. Being slow is not.
+
+build	Builds the release binary for one target on that target's own runner (release.yaml): Linux on x86_64 and arm64, macOS on Apple silicon, for Intel. Not reproducible from ci-local, which runs on one machine of one kind; what it compiles is compiled and tested there by `make build` and `make test`, inside Docker. It gates nothing on main: it runs on a tag, or by hand to see a release would build.
+publish	Publishes a tag's binaries as a GitHub release (release.yaml). Not reproducible locally by design: it needs the repository's token, and a local target that published would mean anybody could release from a laptop. It runs only on a tag, after every `build`.
+close	Thanks a pull request from outside the organisation, points it to issues and closes it (outside-pull-requests.yaml). Not reproducible locally by design: it acts on who opened a pull request and on GitHub's own view of whether they are inside this organisation, neither of which exists on a laptop. It checks nothing and gates nothing.
+authority-macos	`meridian authority trust` on a real Mac, as install.sh runs it at a terminal, then `uninstall` (authority-macos.yaml). Reproducible on a Mac as `make e2e-authority-macos MERIDIAN_E2E_CHANGES_THIS_MAC=yes`, but not from ci-local: it needs macOS, and it changes the machine's keychain, launchd's environment for apps and its LaunchAgents, which a gate run on every push must never do to a person's machine. It runs on a tag and by hand, and gates nothing on main.

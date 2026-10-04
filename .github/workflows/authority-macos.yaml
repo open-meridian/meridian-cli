@@ -1,0 +1,80 @@
+# `meridian authority trust` on a real Mac, as install.sh runs it at a
+# terminal, then `meridian uninstall`, and again over a NODE_EXTRA_CA_CERTS
+# already named (ruled 2026-10-04, task
+# kernel/a-development-deployment-serves-https). tests/authority-macos/run.sh
+# is the test and says what each check is; this gives it a Mac. On a Mac of
+# your own it is `make e2e-authority-macos`.
+#
+# On a release tag and by hand, and NOT on every push to main: a macOS runner
+# is the slow and costly kind, and what this tests is what a release ships --
+# the published binary through the published install script.
+#
+# What it installs, with install.sh's own mechanisms and nothing else: on a
+# tag, that release (MERIDIAN_VERSION). A tag starts this and the release
+# workflow at once, so it waits first for the release to be published. By
+# hand, the latest release, or the one named in `version`: what `curl | sh`
+# gives a person today. install.sh could install a binary built from this
+# checkout through MERIDIAN_RELEASES at 127.0.0.1, but that binary is not
+# what anybody installs, and building it would cost a release build per run.
+#
+# The login keychain: a person's trust prompt cannot be answered on a runner.
+# The run lets that step be refused and checks the CLI reports it; then a
+# stand-in for the person, a `security` first on PATH in the test alone,
+# trusts the root in the System keychain with sudo. The shipped binary has no
+# test-only path. run.sh's header has the whole of it.
+
+name: authority-macos
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "A release to install, e.g. 0.1.31 (empty: the latest)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authority-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  authority-macos:
+    runs-on: macos-14
+    timeout-minutes: 50
+    env:
+      MERIDIAN_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: On a tag, wait for the release workflow to publish it
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${MERIDIAN_VERSION}/meridian-aarch64-apple-darwin.sha256"
+          for _ in $(seq 1 60); do
+            if curl -fsSL -o /dev/null "$url"; then
+              echo "${MERIDIAN_VERSION} is published"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::${MERIDIAN_VERSION} was not published within 30 minutes"
+          exit 1
+
+      - name: What it runs on
+        run: |
+          sw_vers
+          node --version
+          /usr/bin/curl --version | head -1
+          openssl version
+          command -v expect
+
+      - name: The trust step, installed at a terminal; uninstall; over a NODE_EXTRA_CA_CERTS already named
+        env:
+          # A runner, thrown away after the job.
+          MERIDIAN_E2E_CHANGES_THIS_MAC: "yes"
+        run: bash tests/authority-macos/run.sh

@@ -1,9 +1,10 @@
 # What `make ci-local` runs, run again on the runner.
 #
 # One job calling one target, so there is nothing for CI and the local gate to
-# disagree about. meridian-core needs a mirror check because its gates are
-# many and CI names them individually; this has three, inside Docker, and the
-# way to keep them in step is not to write them down twice.
+# disagree about. The other workflows' jobs -- a release's builds, closing an
+# outside pull request, the macOS trust test -- cannot run in ci-local, and
+# ci-mirror-check (inside ci-local) holds each to a written reason in
+# tools/ci-mirror-allowlist.txt.
 
 name: ci
 

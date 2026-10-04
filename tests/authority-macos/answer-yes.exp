@@ -1,0 +1,47 @@
+#!/usr/bin/expect -f
+# answer-yes.exp <transcript> <seconds> <command> [argument ...]
+#
+# Runs a command at a pseudo-terminal, as a person at Terminal would, and
+# answers "y" to every question the CLI asks there (each ends "[y/N] "). So
+# install.sh's `(: </dev/tty)` finds a terminal, and `meridian authority
+# trust </dev/tty` reads its answers from it, the path `curl | sh` takes.
+#
+# Everything said is written to <transcript>, and how many questions were
+# answered to <transcript>.asked, for run.sh to check. Exits as the command
+# did, or 124 when nothing was said for <seconds>: a question asked somewhere
+# no terminal reaches, such as a macOS dialog waiting for a person.
+
+set transcript [lindex $argv 0]
+set timeout [lindex $argv 1]
+set command [lrange $argv 2 end]
+set asked 0
+
+log_user 0
+log_file -noappend $transcript
+spawn -noecho {*}$command
+
+proc record {transcript asked} {
+    set out [open "$transcript.asked" w]
+    puts $out $asked
+    close $out
+}
+
+expect {
+    -ex {[y/N] } {
+        incr asked
+        send "y\r"
+        exp_continue
+    }
+    timeout {
+        record $transcript $asked
+        send_user "answer-yes: nothing was said for $timeout seconds, after $asked answers\n"
+        close
+        wait
+        exit 124
+    }
+    eof
+}
+
+record $transcript $asked
+lassign [wait] pid sid os_error status
+exit $status

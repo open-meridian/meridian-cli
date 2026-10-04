@@ -84,6 +84,11 @@ RUN sh /w/tests/install/run.sh
 FROM koalaman/shellcheck-alpine:v0.10.0 AS shellcheck
 COPY install.sh tests/install/run.sh /w/
 RUN shellcheck --shell=sh /w/install.sh /w/run.sh
+# The macOS trust test (`make e2e-authority-macos`), which only a Mac runs,
+# held to shellcheck here all the same.
+COPY tests/authority-macos/run.sh /w/authority-macos/run.sh
+COPY tests/authority-macos/security-standin.sh /w/authority-macos/security-standin.sh
+RUN shellcheck --shell=bash /w/authority-macos/run.sh /w/authority-macos/security-standin.sh
 
 # The CLI as a person runs it, for the end-to-end run: the binary and the two
 # tools it drives, helm and kubectl, at pinned versions and nothing else. It
