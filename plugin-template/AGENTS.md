@@ -57,6 +57,30 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   platform, never another plugin: another plugin's state is that plugin's
   health. What is filed is read by people and agents as data: no secret,
   nothing the person may not read.
+- **A custody plugin reports the custodian's activity, as the custodian
+  states it.** Each activity on an account -- a purchase, a sale, a
+  reinvested dividend, a split, a fee, a transfer -- goes to the street with
+  `plugin.record_activity(external_account_id=..., source=...,
+  activity=meridian.CustodialActivity(...))`. It is evidence that explains a
+  break, never a source: the street derives no position, lot or figure from
+  it, and nothing moves the book until a person confirms. Its `kind` is the
+  `meridian.ActivityKind` the custodian's type converts to (`PURCHASE`,
+  `SALE`, `REINVESTMENT`, `DIVIDEND`, `INTEREST`, `FEE`, `TAX`, `SPLIT`,
+  `CORPORATE_ACTION`, `TRANSFER_IN`, `TRANSFER_OUT`, `CONTRIBUTION`,
+  `WITHDRAWAL`, `JOURNAL`, each as `ACTIVITY_KIND_...`); a type that converts
+  to none is sent as not known with `kind_as_reported`, and a code that did
+  not resolve with `instrument_as_reported`. A value the custodian did not
+  state is left unset, never zero (a split moves no cash). Its
+  `external_activity_id` is the custodian's own identifier for it, never a
+  time or a random value: sent again, it is answered `already_recorded` and
+  kept once, so a retry or a resync is safe; a custodian restating an
+  activity under a new identifier is a new one, reported, never merged. Say
+  how far back the custodian's history reaches with
+  `plugin.report_sync_status(..., history_from="YYYY-MM-DD")`, report past
+  activity back to it on first connection (a backfill), then each sync's new
+  activity. Report each sync status as it changes, `state` saying what holds
+  (`SYNC_STATE_NEEDS_SIGN_IN` when the person must sign in again): the street
+  keeps every one, so operations tells "needs sign-in" apart from merely old.
 
 This file is for any coding agent working on the plugin, and is committed with
 it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the

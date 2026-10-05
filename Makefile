@@ -49,7 +49,7 @@ ci-mirror-check:
 # offline and gives the same plugin every time. The template lives beside the
 # SDK it is written against and is tested there against the real sidecar;
 # this copy is held to it the way the SDK's bindings are held to the schema.
-SDK_REV  := 7ac9e9192c0eb69347b1244f0a6d4a0bd27656ba
+SDK_REV  := 2029008a5d70696a227c59dc8e4708648e13cd09
 SDK_REPO := https://github.com/open-meridian/meridian-python.git
 SCRATCH  := .sdk-scratch
 
