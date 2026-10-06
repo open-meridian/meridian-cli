@@ -30,6 +30,27 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   `PageClient.assert_no_account_data`, given that data, holds it to that in
   the tests. An account's identity (its name, custodian, type, owner, note)
   is not its data: a Manage page may list every account as a link target.
+- **On a plugin holding several roles, name the roles each declaration
+  serves.** A person's level is granted per role of a plugin: write on its
+  `operations` and read on its `custody`, say. A plugin whose
+  `[tool.meridian]` names one role, or none, names no role anywhere, and
+  nothing changes. One naming several gives `roles=[...]`, from those roles,
+  on every `@pages.page`, `@pages.route`, `@pages.tool` and
+  `meridian.Setting`: a page is served when the person's level on one of its
+  roles within the session's button is one of its levels, and a derived tool
+  takes its route's roles. The sidecar refuses the registration of a page or
+  setting naming no role, or a role the plugin was not launched with, naming
+  it. A page serving several roles adapts per role:
+  `caller.level_for(role)`, `caller.read_for(role)` and
+  `caller.write_for(role)` (offer a role's actions only where
+  `write_for(role)` holds accounts); `caller.level`, `read` and `write` stay
+  the session's button and the union over its roles. A role's declaration
+  decides what is shown, never what is admitted: the sidecar admits each
+  command sent for a person by their write on the role holding it, and
+  refuses otherwise naming the role. Test each page under every role with
+  `PageClient(pages, roles=[...])`: `every_page()` renders it under each
+  level for each role alone and for all together, and `caller(level,
+  roles={"operations": "write", "custody": "read"})` builds one session.
 - Manage opens on the plugin's Summary, which core draws: its status, then
   any figures the plugin reports about its own work (`plugin.figures =
   [meridian.Figure("Connections", 3, state="warn", why="...")]`, sent on its
@@ -81,6 +102,17 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   activity. Report each sync status as it changes, `state` saying what holds
   (`SYNC_STATE_NEEDS_SIGN_IN` when the person must sign in again): the street
   keeps every one, so operations tells "needs sign-in" apart from merely old.
+  An activity recorded before its instrument resolved -- a plan's own code
+  linked later, a symbol the security master completes later -- is
+  re-resolved, never sent again: `plugin.re_resolve_activity(
+  external_account_id=..., source=..., external_activity_id=...,
+  instrument_id=..., provenance=meridian.Provenance(...),
+  resolved_at_ns=...)`, the provenance saying what resolved it (the link and
+  who set it, or the rule) and `resolved_at_ns` when that was made. The
+  street keeps the activity as first recorded and the re-resolution beside
+  it; sent again naming the same instrument, it is answered
+  `already_recorded`. Re-resolve an account's activities whenever what
+  resolves them changes.
 
 This file is for any coding agent working on the plugin, and is committed with
 it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the

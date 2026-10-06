@@ -350,6 +350,14 @@ derived from it, unless it says why it is not offered (`tool=False,
 why="..."`) or a tool replaces it (`tools-cover-routes`); `--verified` holds
 it as a verified plugin is held, keeping no changing route from agents.
 
+From contract v15 a person's level is granted per role of a plugin. On a
+plugin whose `[tool.meridian]` names several roles, `plugin check` fails a
+page, route or setting that names no `roles=`, or a role the plugin does not
+hold, and a route that changes something sending a command none of its roles
+holds, by meridian-schema's `roles.json`, naming the roles that do
+(`roles-declared`). A tool takes its route's roles unless it names its own. A
+plugin holding one role, or none, names none, and the rule holds.
+
 `launch` shows the roles the version asks for and runs it only once
 you approve them; `--yes` approves for a script that has already read them.
 Its pages are on its own name, `https://my-plugin.plugins.meridian.localhost/`,
@@ -467,7 +475,7 @@ binary per target (macOS and Linux, each on x86_64 and arm64), each with its
 published from a push to `main`. `plugin new`'s template is vendored from
 meridian-python's `template/` at a pinned commit (`make vendor-template`;
 `check-vendored-template` fails when it drifts), so a release carries the SDK
-version the new plugin pins: 0.19.0 from 0.1.34.
+version the new plugin pins: 0.20.0 from 0.1.35.
 
 ## Licence
 

@@ -156,7 +156,7 @@ DASHBOARD = os.environ.get("MERIDIAN_HARNESS_DASHBOARD", "http://dashboard:8080"
 #[test]
 fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
     type Breaking = fn(&Scaffolded) -> (String, usize);
-    let breakages: [(&str, Breaking, &str); 15] = [
+    let breakages: [(&str, Breaking, &str); 16] = [
         (
             "template-shape",
             |p| {
@@ -168,10 +168,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.19.0", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.20.0", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.19.0",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.20.0",
         ),
         (
             "tool-meridian",
@@ -262,6 +262,20 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
                 (template("accounts.html"), line)
             },
             "`https://cdn.example.com/chart.js` is loaded from another origin",
+        ),
+        (
+            "roles-declared",
+            |p| {
+                p.replace(
+                    "pyproject.toml",
+                    "roles = []",
+                    "roles = [\"operations\", \"portfolio\"]",
+                );
+                let text = p.read(&page_py());
+                let at = text.find("@pages.page(\"/setup\"").expect("the template's page");
+                (page_py(), text[..at].matches('\n').count() + 1)
+            },
+            "page \"/setup\" names no roles, on a plugin holding operations, portfolio",
         ),
         (
             "settings-declared",
@@ -749,4 +763,208 @@ fn a_route_kept_from_agents_says_why_and_a_verified_plugin_keeps_none() {
         found[1].contains("a verified plugin keeps nothing"),
         "{found:?}"
     );
+}
+
+// ── roles-declared (contract v15) ────────────────────────────────────────
+
+/// The template as a plugin holding custody and operations writes it on
+/// SDK 0.20.0: every page, route and setting naming the roles it serves, a
+/// tool taking its route's, and each changing route sending only commands
+/// its roles hold.
+fn two_roles(label: &str) -> Scaffolded {
+    let plugin = Scaffolded::tested(label);
+    plugin.replace(
+        "pyproject.toml",
+        "roles = []",
+        "roles = [\"custody\", \"operations\"]",
+    );
+    plugin.write(
+        "tests/test_suite.py",
+        "from meridian.suites import run\n\n\ndef test_custody():\n    \
+         report = run(\"custody\", {})\n    assert report.passed\n",
+    );
+    plugin.replace(
+        &page_py(),
+        "@pages.page(\"/setup\", \"Setup\", levels=\"admin\")",
+        "ROLES = (\"custody\", \"operations\")\n\n\n\
+         @pages.page(\"/setup\", \"Setup\", levels=\"admin\", roles=ROLES)",
+    );
+    plugin.replace(
+        &page_py(),
+        "@pages.page(\"/\", \"Accounts\", levels=[\"write\", \"read\"])",
+        "@pages.page(\"/\", \"Accounts\", levels=[\"write\", \"read\"], roles=ROLES)",
+    );
+    plugin.replace(
+        &page_py(),
+        "    \"/statement\",\n    levels=\"write\",",
+        "    \"/statement\",\n    levels=\"write\",\n    roles=[\"custody\"],",
+    );
+    plugin.write(
+        &format!("src/{MODULE}/balances.py"),
+        "import meridian\n\n\
+         from .page import pages\n\n\
+         SETTINGS = [\n    meridian.Setting(\"api_key\", secret=True, roles=(\"custody\", \"operations\")),\n    \
+         meridian.Setting(\"tolerance\", int, roles=\"operations\"),\n]\n\n\n\
+         @pages.route(\"/balance\", levels=\"write\", roles=\"operations\", methods=[\"POST\"], params=Balance)\n\
+         async def balance(request):\n    \
+         await request.plugin.record_opening_balance(acting_for=request.caller.header)\n\n\n\
+         @pages.tool(replaces=\"/balance\", params=Balance)\n\
+         async def balance_tool(request):\n    \
+         await request.plugin.record_opening_balance(acting_for=request.caller.header)\n\n\n\
+         @pages.route(\"/balances\", levels=\"read\", roles=\"operations\")\n\
+         async def balances(request):\n    ...\n",
+    );
+    plugin
+}
+
+fn roles_failures(report: &Report) -> Vec<(String, usize, String)> {
+    report
+        .failures
+        .iter()
+        .filter(|f| f.rule == "roles-declared")
+        .map(|f| (f.file.clone(), f.line, f.found.clone()))
+        .collect()
+}
+
+/// The line, from 1, that `needle` first appears on in a scaffolded file.
+fn line_in(plugin: &Scaffolded, file: &str, needle: &str) -> usize {
+    let text = plugin.read(file);
+    let at = text.find(needle).expect("the text to find");
+    text[..at].matches('\n').count() + 1
+}
+
+#[test]
+fn a_two_role_plugin_naming_its_roles_everywhere_keeps_every_rule() {
+    let plugin = two_roles("roles-kept");
+    let report = plugin.check();
+    assert!(report.passed(), "{}", text(&report));
+    assert!(
+        text(&report).contains("ok    roles-declared"),
+        "{}",
+        text(&report)
+    );
+}
+
+#[test]
+fn a_role_less_page_on_a_two_role_plugin_fails_naming_its_line() {
+    let plugin = two_roles("roles-missing");
+    plugin.replace(
+        &page_py(),
+        "levels=[\"write\", \"read\"], roles=ROLES)",
+        "levels=[\"write\", \"read\"])",
+    );
+    let report = plugin.check();
+    assert_eq!(
+        failed_rules(&report),
+        ["roles-declared"],
+        "{}",
+        text(&report)
+    );
+    let line = line_in(&plugin, &page_py(), "@pages.page(\"/\"");
+    assert_eq!(
+        roles_failures(&report),
+        vec![(
+            page_py(),
+            line,
+            "page \"/\" names no roles, on a plugin holding custody, operations".to_string()
+        )]
+    );
+    assert!(
+        text(&report).contains(&format!("{}:{line}: page \"/\" names no roles", page_py())),
+        "{}",
+        text(&report)
+    );
+}
+
+#[test]
+fn a_route_sending_a_command_none_of_its_roles_holds_fails_naming_those_that_do() {
+    let plugin = two_roles("roles-command");
+    plugin.replace(
+        &page_py(),
+        "roles=[\"custody\"],",
+        "roles=[\"operations\"],",
+    );
+    let report = plugin.check();
+    assert_eq!(
+        failed_rules(&report),
+        ["roles-declared"],
+        "{}",
+        text(&report)
+    );
+    let line = line_in(&plugin, &page_py(), "record_holdings_statement(");
+    assert_eq!(
+        roles_failures(&report),
+        vec![(
+            page_py(),
+            line,
+            "route \"/statement\" serves operations and sends RecordHoldingsStatement \
+             (record_holdings_statement), which custody holds"
+                .to_string()
+        )]
+    );
+    let failure = report
+        .failures
+        .iter()
+        .find(|f| f.rule == "roles-declared")
+        .unwrap();
+    assert!(failure.instead.contains("(custody)"), "{}", failure.instead);
+}
+
+#[test]
+fn a_setting_or_tool_naming_a_role_the_plugin_does_not_hold_fails() {
+    let plugin = two_roles("roles-stranger");
+    let balances = format!("src/{MODULE}/balances.py");
+    plugin.replace(&balances, "roles=\"operations\"),", "),");
+    plugin.replace(
+        &balances,
+        "@pages.tool(replaces=\"/balance\", params=Balance)",
+        "@pages.tool(replaces=\"/balance\", params=Balance, roles=[\"oms\"])",
+    );
+    let found: Vec<String> = roles_failures(&plugin.check())
+        .into_iter()
+        .map(|(_, _, found)| found)
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            "tool \"/balance\" names `oms`, which this plugin does not hold (custody, operations)"
+                .to_string(),
+            "tool \"/balance\" serves oms and sends RecordOpeningBalance \
+             (record_opening_balance), which operations holds"
+                .to_string(),
+            "setting \"tolerance\" names no roles, on a plugin holding custody, operations"
+                .to_string(),
+        ]
+    );
+}
+
+#[test]
+fn a_plugin_holding_one_role_names_none_and_the_rule_holds() {
+    let plugin = Scaffolded::tested("roles-one");
+    plugin.replace("pyproject.toml", "roles = []", "roles = [\"operations\"]");
+    let report = plugin.check();
+    assert!(report.passed(), "{}", text(&report));
+}
+
+#[test]
+fn the_roles_and_commands_are_roles_jsons() {
+    let mut published = super::rules::published_roles();
+    published.sort();
+    assert_eq!(published, super::rules::ROLES.to_vec());
+    let commands = super::rules::commands();
+    let held = |name: &str| {
+        commands
+            .iter()
+            .find(|(_, named, _)| named == name)
+            .map(|(call, _, roles)| (call.clone(), roles.clone()))
+    };
+    assert_eq!(
+        held("RecordOpeningBalance"),
+        Some(("record_opening_balance".into(), vec!["operations".into()]))
+    );
+    assert_eq!(
+        held("RecordHoldingsStatement"),
+        Some(("record_holdings_statement".into(), vec!["custody".into()]))
+    );
+    assert_eq!(held("ListBreaks"), None, "a query is no command");
 }

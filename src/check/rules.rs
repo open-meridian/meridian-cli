@@ -21,7 +21,7 @@ use super::{Failure, Plugin, Rule, Source};
 /// The rules, in the order they are reported: what the project is, what it
 /// declares, its pages, its settings, how it reaches the deployment, and its
 /// tests. Running the tests is `TESTS_PASS`, which only `--run-tests` asks.
-pub const RULES: [Rule; 12] = [
+pub const RULES: [Rule; 13] = [
     Rule {
         id: "template-shape",
         holds: "the project keeps the template's shape",
@@ -61,6 +61,12 @@ pub const RULES: [Rule; 12] = [
         id: "tools-cover-routes",
         holds: "every route that changes something is a tool for agents, or says why not",
         check: tools_cover_routes,
+    },
+    Rule {
+        id: "roles-declared",
+        holds: "on a plugin holding several roles, every page, route and setting names its roles, \
+                and a changing route sends only its roles' commands",
+        check: roles_declared,
     },
     Rule {
         id: "settings-declared",
@@ -1048,6 +1054,295 @@ fn tools_cover_routes(plugin: &Plugin) -> Vec<Failure> {
             ),
             TOOL_ROUTE,
         ));
+    }
+    failures
+}
+
+// ── roles-declared ───────────────────────────────────────────────────────
+
+/// meridian-schema's boundaries/roles.json at 57a603c (contract v15), byte
+/// for byte: its `operations` say which roles hold each command.
+const ROLES_JSON: &str = include_str!("roles.json");
+
+/// Each command a plugin may send, as the SDK names its call
+/// (`record_opening_balance`), with the operation's name and the roles that
+/// hold it (roles.json's `operations`, kind `command`).
+pub(crate) fn commands() -> &'static [(String, String, Vec<String>)] {
+    static COMMANDS: LazyLock<Vec<(String, String, Vec<String>)>> = LazyLock::new(|| {
+        let published: serde_json::Value =
+            serde_json::from_str(ROLES_JSON).expect("roles.json reads");
+        published["operations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|operation| operation["kind"] == "command")
+            .filter_map(|operation| {
+                let name = operation["name"].as_str()?;
+                let roles = operation["roles"]
+                    .as_object()?
+                    .iter()
+                    .filter(|(how, _)| *how == "publishes")
+                    .flat_map(|(_, roles)| roles.as_array().into_iter().flatten())
+                    .filter_map(|role| role.as_str().map(String::from))
+                    .collect();
+                Some((snake_case(name), name.to_string(), roles))
+            })
+            .collect()
+    });
+    &COMMANDS
+}
+
+/// The roles roles.json lists, which `ROLES` must equal.
+#[cfg(test)]
+pub(crate) fn published_roles() -> Vec<String> {
+    let published: serde_json::Value = serde_json::from_str(ROLES_JSON).expect("roles.json reads");
+    published["roles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|role| role["name"].as_str().map(String::from))
+        .collect()
+}
+
+fn snake_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (at, c) in name.char_indices() {
+        if c.is_ascii_uppercase() && at > 0 {
+            out.push('_');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
+}
+
+/// A page, route or tool decorator, or a setting: where it is, its
+/// arguments, and, for a decorator, its view's body.
+struct Declaration<'a> {
+    source: &'a Source,
+    /// `page`, `route`, `tool` or `setting`.
+    kind: &'static str,
+    line: usize,
+    arguments: String,
+    /// The view's body, and the line it starts on.
+    body: Option<(usize, String)>,
+}
+
+impl Declaration<'_> {
+    /// How it is told apart in a failure: its path, or a setting's name.
+    fn named(&self) -> String {
+        let first = first_argument(&self.arguments).trim();
+        let what = match self.kind {
+            "tool" => keyword(&self.arguments, "replaces").unwrap_or(first),
+            _ => first,
+        };
+        format!("{} {what}", self.kind)
+    }
+}
+
+fn declarations(plugin: &Plugin) -> Vec<Declaration<'_>> {
+    static DECORATOR: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"@\s*[A-Za-z_][A-Za-z0-9_.]*\.(page|route|tool)\s*\(").unwrap()
+    });
+    static SETTING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bSetting\s*\(").unwrap());
+    static DEF: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?m)^([ \t]*)(?:async[ \t]+)?def[ \t]+[A-Za-z_]").unwrap());
+    let mut found = Vec::new();
+    for source in python(plugin) {
+        let text = python_uncommented(&source.text);
+        for decorator in DECORATOR.captures_iter(&text) {
+            let whole = decorator.get(0).expect("matched");
+            let arguments = enclosed(&text[whole.end()..]).to_string();
+            let body = DEF.captures_at(&text, whole.end()).map(|def| {
+                let indent = def[1].len();
+                let start = def.get(0).expect("matched").start();
+                let first = line_at(&text, start) + 1;
+                let lines: Vec<&str> = text[start..]
+                    .lines()
+                    .skip(1)
+                    .take_while(|line| {
+                        line.trim().is_empty() || line.len() - line.trim_start().len() > indent
+                    })
+                    .collect();
+                (first, lines.join("\n"))
+            });
+            let kind = match &decorator[1] {
+                "page" => "page",
+                "route" => "route",
+                _ => "tool",
+            };
+            found.push(Declaration {
+                source,
+                kind,
+                line: line_at(&text, whole.start()),
+                arguments,
+                body,
+            });
+        }
+        for call in SETTING.find_iter(&text) {
+            found.push(Declaration {
+                source,
+                kind: "setting",
+                line: line_at(&text, call.start()),
+                arguments: enclosed(&text[call.end()..]).to_string(),
+                body: None,
+            });
+        }
+    }
+    found
+}
+
+/// The roles a `roles=` value names, as written or through a constant the
+/// plugin binds at the top of a module; None where the text cannot say.
+fn roles_named(plugin: &Plugin, declaration: &Declaration, value: &str) -> Option<Vec<String>> {
+    static STRING: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"["']([^"'\\\n]*)["']"#).unwrap());
+    let strings = |text: &str| -> Vec<String> {
+        STRING
+            .captures_iter(text)
+            .map(|named| named[1].to_string())
+            .collect()
+    };
+    if value.starts_with(['"', '\'', '[', '(']) {
+        return Some(strings(value));
+    }
+    let constant = value.rsplit('.').next().unwrap_or(value);
+    if !is_identifier(constant) {
+        return None;
+    }
+    let bound = Regex::new(&format!(
+        r"(?m)^{}[ \t]*(?::[^=\n]*)?=[ \t]*",
+        regex::escape(constant)
+    ))
+    .unwrap();
+    // Its own module first, then the plugin's others.
+    std::iter::once(declaration.source)
+        .chain(python(plugin))
+        .find_map(|source| {
+            let text = python_uncommented(&source.text);
+            let at = bound.find(&text)?.end();
+            let rest = &text[at..];
+            let expression = if rest.starts_with(['(', '[', '{']) {
+                enclosed(&rest[1..])
+            } else {
+                rest.lines().next().unwrap_or_default()
+            };
+            Some(strings(expression))
+        })
+}
+
+const ROLES_DECLARED: &str = "`roles=[...]` naming the roles it serves, from those \
+    [tool.meridian] names: on a plugin holding several roles, a person's level is granted per \
+    role, a page is served by the person's level on one of its roles, a setting is set by an admin \
+    of every role it serves, and the sidecar refuses the registration of a page or setting naming \
+    none, or a role the plugin was not launched with (contract v15). A tool takes its route's \
+    roles unless it names its own";
+
+fn roles_declared(plugin: &Plugin) -> Vec<Failure> {
+    const ID: &str = "roles-declared";
+    // A call to any command, by the name the SDK gives it.
+    static SENT: LazyLock<Regex> = LazyLock::new(|| {
+        let calls: Vec<String> = commands()
+            .iter()
+            .map(|(call, _, _)| regex::escape(call))
+            .collect();
+        Regex::new(&format!(r"\b({})\s*\(", calls.join("|"))).unwrap()
+    });
+    let (held, _) = declared(plugin);
+    if held.len() < 2 {
+        return Vec::new();
+    }
+    let holding = held.join(", ");
+    let found = declarations(plugin);
+    let mut failures = Vec::new();
+    // The roles each route serves, for a tool that names none of its own.
+    let route_roles = |path: &str| {
+        found.iter().find_map(|route| {
+            let named = first_argument(&route.arguments).trim();
+            (route.kind != "tool" && named.trim_matches(['"', '\'']) == path)
+                .then(|| keyword(&route.arguments, "roles"))
+                .flatten()
+                .and_then(|value| roles_named(plugin, route, value))
+        })
+    };
+    for declaration in &found {
+        let file = &declaration.source.path;
+        let serves = match keyword(&declaration.arguments, "roles") {
+            Some(value) => roles_named(plugin, declaration, value),
+            None if declaration.kind == "tool" => keyword(&declaration.arguments, "replaces")
+                .and_then(|path| route_roles(path.trim_matches(['"', '\'']))),
+            None => Some(Vec::new()),
+        };
+        let Some(serves) = serves else {
+            continue; // named some way the text cannot read
+        };
+        if serves.is_empty() {
+            failures.push(failure(
+                ID,
+                file,
+                declaration.line,
+                format!(
+                    "{} names no roles, on a plugin holding {holding}",
+                    declaration.named()
+                ),
+                ROLES_DECLARED,
+            ));
+            continue;
+        }
+        for role in serves.iter().filter(|role| !held.contains(role)) {
+            failures.push(failure(
+                ID,
+                file,
+                declaration.line,
+                format!(
+                    "{} names `{role}`, which this plugin does not hold ({holding})",
+                    declaration.named()
+                ),
+                ROLES_DECLARED,
+            ));
+        }
+        // A changing route's view sends only the commands its roles hold.
+        let changing = match declaration.kind {
+            "tool" => keyword(&declaration.arguments, "method")
+                .map(|method| method.trim_matches(['"', '\'']).to_ascii_uppercase())
+                .is_none_or(|method| method != "GET" && method != "HEAD"),
+            "setting" => false,
+            _ => methods_of(&declaration.arguments)
+                .iter()
+                .any(|method| method != "GET" && method != "HEAD"),
+        };
+        let Some((first, body)) = declaration.body.as_ref().filter(|_| changing) else {
+            continue;
+        };
+        for (index, line) in body.lines().enumerate() {
+            for sent in SENT.captures_iter(line) {
+                let Some((call, name, holders)) =
+                    commands().iter().find(|(call, _, _)| *call == sent[1])
+                else {
+                    continue;
+                };
+                if holders.iter().any(|role| serves.contains(role)) {
+                    continue;
+                }
+                failures.push(failure(
+                    ID,
+                    file,
+                    first + index,
+                    format!(
+                        "{} serves {} and sends {name} ({call}), which {} holds",
+                        declaration.named(),
+                        serves.join(", "),
+                        holders.join(", ")
+                    ),
+                    &format!(
+                        "name a role that holds it ({}) in `roles=`, or send it from a route \
+                         serving that role: the sidecar admits a command sent for a person only \
+                         by their write on a role holding it, and refuses it otherwise, naming \
+                         the role (contract v15)",
+                        holders.join(", ")
+                    ),
+                ));
+            }
+        }
     }
     failures
 }
