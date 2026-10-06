@@ -3,7 +3,8 @@
 //! else (spec/the-cli, requirement 14): a delegation's pair -- the client
 //! this computer registered as, an access token and a refresh token, and
 //! when each lapses (decisions/029) -- or, written by a CLI from before
-//! delegations, a terminal session, honoured until it lapses.
+//! delegations, a terminal session, which no deployment honours since
+//! contract v15 (W6.13), read only so it can be forgotten.
 //!
 //! It is called the sessions file and never the configuration, because
 //! `--config` would then mean two things in one tool. Not the system

@@ -121,7 +121,8 @@ check "$(holds "$(/tmp/u/meridian --version 2>&1)" "meridian 9.9.9")" "and it is
 mkdir -p /tmp/v && cp /usr/local/bin/meridian /tmp/v/meridian
 export XDG_CONFIG_HOME=/tmp/config
 mkdir -p /tmp/config/meridian/sessions
-# A session with a deployment nobody can reach: forgotten here, and said.
+# A terminal session an older CLI kept, which no deployment honours since
+# contract v15: forgotten here, and said, with nothing asked of the deployment.
 printf '{"address":"http://127.0.0.1:9","session":"not-a-real-one","subject":"local|ada","expires_at":"2026-09-26T12:00:00Z"}' \
     >/tmp/config/meridian/sessions/127.0.0.1_9.json
 # And a delegation's pair with another nobody can reach (decisions/029).
@@ -144,7 +145,7 @@ check "$(holds "$said" "The Claude app, like any app on Node, reads NODE_EXTRA_C
 said="$(/tmp/v/meridian uninstall </dev/null 2>&1)"
 status=$?
 check "$([ $status != 0 ] && [ -e /tmp/v/meridian ] && [ -e /tmp/config/meridian/sessions/127.0.0.1_9.json ] && echo 0 || echo 1)" "with nobody to ask and no --yes, nothing is removed"
-check "$(holds "$said" "http://127.0.0.1:9")" "and it listed the session it would end"
+check "$(holds "$said" "the session an older meridian kept for http://127.0.0.1:9, forgotten here")" "and it listed the older session it would forget"
 
 said="$(/tmp/v/meridian uninstall --yes 2>&1)"
 status=$?
@@ -152,7 +153,7 @@ check $status "uninstall --yes: $said"
 check "$([ ! -e /tmp/v/meridian ] && echo 0 || echo 1)" "the binary is gone"
 check "$([ ! -e /tmp/config/meridian ] && echo 0 || echo 1)" "and every session with it, and its directory"
 check "$(holds "$said" "remove the NODE_EXTRA_CA_CERTS line")" "the authority goes, with the command that stops naming it to apps"
-check "$(holds "$said" "lapses there within 30 minutes")" "an unreachable deployment's session is forgotten here, and said"
+check "$(holds "$said" "Forgotten the session an older meridian kept for http://127.0.0.1:9.")" "an older meridian's session is forgotten here, and said"
 check "$(holds "$said" "revoke this computer's delegation from Connected clients on http://127.0.0.1:8")" "an unreachable deployment's delegation is forgotten here, and how to revoke it said"
 
 echo

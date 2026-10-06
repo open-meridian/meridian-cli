@@ -17,7 +17,8 @@
 //! and `plugin list` in another never revoke the person's CLI.
 //!
 //! A file an older CLI wrote holds a terminal session, which is presented as
-//! it is until it lapses (requirement 22); then the person connects again.
+//! it is and never refreshed. No deployment honours one since contract v15
+//! retired them (W6.13), so it is refused, and the person connects again.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

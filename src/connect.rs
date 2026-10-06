@@ -503,31 +503,15 @@ pub async fn revoke(address: &str, client_id: &str, refresh_token: &str) -> Resu
     Ok(())
 }
 
-/// End a terminal session from before delegations, which a sessions file
-/// written by an older CLI holds (honoured by the deployment for one
-/// release).
-pub async fn end_terminal_session(address: &str, session: &str) -> Result<(), String> {
-    let answer = client()?
-        .post(format!("{address}/terminal/sign-out"))
-        .bearer_auth(session)
-        .send()
-        .await
-        .map_err(|failed| format!("could not reach {address}: {failed}"))?;
-    let status = answer.status();
-    let text = answer.text().await.unwrap_or_default();
-    match crate::release::version_refused(status, &text) {
-        Some(refused) => Err(format!("{address} refused: {refused}")),
-        None => Ok(()),
-    }
-}
-
 /// Whatever a sessions file holds, ended at the deployment: the delegation
-/// revoked, or an older terminal session ended.
+/// revoked. A terminal session an older CLI wrote is kept by no deployment
+/// since contract v15, which retired them (W6.13), so there is nothing there
+/// to end; forgetting it here is all signing out does.
 pub async fn sign_out(held: &crate::sessions::Held) -> Result<(), String> {
     if held.is_delegation() {
         revoke(&held.address, &held.client_id, &held.refresh_token).await
     } else {
-        end_terminal_session(&held.address, &held.session).await
+        Ok(())
     }
 }
 

@@ -1269,12 +1269,6 @@ async fn connect_command(arguments: &Arguments) -> i32 {
             }
         };
 
-    // A terminal session an older CLI left here is ended at the deployment,
-    // not left to lapse there on its own. A delegation it held was renewed
-    // by this consent, and its old tokens with it.
-    if let Some(earlier) = earlier.filter(|held| !held.is_delegation()) {
-        let _ = connect::end_terminal_session(&address, &earlier.session).await;
-    }
     let held = issued.held(&address, &client_id, credential::now_s());
     // Written under the lock, so a command refreshing at this moment reads
     // this pair after it rather than spending the one it replaces.
@@ -1353,15 +1347,16 @@ async fn sign_out_command(arguments: &Arguments) -> i32 {
         return 1;
     }
     match told {
+        Ok(()) if !held.is_delegation() => println!(
+            "Forgotten the session an older meridian kept for {}.",
+            held.address
+        ),
         Ok(()) => println!("Signed out of {}.", held.address),
         // Forgotten here either way. What cannot be reached cannot be told.
-        Err(refusal) if held.is_delegation() => println!(
+        Err(refusal) => println!(
             "Forgotten here, but {refusal}; revoke this computer's delegation from Connected \
              clients on the dashboard, or it lapses at {}.",
             held.expires_at
-        ),
-        Err(refusal) => println!(
-            "Forgotten here, but {refusal}; the session there lapses on its own within 30 minutes."
         ),
     }
     0
@@ -1439,7 +1434,7 @@ async fn uninstall_command(arguments: &Arguments) -> i32 {
             );
         } else {
             println!(
-                "  your session with {}, ended there and here",
+                "  the session an older meridian kept for {}, forgotten here",
                 session.address
             );
         }
@@ -1462,15 +1457,15 @@ async fn uninstall_command(arguments: &Arguments) -> i32 {
     }
     for session in &held {
         match connect::sign_out(session).await {
+            Ok(()) if !session.is_delegation() => println!(
+                "Forgotten the session an older meridian kept for {}.",
+                session.address
+            ),
             Ok(()) => println!("Signed out of {}.", session.address),
-            Err(refusal) if session.is_delegation() => println!(
+            Err(refusal) => println!(
                 "Forgotten here, but {refusal}; revoke this computer's delegation from Connected \
                  clients on {}, or it lapses at {}.",
                 session.address, session.expires_at
-            ),
-            Err(refusal) => println!(
-                "Forgotten here, but {refusal}; the session with {} lapses there within 30 minutes.",
-                session.address
             ),
         }
         let _ = sessions::forget(&within, &session.address);

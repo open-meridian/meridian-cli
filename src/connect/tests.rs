@@ -274,21 +274,14 @@ async fn signing_out_revokes_the_delegation_by_its_refresh_token() {
 }
 
 #[tokio::test]
-async fn signing_out_an_older_clis_session_presents_it_as_a_bearer() {
-    let (address, served) = deployment("204 No Content", "").await;
+async fn signing_out_an_older_clis_session_asks_nothing_of_the_deployment() {
+    // Nothing listens here: a request would fail as unreachable.
     let held = crate::sessions::Held {
-        address: address.clone(),
+        address: "http://127.0.0.1:1".into(),
         session: "s3cr3t".into(),
         ..Default::default()
     };
     sign_out(&held).await.unwrap();
-    let sent = served.await.unwrap();
-    assert!(sent.starts_with("POST /terminal/sign-out "), "{sent}");
-    assert!(
-        sent.to_ascii_lowercase()
-            .contains("authorization: bearer s3cr3t"),
-        "{sent}"
-    );
 }
 
 #[test]
