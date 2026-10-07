@@ -11,8 +11,8 @@ use tokio::time::Instant;
 use super::certificate_host;
 use super::watch::{Step, Watch};
 use super::{
-    chart_of, direction, image_in, installed, jobs, left_by_a_restart, leftovers, migration,
-    plugin_floors, pods, progress, reached_in, release_finding, restarted, restarts,
+    archive_in, chart_of, direction, image_in, installed, jobs, left_by_a_restart, leftovers,
+    migration, plugin_floors, pods, progress, reached_in, release_finding, restarted, restarts,
     running_images, skip_policy, target_image, to_relaunch, workloads, Asked, CertificateStep,
     Chart, Direction, Installed, JobState, Plan, Report, HELM_MINIMUM,
 };
@@ -260,8 +260,8 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         to.name, to.version, to.app_version
     )));
 
-    // The deployment's own values, of which only `image` and where it is
-    // reached are read; the rest of them, its enrolment code among them, is
+    // The deployment's own values, of which only `image`, where it is
+    // reached and where its archive is are read; the rest of them, its enrolment code among them, is
     // never kept or printed.
     let own_values = machine
         .run(
@@ -364,6 +364,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         to_image,
         certificate,
         https,
+        archive: archive_in(&own_values),
     }))
 }
 

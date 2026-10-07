@@ -21,7 +21,7 @@ use super::{Failure, Plugin, Rule, Source};
 /// The rules, in the order they are reported: what the project is, what it
 /// declares, its pages, its settings, how it reaches the deployment, and its
 /// tests. Running the tests is `TESTS_PASS`, which only `--run-tests` asks.
-pub const RULES: [Rule; 13] = [
+pub const RULES: [Rule; 14] = [
     Rule {
         id: "template-shape",
         holds: "the project keeps the template's shape",
@@ -72,6 +72,11 @@ pub const RULES: [Rule; 13] = [
         id: "settings-declared",
         holds: "settings are declared to the SDK, not read from the environment",
         check: settings_declared,
+    },
+    Rule {
+        id: "window-settings",
+        holds: "no setting of the plugin's own takes a declared kind's window setting's name",
+        check: window_settings,
     },
     Rule {
         id: "secrets-kept",
@@ -1745,6 +1750,101 @@ fn settings_declared(plugin: &Plugin) -> Vec<Failure> {
         }
     }
     failures
+}
+
+// ── window-settings (contract v16) ───────────────────────────────────────
+
+/// The names the SDK declares for each kind of raw record a plugin at the
+/// edge declares, `<kind>_window_days` and `<kind>_past_window`, are its own
+/// (the names' ruling of 2026-10-06, choice d): a setting of the plugin's
+/// taking one is refused by the SDK when its declaration is built and by the
+/// sidecar at registration. Said here first, with the line, before the
+/// plugin runs at all.
+fn window_settings(plugin: &Plugin) -> Vec<Failure> {
+    const ID: &str = "window-settings";
+    static KIND: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bRecordKind\s*\(").unwrap());
+    let constants = bound_strings(plugin);
+    let kinds: Vec<String> = python(plugin)
+        .flat_map(|source| {
+            let text = python_uncommented(&source.text);
+            KIND.find_iter(&text)
+                .filter_map(|call| {
+                    let arguments = enclosed(&text[call.end()..]);
+                    let named = keyword(arguments, "name").unwrap_or(first_argument(arguments));
+                    string_named(named, &constants)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    if kinds.is_empty() {
+        return Vec::new();
+    }
+    let mut failures = Vec::new();
+    for declaration in declarations(plugin)
+        .iter()
+        .filter(|declaration| declaration.kind == "setting")
+    {
+        let named = keyword(&declaration.arguments, "name")
+            .unwrap_or(first_argument(&declaration.arguments));
+        let Some(name) = string_named(named, &constants) else {
+            continue;
+        };
+        let Some(kind) = kinds.iter().find(|kind| {
+            name == format!("{kind}_window_days") || name == format!("{kind}_past_window")
+        }) else {
+            continue;
+        };
+        failures.push(failure(
+            ID,
+            &declaration.source.path,
+            declaration.line,
+            format!(
+                "the setting {name} takes the name of a window setting of the kind {kind}, \
+                 which the SDK declares"
+            ),
+            &format!(
+                "name it otherwise, or leave it out: the SDK declares `{kind}_window_days` and \
+                 `{kind}_past_window` for the kind {kind}, as for every edge plugin's kinds, \
+                 and refuses a plugin declaring either itself. Read the kind's window from \
+                 `plugin.settings()` as delivered"
+            ),
+        ));
+    }
+    failures
+}
+
+/// The strings bound to a name at the top of a module, `NAME = "value"`, in
+/// every Python file of the plugin.
+fn bound_strings(plugin: &Plugin) -> HashMap<String, String> {
+    static CONSTANT: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r#"(?m)^([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?::[^=\n]*)?=[ \t]*["']([^"'\\\n]+)["'][ \t]*$"#,
+        )
+        .unwrap()
+    });
+    python(plugin)
+        .flat_map(|source| {
+            CONSTANT
+                .captures_iter(&python_uncommented(&source.text))
+                .map(|bound| (bound[1].to_string(), bound[2].to_string()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The string an argument is, as written or through a bound name; None where
+/// the text cannot say.
+fn string_named(argument: &str, constants: &HashMap<String, String>) -> Option<String> {
+    let argument = argument.trim();
+    match argument.chars().next() {
+        Some(quote @ ('"' | '\'')) => {
+            let inner = argument.strip_prefix(quote)?.strip_suffix(quote)?;
+            (!inner.contains(['"', '\'', '{'])).then(|| inner.to_string())
+        }
+        _ => constants
+            .get(argument.rsplit('.').next().unwrap_or(argument))
+            .cloned(),
+    }
 }
 
 // ── secrets-kept ─────────────────────────────────────────────────────────

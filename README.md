@@ -162,6 +162,29 @@ install choice, made here or in a sandbox's own values, and never switched on
 from the dashboard. It is what `plugin dev` needs; a firm's own deployment
 never has it.
 
+### Where older records go
+
+A plugin at the edge -- a custodian's, a broker's -- keeps what its vendor sent
+it, and past the window its admin sets it moves the older records to an
+archive, keeps them, or deletes them. On a local or on-premises deployment the
+archive is a directory on the cluster's node: a NAS export or a second disk
+mounted there. Before installing, `up` asks for one, or none, the default:
+
+```
+meridian up --id DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0P --archive /mnt/nas/meridian-archive
+meridian up --id DEP-01M3GZ8K4Q7T2V9W6X5Y3R1N0P --no-archive
+```
+
+`--archive <path>` answers it, its absolute path on the node, and `--no-archive`
+declines it; given neither, `up` asks at a terminal and takes none where there
+is no terminal to ask at. The answer is the chart's `pluginArchive.path`,
+which allows no plugin an archive by itself: a deployment admin allows each
+plugin its part of it, with a bound or none, on the plugin's Manage page. With
+none, records past their window stay in each plugin's storage. In a cloud, the
+archive is a bucket, named as `pluginArchive` in a values file (`-f`), and
+nothing is asked. Said in two places -- a flag and a values file, say -- it is
+refused rather than one quietly dropped. `upgrade-deployment` keeps it.
+
 It drives your own `helm` and `kubectl` and prints the command it used, so
 you can see exactly what it did. It embeds no Helm library: the chart is what says what
 runs, and a second renderer is a second source of truth.
@@ -201,7 +224,9 @@ the variable to use — because a file that works is a file that gets committed.
 
 The field names are the wizard's own: what it asks for is read from the page it
 serves, so a typo is refused against the real form rather than posted as an
-empty answer.
+empty answer. One more is `up`'s own, and never posted to the wizard:
+`archive`, the archive's directory or `none`, answering the question above so a
+scripted install is never stopped by it.
 
 ## down
 
@@ -292,8 +317,12 @@ Piped or in CI, a line as each step starts and ends, and every 20 seconds one
 saying what it still waits for, so a log never looks stalled. `NO_COLOR` turns
 the colour off. The report at the end is the same either way.
 
-It never prints the deployment's values, which hold its enrolment code; the one
-thing it reads from them is `image`. The same steps from a firm's own pipeline
+It never prints the deployment's values, which hold its enrolment code; what it
+reads from them is `image`, where the deployment is reached, and where its
+archive is. Everything `up` was given, `--archive` among it, is the
+deployment's own values, which `--reset-then-reuse-values` applies again, so
+the archive is kept and the plan says so: `Its archive, /mnt/nas/meridian-archive
+on the cluster's node, is kept`. The same steps from a firm's own pipeline
 -- plain Helm, Flux or Argo CD -- are in the docs' *Upgrade a deployment*.
 
 ## connect and plugins
@@ -357,6 +386,13 @@ hold, and a route that changes something sending a command none of its roles
 holds, by meridian-schema's `roles.json`, naming the roles that do
 (`roles-declared`). A tool takes its route's roles unless it names its own. A
 plugin holding one role, or none, names none, and the rule holds.
+
+From contract v16 a plugin at the edge declares the kinds of raw record it
+keeps (`RecordKind`), and the SDK declares two settings for each,
+`<kind>_window_days` and `<kind>_past_window`, the same for every edge plugin.
+`plugin check` fails a setting of the plugin's own taking one of those names
+for a declared kind, at its line (`window-settings`), as the SDK refuses it
+when the declaration is built and the sidecar at registration.
 
 `launch` shows the roles the version asks for and runs it only once
 you approve them; `--yes` approves for a script that has already read them.
@@ -475,7 +511,7 @@ binary per target (macOS and Linux, each on x86_64 and arm64), each with its
 published from a push to `main`. `plugin new`'s template is vendored from
 meridian-python's `template/` at a pinned commit (`make vendor-template`;
 `check-vendored-template` fails when it drifts), so a release carries the SDK
-version the new plugin pins: 0.20.0 from 0.1.35.
+version the new plugin pins: 0.20.0 from 0.1.35, 0.21.0 from the next.
 
 ## Licence
 

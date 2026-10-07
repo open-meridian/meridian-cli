@@ -156,7 +156,7 @@ DASHBOARD = os.environ.get("MERIDIAN_HARNESS_DASHBOARD", "http://dashboard:8080"
 #[test]
 fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
     type Breaking = fn(&Scaffolded) -> (String, usize);
-    let breakages: [(&str, Breaking, &str); 16] = [
+    let breakages: [(&str, Breaking, &str); 17] = [
         (
             "template-shape",
             |p| {
@@ -168,10 +168,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.20.0", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.21.0", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.20.0",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.21.0",
         ),
         (
             "tool-meridian",
@@ -290,6 +290,19 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
             "BROKER_TOKEN is read from the environment",
         ),
         (
+            "window-settings",
+            |p| {
+                let line = p.add_after(
+                    &main_py(),
+                    "log = logging.getLogger",
+                    "KINDS = [meridian.RecordKind(\"activity\", \"Reported activity\", window_days=2555)]\nWINDOW = meridian.Setting(\"activity_window_days\", int)",
+                );
+                (main_py(), line + 1)
+            },
+            "the setting activity_window_days takes the name of a window setting of the kind \
+             activity, which the SDK declares",
+        ),
+        (
             "secrets-kept",
             |p| {
                 p.add_after(
@@ -373,7 +386,7 @@ fn a_plugin_breaking_every_rule_is_told_each_with_its_place_and_its_fix() {
     plugin.add_after(
         &main_py(),
         "log = logging.getLogger",
-        "import nats\nTOKEN = os.environ.get(\"BROKER_TOKEN\")\nSECRET = meridian.Setting(\"api_key\", str, secret=True)\nprint(settings.values[\"api_key\"])",
+        "import nats\nTOKEN = os.environ.get(\"BROKER_TOKEN\")\nSECRET = meridian.Setting(\"api_key\", str, secret=True)\nprint(settings.values[\"api_key\"])\nKIND = meridian.RecordKind(\"fills\", \"Fills\", window_days=30)\nPAST = meridian.Setting(\"fills_past_window\", str)",
     );
     plugin.replace(&page_py(), "    params=OpenStatement,\n", "");
 
@@ -763,6 +776,56 @@ fn a_route_kept_from_agents_says_why_and_a_verified_plugin_keeps_none() {
         found[1].contains("a verified plugin keeps nothing"),
         "{found:?}"
     );
+}
+
+// ── window-settings (contract v16) ───────────────────────────────────────
+
+#[test]
+fn a_kinds_window_setting_is_the_sdks_by_any_spelling_and_other_names_are_the_plugins() {
+    let plugin = Scaffolded::tested("window-settings");
+    let declaration = format!("src/{MODULE}/declaration.py");
+    plugin.write(
+        &declaration,
+        "import meridian\n\
+         from meridian.declaration import RecordKind, Storage\n\n\
+         ACTIVITY = \"activity\"\n\
+         PAST = \"responses_past_window\"\n\n\
+         STORAGE = Storage(kinds=[\n\
+         \x20   RecordKind(ACTIVITY, \"Reported activity\", window_days=2555),\n\
+         \x20   RecordKind(name=\"responses\", label=\"Raw responses\", window_days=30),\n\
+         ])\n\
+         SETTINGS = [\n\
+         \x20   meridian.Setting(\"plan_code_links\", str),\n\
+         \x20   meridian.Setting(\"orders_window_days\", int),\n\
+         \x20   meridian.Setting(name=PAST, kind=str),\n\
+         ]\n",
+    );
+    let report = plugin.check();
+    let found: Vec<(String, usize)> = report
+        .failures
+        .iter()
+        .map(|failure| (failure.found.clone(), failure.line))
+        .collect();
+    assert_eq!(
+        found,
+        vec![(
+            "the setting responses_past_window takes the name of a window setting of the kind \
+             responses, which the SDK declares"
+                .to_string(),
+            14
+        )],
+        "{}",
+        text(&report)
+    );
+    assert!(report.failures[0]
+        .instead
+        .contains("`responses_window_days` and `responses_past_window`"));
+
+    // No kind declared, no name is reserved: the SDK declares no window.
+    plugin.replace(&declaration, "STORAGE = Storage(kinds=[", "STORAGE = ([");
+    plugin.replace(&declaration, "RecordKind(ACTIVITY", "dict(ACTIVITY");
+    plugin.replace(&declaration, "RecordKind(name=", "dict(name=");
+    assert!(plugin.check().passed(), "{}", text(&plugin.check()));
 }
 
 // ── roles-declared (contract v15) ────────────────────────────────────────

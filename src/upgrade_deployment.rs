@@ -19,8 +19,9 @@
 //! happened on 2026-09-28, and nothing said so.
 //!
 //! It never prints the deployment's values: they hold its enrolment code.
-//! What is read from them is `image`, and where the deployment is reached:
-//! its Ingress's name and the Secret its certificate is in.
+//! What is read from them is `image`, where the deployment is reached (its
+//! Ingress's name and the Secret its certificate is in), and where its edge
+//! plugins' archive is (`pluginArchive`), which the upgrade keeps and says so.
 
 pub mod run;
 pub mod watch;
@@ -217,6 +218,19 @@ pub fn reached_in(values: &str) -> Option<Reached> {
         host,
         secret: scalar(&ingress["tls"]["secretName"]),
     })
+}
+
+/// Where a values document puts edge plugins' archive (the chart's
+/// `pluginArchive`, contract v16): a directory on the node, a claim, or a
+/// bucket. Nothing else is read out of the deployment's own values.
+pub fn archive_in(values: &str) -> Option<String> {
+    let values: serde_json::Value = serde_yaml::from_str(&document(values)).unwrap_or_default();
+    let archive = &values["pluginArchive"];
+    let held = |key: &str| scalar(&archive[key]).filter(|held| !held.is_empty());
+    held("path")
+        .map(|path| format!("{path} on the cluster's node"))
+        .or_else(|| held("existingClaim").map(|claim| format!("the claim {claim}")))
+        .or_else(|| held("bucket"))
 }
 
 /// The name whose certificate this upgrade looks after: with `--https`, the
@@ -710,6 +724,9 @@ pub struct Plan {
     pub certificate: Option<CertificateStep>,
     /// `--https`: the local name moved to HTTPS by the upgrade's values.
     pub https: Option<String>,
+    /// Where the deployment's own values put edge plugins' archive, which
+    /// the upgrade keeps as they keep everything else.
+    pub archive: Option<String>,
 }
 
 /// The same command, as somebody would type it.
@@ -794,6 +811,13 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
         certificate.push_str(&format!(
             "\x20 Its address becomes https://{host}. People and clients signed in at \
              http://{host} sign in again there.\n"
+        ));
+    }
+    if let Some(archive) = &plan.archive {
+        // Kept by --reset-then-reuse-values, as every value the deployment
+        // was given is: said, so nobody has to take that on trust.
+        certificate.push_str(&format!(
+            "\x20 Its archive, {archive}, is kept: the deployment's own values carry it.\n"
         ));
     }
     if !certificate.is_empty() {

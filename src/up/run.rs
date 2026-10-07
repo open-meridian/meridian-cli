@@ -111,16 +111,34 @@ pub async fn up(
 ) -> Result<(), String> {
     // Read before anything is installed: a file with a password in it should
     // be refused on the person's own machine, not after a release exists.
-    let params = match params {
+    let mut params = match params {
         Some(path) => Some(read_params(path)?),
         None => None,
     };
+
+    // Where edge plugins' older records go: said once, by a flag, the params
+    // file or a values file, or asked here (W7.1). `archive` is `up`'s own
+    // answer, not the wizard's, so the wizard is never posted it.
+    let in_params = params.as_mut().and_then(|params| params.remove("archive"));
+    let in_values = install.values.iter().find(|file| {
+        std::fs::read_to_string(file).is_ok_and(|values| super::names_an_archive(&values))
+    });
+    let archive = match super::archive_settled(
+        install.archive.clone(),
+        in_params.as_deref(),
+        in_values.map(String::as_str),
+    )? {
+        Some(said) => said,
+        None => asked_for_archive(),
+    };
+    println!("{}", archive_said(&archive));
 
     // Through the cluster's ingress controller where it has one, as a name
     // under `.localhost`, so the deployment keeps an address after this
     // command ends and plugin pages have names to sit below. A port-forward
     // where it has none, as before.
     let mut install = install.clone();
+    install.archive = Some(archive);
     if let Some(host) = ingress_host {
         let listed = kubectl(
             &install,
@@ -211,6 +229,41 @@ pub async fn up(
         println!("{}", trusted_by(&ready.dir));
     }
     outcome
+}
+
+/// The question, at a terminal; none where there is no terminal to ask at.
+fn asked_for_archive() -> super::Archive {
+    use std::io::{BufRead as _, IsTerminal as _, Write as _};
+    if !std::io::stdin().is_terminal() {
+        return super::Archive::None;
+    }
+    println!("{}", super::ARCHIVE_QUESTION);
+    loop {
+        print!("Archive directory (Enter for none): ");
+        let _ = std::io::stdout().flush();
+        let mut answer = String::new();
+        match std::io::stdin().lock().read_line(&mut answer) {
+            Ok(0) | Err(_) => return super::Archive::None,
+            Ok(_) => match super::archive_answer(&answer) {
+                Ok(archive) => return archive,
+                Err(refusal) => println!("{refusal}."),
+            },
+        }
+    }
+}
+
+/// What was settled about the archive, in a line.
+pub fn archive_said(archive: &super::Archive) -> String {
+    match archive {
+        super::Archive::None => "No archive: records past their window stay in each plugin's \
+            storage. `meridian up --archive <path>` names one."
+            .into(),
+        super::Archive::At(path) => format!(
+            "Archive at {path} on the cluster's node. A deployment admin allows each plugin \
+             its part of it, on the plugin's Manage page."
+        ),
+        super::Archive::InValues(file) => format!("The archive is as {file} names it."),
+    }
 }
 
 /// Where the root is, and who reads it how: a browser from the system's

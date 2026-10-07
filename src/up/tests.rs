@@ -16,6 +16,7 @@ fn install() -> Install {
         development: false,
         tls_secret: None,
         plain_http: false,
+        archive: None,
     }
 }
 
@@ -377,4 +378,105 @@ fn an_id_is_the_platforms_shape_or_nothing_is_installed() {
     ] {
         assert!(check_id(wrong).is_err(), "{wrong}");
     }
+}
+
+// ── The archive (contract v16; W7.1) ─────────────────────────────────────────
+
+#[test]
+fn an_archive_is_the_charts_plugin_archive_path_and_none_writes_nothing() {
+    for none in [None, Some(Archive::None)] {
+        let declined = Install {
+            archive: none,
+            ..install()
+        };
+        assert!(!values_document(&declined).contains("pluginArchive"));
+    }
+    let named = Install {
+        archive: Some(Archive::At("/mnt/nas/meridian-archive".into())),
+        ..install()
+    };
+    assert!(
+        values_document(&named).contains("pluginArchive:\n  path: \"/mnt/nas/meridian-archive\"\n")
+    );
+    // A values file's archive is the file's: nothing written over it.
+    let in_values = Install {
+        archive: Some(Archive::InValues("cloud.yaml".into())),
+        ..install()
+    };
+    assert!(!values_document(&in_values).contains("pluginArchive"));
+}
+
+#[test]
+fn the_flags_name_an_archive_or_decline_one_and_never_both() {
+    assert_eq!(archive_from_flags(None, false), Ok(None));
+    assert_eq!(archive_from_flags(None, true), Ok(Some(Archive::None)));
+    assert_eq!(
+        archive_from_flags(Some("/mnt/nas/archive"), false),
+        Ok(Some(Archive::At("/mnt/nas/archive".into())))
+    );
+    let both = archive_from_flags(Some("/mnt/nas/archive"), true).unwrap_err();
+    assert!(both.contains("say one"), "{both}");
+    for wrong in ["archive", "./archive", "/", "/mnt/../etc", "~/archive"] {
+        let refused = archive_from_flags(Some(wrong), false).unwrap_err();
+        assert!(refused.contains("absolute path"), "{wrong}: {refused}");
+    }
+}
+
+#[test]
+fn the_archive_is_said_in_one_place_or_asked() {
+    // Nothing said: `up` asks.
+    assert_eq!(archive_settled(None, None, None), Ok(None));
+    // The params file answers as a person would at the question.
+    assert_eq!(
+        archive_settled(None, Some("/srv/archive"), None),
+        Ok(Some(Archive::At("/srv/archive".into())))
+    );
+    for none in ["", "none", "false"] {
+        assert_eq!(
+            archive_settled(None, Some(none), None),
+            Ok(Some(Archive::None))
+        );
+    }
+    assert!(archive_settled(None, Some("archive"), None).is_err());
+    // A values file naming one, as a cloud's bucket is: not asked.
+    assert_eq!(
+        archive_settled(None, None, Some("cloud.yaml")),
+        Ok(Some(Archive::InValues("cloud.yaml".into())))
+    );
+    // Two places: refused, naming both, so neither is quietly dropped.
+    let twice = archive_settled(Some(Archive::None), Some("/srv/archive"), None).unwrap_err();
+    assert!(
+        twice.contains("the command line") && twice.contains("params file"),
+        "{twice}"
+    );
+    let twice = archive_settled(None, Some("none"), Some("cloud.yaml")).unwrap_err();
+    assert!(twice.contains("cloud.yaml"), "{twice}");
+}
+
+#[test]
+fn a_values_file_names_an_archive_by_a_path_a_claim_or_a_bucket() {
+    assert!(!names_an_archive("image:\n  tag: x\n"));
+    assert!(!names_an_archive(
+        "pluginArchive:\n  path: \"\"\n  size: 1Ti\n"
+    ));
+    assert!(names_an_archive("pluginArchive:\n  path: /mnt/nas\n"));
+    assert!(names_an_archive("pluginArchive:\n  existingClaim: nas\n"));
+    assert!(names_an_archive(
+        "pluginArchive:\n  bucket: s3://firm-archive\n  serviceAccount: archive\n"
+    ));
+    assert!(!names_an_archive("not: [yaml"));
+}
+
+#[test]
+fn a_params_files_archive_is_ups_own_answer_and_no_field_of_the_wizards() {
+    let params = params_from("db_host: postgres\narchive: /srv/archive\n").unwrap();
+    assert_eq!(
+        params.get("archive").map(String::as_str),
+        Some("/srv/archive")
+    );
+    // run::up takes it out before the wizard's fields are matched, or the
+    // wizard would refuse a field it does not ask for.
+    let (fields, credentials) = asked_for(PAGE);
+    let refused = answers(&params, &fields, &credentials, &|_| None).unwrap_err();
+    assert!(refused.iter().any(|said| said.contains("`archive`")));
 }

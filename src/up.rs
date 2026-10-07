@@ -48,6 +48,114 @@ pub struct Install {
     /// Plain HTTP on the Ingress, with no certificate: for the cluster tests,
     /// and nothing else (the chart's `ingress.plainHttp`, ruling 3).
     pub plain_http: bool,
+    /// Where edge plugins' older records go. None until it is said: by a
+    /// flag, the params file, a values file, or the answer to `up`'s
+    /// question.
+    pub archive: Option<Archive>,
+}
+
+/// Where an edge plugin's records past their window go (contract v16; W7.1):
+/// an archive on a local or on-premises deployment, or none. It is the
+/// chart's `pluginArchive`, which allows no plugin an archive by itself: a
+/// deployment admin allows each, on its Manage page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Archive {
+    /// None, the default: records past their window stay in the plugin's
+    /// storage.
+    None,
+    /// A directory on the cluster's node -- a NAS export or a second disk
+    /// mounted there -- as its absolute path: `pluginArchive.path`.
+    At(String),
+    /// Named by a values file (`-f`), as a bucket in a cloud is: the file's,
+    /// and nothing this command writes.
+    InValues(String),
+}
+
+/// What `up` asks when nothing has said where the archive is.
+pub const ARCHIVE_QUESTION: &str = "Where do edge plugins' older records go? Past the window \
+    a plugin's admin sets, a plugin moves them to an archive, if a deployment admin allows it \
+    one. Name a directory on the cluster's node for the archive -- a NAS export or a second \
+    disk mounted there -- or press Enter for none, and records past their window stay in \
+    each plugin's storage.";
+
+/// The flags' answer: `--archive <path>`, `--no-archive`, or neither (None).
+pub fn archive_from_flags(path: Option<&str>, declined: bool) -> Result<Option<Archive>, String> {
+    match (path, declined) {
+        (Some(_), true) => Err("--archive names an archive and --no-archive declines one: \
+                                say one"
+            .into()),
+        (Some(path), false) => archive_path(path).map(|path| Some(Archive::At(path))),
+        (None, true) => Ok(Some(Archive::None)),
+        (None, false) => Ok(None),
+    }
+}
+
+/// The archive, from whichever one place said it: the flags, the params
+/// file's `archive`, or a values file naming `pluginArchive`. None when
+/// nothing did, and `up` asks. Two places saying it is refused, so neither
+/// is quietly dropped.
+pub fn archive_settled(
+    flags: Option<Archive>,
+    in_params: Option<&str>,
+    in_values: Option<&str>,
+) -> Result<Option<Archive>, String> {
+    let said: Vec<&str> = [
+        flags.is_some().then_some("the command line"),
+        in_params.is_some().then_some("the params file's `archive`"),
+        in_values,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if let [first, second, ..] = said.as_slice() {
+        return Err(format!(
+            "{first} and {second} both say where the archive is: say it in one place"
+        ));
+    }
+    if flags.is_some() {
+        return Ok(flags);
+    }
+    if let Some(answer) = in_params {
+        return archive_answer(answer).map(Some);
+    }
+    Ok(in_values.map(|file| Archive::InValues(file.to_string())))
+}
+
+/// An answer to the question, or a params file's `archive`: a directory's
+/// absolute path, or nothing (`none`, or empty) for none.
+pub fn archive_answer(answer: &str) -> Result<Archive, String> {
+    match answer.trim() {
+        "" | "none" | "false" => Ok(Archive::None),
+        path => archive_path(path).map(Archive::At),
+    }
+}
+
+/// A directory on the node, by its absolute path, as the chart's volume
+/// takes it.
+fn archive_path(path: &str) -> Result<String, String> {
+    let path = path.trim();
+    let directory = path.starts_with('/')
+        && !path.trim_end_matches('/').is_empty()
+        && !path.chars().any(char::is_control)
+        && !path.split('/').any(|part| part == "..");
+    match directory {
+        true => Ok(path.to_string()),
+        false => Err(format!(
+            "`{path}` is not a directory on the cluster's node: an archive is named by its \
+             absolute path there, as /mnt/nas/meridian-archive"
+        )),
+    }
+}
+
+/// Whether a values document names the deployment's archive itself: a
+/// path, a claim already made, or a bucket in a cloud.
+pub fn names_an_archive(values: &str) -> bool {
+    let values: serde_json::Value = serde_yaml::from_str(values).unwrap_or_default();
+    ["path", "existingClaim", "bucket"].iter().any(|key| {
+        values["pluginArchive"][key]
+            .as_str()
+            .is_some_and(|held| !held.is_empty())
+    })
 }
 
 /// How the deployment is reached through the cluster's ingress controller.
@@ -163,6 +271,10 @@ pub fn values_document(install: &Install) -> String {
             out.push_str("  tls:\n");
             out.push_str(&format!("    secretName: {}\n", quoted(secret)));
         }
+    }
+    if let Some(Archive::At(path)) = &install.archive {
+        out.push_str("pluginArchive:\n");
+        out.push_str(&format!("  path: {}\n", quoted(path)));
     }
     if let Some(image) = &install.image {
         let (repository, tag) = image.rsplit_once(':').unwrap_or((image.as_str(), "latest"));

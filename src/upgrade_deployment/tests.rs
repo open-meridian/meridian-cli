@@ -624,6 +624,71 @@ async fn a_tag_the_deployment_pins_is_kept_and_said_before_anything_is_applied()
     assert!(!said.contains("ENROL-DO-NOT-PRINT"));
 }
 
+#[tokio::test]
+async fn the_archive_the_deployment_was_given_is_kept_and_said_and_never_set_again() {
+    // `meridian up --archive /mnt/nas/meridian-archive` wrote pluginArchive.path
+    // into the release's own values; --reset-then-reuse-values reapplies them
+    // over the new chart's defaults, so the upgrade sets nothing of its own.
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .instead(
+            OWN_VALUES,
+            Ok(
+                &json!({ "deployment": { "enrolmentCode": "ENROL-DO-NOT-PRINT" },
+                        "pluginArchive": { "path": "/mnt/nas/meridian-archive" } })
+                .to_string(),
+            ),
+        )
+        .json(WORKLOADS, items(vec![]));
+    let plan = planned(&stand).await;
+    assert_eq!(
+        plan.archive.as_deref(),
+        Some("/mnt/nas/meridian-archive on the cluster's node")
+    );
+    let text = plan_text(&asked(), &plan);
+    assert!(
+        text.contains(
+            "Its archive, /mnt/nas/meridian-archive on the cluster's node, is kept: the \
+             deployment's own values carry it."
+        ),
+        "{text}"
+    );
+    let arguments = helm_arguments(&asked(), &plan);
+    assert!(arguments.contains(&"--reset-then-reuse-values".to_string()));
+    assert!(
+        !arguments.iter().any(|each| each.contains("pluginArchive")),
+        "{arguments:?}"
+    );
+    assert!(!text.contains("ENROL-DO-NOT-PRINT"), "{text}");
+
+    // None given, none said.
+    let plan = planned(
+        &healthy()
+            .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+            .json(WORKLOADS, items(vec![])),
+    )
+    .await;
+    assert_eq!(plan.archive, None);
+    assert!(!plan_text(&asked(), &plan).contains("archive"));
+}
+
+#[test]
+fn an_archive_is_a_path_a_claim_or_a_bucket_and_an_empty_one_is_none() {
+    assert_eq!(archive_in("{}"), None);
+    assert_eq!(
+        archive_in(r#"{"pluginArchive": {"path": "", "size": "100Gi"}}"#),
+        None
+    );
+    assert_eq!(
+        archive_in(r#"{"pluginArchive": {"existingClaim": "nas"}}"#).as_deref(),
+        Some("the claim nas")
+    );
+    assert_eq!(
+        archive_in(r#"{"pluginArchive": {"bucket": "s3://firm-archive"}}"#).as_deref(),
+        Some("s3://firm-archive")
+    );
+}
+
 // ── Applying and waiting ─────────────────────────────────────────────────
 
 fn pace() -> Pace {

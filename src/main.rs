@@ -84,9 +84,17 @@ up:
                             MERIDIAN_ENROLMENT_CODE, which no shell writes down
   -p, --params <file>       answer the wizard from a file instead of a browser.
                             It holds the wizard's own answers and no credential:
-                            each of those comes from MERIDIAN_<FIELD>
+                            each of those comes from MERIDIAN_<FIELD>; and
+                            `archive`, up's own question (below)
       --first-run-code <c>  the claim code --params redeems (or MERIDIAN_FIRST_RUN_CODE)
   -f, --values <file>       Helm-style chart values, passed straight through
+      --archive <path>      where edge plugins' older records go: a directory on the
+                            cluster's node, a NAS export or a second disk mounted
+                            there. A deployment admin allows each plugin its part
+      --no-archive          none: records past their window stay in each plugin's
+                            storage. Given neither, up asks at a terminal, and
+                            takes none where there is no terminal. In a cloud, name
+                            the bucket as pluginArchive in a values file (-f)
       --host <name>         the name it is reached by through the cluster's ingress
                             controller (default: meridian.localhost, which every
                             browser sends to this machine). Any other name is
@@ -203,7 +211,7 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 22] = [
+const TAKES_A_VALUE: [&str; 23] = [
     "--into",
     "--since",
     "--print",
@@ -226,12 +234,13 @@ const TAKES_A_VALUE: [&str; 22] = [
     "--params",
     "--first-run-code",
     "--port",
+    "--archive",
 ];
 
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 15] = [
+const SWITCHES: [&str; 16] = [
     "--no-doctor",
     "--force",
     "--run-tests",
@@ -242,6 +251,7 @@ const SWITCHES: [&str; 15] = [
     "--no-ingress",
     "--development",
     "--plain-http",
+    "--no-archive",
     "--https",
     "--yes",
     "-h",
@@ -1646,6 +1656,16 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
         eprintln!("meridian up: {refusal}. Nothing was installed.");
         return 2;
     }
+    let archive = match up::archive_from_flags(
+        arguments.value("--archive", "--archive"),
+        arguments.set("--no-archive"),
+    ) {
+        Ok(archive) => archive,
+        Err(refusal) => {
+            eprintln!("meridian up: {refusal}. Nothing was installed.");
+            return 2;
+        }
+    };
 
     // Run by `up` rather than asked for, because a check nobody runs is a
     // check that does not exist (spec/the-cli, ruling 3).
@@ -1698,6 +1718,7 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
         development: arguments.set("--development"),
         tls_secret: None,
         plain_http: arguments.set("--plain-http"),
+        archive,
     };
     let ingress_host = match arguments.set("--no-ingress") {
         true => None,
