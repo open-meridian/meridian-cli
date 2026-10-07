@@ -19,7 +19,7 @@ import signal
 
 import meridian
 
-from .page import TITLE, pages
+from .page import REACHES, TITLE, pages, reports
 
 log = logging.getLogger("reference_plugin")
 
@@ -50,6 +50,12 @@ async def run() -> None:
             ", ".join(plugin.grants.publish) or "nothing",
             ", ".join(plugin.grants.subscribe) or "nothing",
         )
+        # The external accounts its connection reaches, which an admin of
+        # the plugin then links on Setup: what it records is for those. Only
+        # where its roles let it; a plugin holding none reaches nothing.
+        if reports(plugin):
+            await plugin.report_external_accounts(accounts=REACHES)
+            log.info("reported %d external account(s) to link", len(REACHES))
         served = pages.serve(plugin, port)
         log.info("serving its pages on 127.0.0.1:%d", port)
         await plugin.report(healthy=True, detail="started")

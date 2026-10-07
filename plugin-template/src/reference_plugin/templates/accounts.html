@@ -1,12 +1,14 @@
 {% extends "meridian/base.html" %}
 {% block head_actions %}
-{# Only a session opened by Open writes; framed, the dashboard draws the button. #}
-{% if level == "write" %}
-<form class="inline" method="post" action="/statement">{{ csrf_input }}<button class="primary" data-om-action="open-statement">Open an empty statement for me</button></form>
+{# Only a session opened by Open writes, and only for a linked external
+   account; framed, the dashboard draws the button. #}
+{% if level == "write" and linked %}
+<form class="inline" method="post" action="/statement">{{ csrf_input }}<button class="primary" data-om-action="open-statement">Open a statement</button></form>
 {% endif %}
 {% endblock %}
 {% block content %}
-<p class="muted">Signed in as <strong>{{ caller.display_name }}</strong>.</p>
+<p class="muted">Signed in as <strong>{{ caller.display_name }}</strong>.
+{%- if level == "write" and linked %} A statement opened here is for <code>{{ linked.external_account_id }}</code>, linked to {{ linked.account_name or linked.account_id }}.{% endif %}</p>
 {% if notice %}
 <div class="notice {{ tone }}" role="status">{{ notice }}</div>
 {% endif %}

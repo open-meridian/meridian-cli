@@ -4,16 +4,60 @@
 {% endblock %}
 {% block content %}
 <p class="muted">Signed in as <strong>{{ caller.display_name }}</strong>, to manage this plugin: its setup, and no account's data.</p>
+{% if notice %}
+<div class="notice {{ tone }}" role="status">{{ notice }}</div>
+{% endif %}
 <section class="panel">
   <div class="panel-body">
     <h2>What this plugin is</h2>
-    <p class="muted">As the deployment launched it. What it may do comes from its roles, never from its code.</p>
+    <p class="muted">As launched: what it may do comes from its roles, never its code.</p>
     <dl>
       <dt>Instance</dt><dd><code>{{ instance }}</code></dd>
       <dt>Roles</dt><dd>{{ roles | join(", ") or "none" }}</dd>
-      <dt>May publish</dt><dd>{{ publish | join(", ") or "nothing" }}</dd>
-      <dt>May subscribe</dt><dd>{{ subscribe | join(", ") or "nothing" }}</dd>
     </dl>
+    {# Folded, because a plugin's grants are many topics: one screen still. #}
+    <details>
+      <summary>May publish {{ publish | length }} and subscribe to {{ subscribe | length }} topics</summary>
+      <p class="muted">Publish: {{ publish | join(", ") or "nothing" }}. Subscribe: {{ subscribe | join(", ") or "nothing" }}.</p>
+    </details>
   </div>
+</section>
+<section class="panel">
+  <div class="panel-body">
+    <h2>External accounts</h2>
+    {% if not reports %}
+    <p class="muted">This plugin holds no role that reports external accounts, so it has none to link,
+      and nothing it records is taken. Declare <code>custody</code> under <code>[tool.meridian]</code>
+      in <code>pyproject.toml</code> for a plugin that reads a custodian.</p>
+  </div>
+    {% else %}
+    <p class="muted">What it records for an account its connection reaches is taken once that is linked.</p>
+  </div>
+  {# The kit's account map: one row per external account, its link, and a
+     chooser of the deployment's accounts; each action a plain form to /link.
+     Where the kit is not served, the table inside is the page. #}
+  <om-account-map action="/link" token-name="csrf" token="{{ csrf_token }}" no-new-account page-size="auto"
+                  empty="This plugin reaches no external account yet.">
+    <script type="application/json">{{ account_map | tojson }}</script>
+    <table>
+      <thead><tr><th>External account</th><th>Linked to</th><th>Link to</th></tr></thead>
+      <tbody>
+      {% for row in linking %}
+        <tr>
+          <td><code>{{ row.external }}</code> {{ row.name }}</td>
+          <td>{{ row.linked or "not linked" }}</td>
+          <td><form class="inline" method="post" action="/link">{{ csrf_input }}
+            <input type="hidden" name="external_account_id" value="{{ row.external }}">
+            <select name="account_id" aria-label="Link {{ row.external }} to">
+              {% for account in accounts %}<option value="{{ account.id }}">{{ account.name }}</option>{% endfor %}
+            </select>
+            <button{% if not accounts %} disabled{% endif %}>Link</button></form></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </om-account-map>
+  {% if not accounts %}<div class="panel-body"><p class="muted">The deployment has no account to link to yet: an admin adds one in Settings.</p></div>{% endif %}
+  {% endif %}
 </section>
 {% endblock %}

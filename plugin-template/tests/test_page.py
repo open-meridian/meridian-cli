@@ -17,7 +17,7 @@ import asyncio
 import threading
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from typing import Any, cast
 
@@ -37,32 +37,72 @@ class _Named:
         return name
 
 
+#: The external account the plugin reaches, linked to ACC-2, which Ada writes.
+LINKED = meridian.LinkedExternalAccount("reference-1", "ACC-2", "Ada's brokerage")
+
+
 class Sidecar(Operations):
-    """The SDK's operations, answered here rather than by a sidecar, and who
-    the plugin was launched as."""
+    """The SDK's operations, answered here rather than by a sidecar, who the
+    plugin was launched as, and its account scope with its links."""
 
     identity = meridian.Identity("reference-1", roles=("custody",))
-    grants = meridian.Grants(publish=("platform.street.command.record-holdings-statement",))
+    grants = meridian.Grants(
+        publish=(
+            "platform.street.command.record-holdings-statement",
+            "platform.custody.*.event.external-accounts",
+            "platform.config.command.link-external-account",
+        )
+    )
 
-    def __init__(self, refuse: Exception | None = None) -> None:
+    def __init__(
+        self,
+        refuse: Exception | None = None,
+        links: tuple[meridian.LinkedExternalAccount, ...] = (LINKED,),
+        grants: meridian.Grants | None = None,
+    ) -> None:
         self.sent: list[tuple[str, Any]] = []
         self._refuse = refuse
+        self.links = links
+        if grants is not None:
+            self.grants = grants
 
     def _operations(self) -> Any:
         return _Named()
 
+    async def account_scope(self) -> AsyncIterator[meridian.AccountScope]:
+        yield meridian.AccountScope(
+            read=frozenset(link.account_id for link in self.links),
+            write=frozenset(link.account_id for link in self.links),
+            links=self.links,
+        )
+
     async def _operate(self, method: Any, params: Any) -> Any:
+        if method == "ReadAccountsForLinking":
+            return ops.ReadAccountsForLinkingResult(
+                accounts=[ops.AccountRecord(account_id="ACC-2", name="Ada's brokerage")]
+            )
         if self._refuse is not None:
             raise self._refuse
         self.sent.append((cast(str, method), params))
         if method == "RecordHoldingsStatement":
             return ops.RecordHoldingsStatementResult(statement_id=f"STMT-{len(self.sent)}")
+        if method == "LinkExternalAccount":
+            self.links = (
+                meridian.LinkedExternalAccount(
+                    params.external_account_id, params.account_id, "Ada's brokerage"
+                ),
+            )
+            return ops.LinkExternalAccountResult(account_id=params.account_id)
         raise AssertionError(f"the page sent {method}, which no test here expects")
 
 
 def client(sidecar: Sidecar | None = None) -> PageClient:
     """Ada, who may read ACC-1 and ACC-2 and write ACC-2 through the plugin."""
     return PageClient(pages, sidecar or Sidecar(), read={"ACC-1", "ACC-2"}, write={"ACC-2"})
+
+
+def statement_form(page: str) -> bool:
+    return 'action="/statement"' in page
 
 
 def test_each_page_is_served_at_its_levels_and_refused_at_the_others() -> None:
@@ -80,6 +120,8 @@ def test_each_page_is_served_at_its_levels_and_refused_at_the_others() -> None:
 def test_manage_shows_the_plugins_setup_and_no_accounts_data() -> None:
     page = client().get("/setup", "admin").text
     assert "Ada Park" in page and "<code>reference-1</code>" in page and "custody" in page
+    # The external account it reaches, and what it is linked to, by name.
+    assert "Reference account" in page and "<td>Ada&#39;s brokerage</td>" in page
     # What the plugin holds for an account -- here, the statement it opened
     # for one -- is never on a page at admin. An account's identity may be: a
     # Manage page may list accounts by name, to link to.
@@ -107,6 +149,8 @@ def test_opening_a_statement_is_sent_for_the_person_asking() -> None:
     assert "Opened statement STMT-1 for you." in page
     [(operation, params)] = sidecar.sent
     assert operation == "RecordHoldingsStatement"
+    # For the external account the plugin linked, which names the account.
+    assert params.external_account_id == "reference-1"
     # Sent for Ada, so the sidecar decides whether she may write through the plugin.
     assert sidecar_pb2.CallerClaims.FromString(params.acting_for.claims).subject == "local|ada"
 
@@ -124,6 +168,59 @@ def test_an_agent_opens_a_statement_through_its_tool() -> None:
     # An argument the record does not take is refused by name; nothing sent.
     refused = client(Sidecar()).call_tool("open_statement", {"account": "ACC-9"})
     assert refused.outcome == "refused" and refused.paths == ["account"]
+
+
+def test_with_nothing_linked_the_page_says_to_link_one_first() -> None:
+    # The sidecar refuses a statement naming no linked external account, so
+    # the page offers none and says where an account is linked.
+    unlinked = Sidecar(links=())
+    page = client(unlinked).get("/", "write").text
+    assert not statement_form(page)
+    assert '<div class="notice warn" role="status">Link an account first' in page
+    assert "Setup page, under Manage" in page
+    # Asked anyway, by a browser or an agent, nothing is sent.
+    assert "Link an account first" in client(unlinked).post("/statement", "write").text
+    refused = client(unlinked).call_tool("open_statement")
+    assert refused.outcome == "refused"
+    assert unlinked.sent == []
+
+
+def test_an_admin_links_the_external_account_on_setup() -> None:
+    sidecar = Sidecar(links=())
+    setup = client(sidecar).get("/setup", "admin").text
+    assert "not linked" in setup and 'action="/link"' in setup
+    assert '<option value="ACC-2">Ada&#39;s brokerage</option>' in setup
+
+    page = (
+        client(sidecar)
+        .post("/link", "admin", {"external_account_id": "reference-1", "account_id": "ACC-2"})
+        .text
+    )
+
+    assert "Linked reference-1." in page
+    [(operation, params)] = sidecar.sent
+    assert (operation, params.external_account_id, params.account_id) == (
+        "LinkExternalAccount",
+        "reference-1",
+        "ACC-2",
+    )
+    # Sent for the admin viewing Setup, whom the sidecar admits only by Manage.
+    assert sidecar_pb2.CallerClaims.FromString(params.acting_for.claims).subject == "local|ada"
+    # And then a statement is offered under Open, for that external account.
+    assert statement_form(client(sidecar).get("/", "write").text)
+    assert (
+        client(sidecar)
+        .post("/link", "write", {"external_account_id": "reference-1", "account_id": "ACC-2"})
+        .status
+        == 403
+    )
+
+
+def test_a_plugin_holding_no_role_that_reports_has_nothing_to_link() -> None:
+    bare = Sidecar(links=(), grants=meridian.Grants())
+    setup = client(bare).get("/setup", "admin").text
+    assert "holds no role that reports external accounts" in setup
+    assert 'action="/link"' not in setup
 
 
 def test_only_a_session_opened_by_open_may_write() -> None:

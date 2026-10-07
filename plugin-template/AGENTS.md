@@ -30,6 +30,20 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   `PageClient.assert_no_account_data`, given that data, holds it to that in
   the tests. An account's identity (its name, custodian, type, owner, note)
   is not its data: a Manage page may list every account as a link target.
+- **Link, then record.** What a plugin records for an account it names by
+  the external account its connection reaches, and the sidecar takes it only
+  once that external account is linked to one of the deployment's accounts
+  (from contract v7; a statement naming none is refused). So the plugin
+  reports what it reaches (`plugin.report_external_accounts`, at start and
+  when that changes), an admin of the plugin links each on its own Manage
+  page (`plugin.link_external_account(..., acting_for=request.caller.header)`,
+  the accounts offered from `plugin.read_accounts_for_linking`), and which are
+  linked is the plugin's account scope (`plugin.account_scope()`, its
+  `links`), read rather than kept. The template does exactly this: Setup
+  links `reference-1`, and the Accounts page opens a statement for a linked
+  external account, or, with none linked, says "Link an account first" and
+  where. Reporting needs a role that may (`custody`); a plugin holding none
+  has nothing to link, and Setup says so.
 - **On a plugin holding several roles, name the roles each declaration
   serves.** A person's level is granted per role of a plugin: write on its
   `operations` and read on its `custody`, say. A plugin whose

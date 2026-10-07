@@ -332,7 +332,9 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
             |p| {
                 p.replace(&page_py(), "    params=OpenStatement,\n", "");
                 let text = p.read(&page_py());
-                let at = text.find("@pages.route(").expect("the template's route");
+                let at = text
+                    .find("@pages.route(\n    \"/statement\"")
+                    .expect("the template's statement route");
                 (page_py(), text[..at].matches('\n').count() + 1)
             },
             "/statement changes something and declares no typed record, so no tool is derived from it",
@@ -862,6 +864,11 @@ fn two_roles(label: &str) -> Scaffolded {
         "    \"/statement\",\n    levels=\"write\",",
         "    \"/statement\",\n    levels=\"write\",\n    roles=[\"custody\"],",
     );
+    plugin.replace(
+        &page_py(),
+        "    \"/link\",\n    levels=\"admin\",",
+        "    \"/link\",\n    levels=\"admin\",\n    roles=[\"custody\"],",
+    );
     plugin.write(
         &format!("src/{MODULE}/balances.py"),
         "import meridian\n\n\
@@ -944,8 +951,8 @@ fn a_route_sending_a_command_none_of_its_roles_holds_fails_naming_those_that_do(
     let plugin = two_roles("roles-command");
     plugin.replace(
         &page_py(),
-        "roles=[\"custody\"],",
-        "roles=[\"operations\"],",
+        "    levels=\"write\",\n    roles=[\"custody\"],",
+        "    levels=\"write\",\n    roles=[\"operations\"],",
     );
     let report = plugin.check();
     assert_eq!(

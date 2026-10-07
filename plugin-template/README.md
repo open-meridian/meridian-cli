@@ -24,8 +24,10 @@ with `meridian` 0.1.15 or later; its CI runs the same:
     meridian plugin check --run-tests
 
 Its pages are view functions and templates, each declared with the levels it
-serves: Setup under the dashboard's Manage (`admin`), and Accounts under Open
-(`write`) and View (`read`). They are built on Open Meridian's plugin UI kit,
+serves: Setup under the dashboard's Manage (`admin`), which links the external
+accounts it reports to the deployment's accounts, and Accounts under Open
+(`write`) and View (`read`), which opens a statement for a linked one -- link,
+then record. They are built on Open Meridian's plugin UI kit,
 which the dashboard serves on the plugin's own host at `/.meridian/ui/`: the
 platform's look, and each person's colour scheme, with no design work. Where
 the kit is not served the pages still work, unstyled.
