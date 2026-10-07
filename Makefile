@@ -124,11 +124,29 @@ lock:
 # every check after it -- the database, the administrator's permission, their
 # sign-in, and a real browser -- as the run makes them for its own driver.
 # Needs meridian-core and meridian-platform beside this checkout, and a
-# cluster in the current kube context.
+# cluster in the current kube context, which may hold a deployment of its own:
+# the run installs into a namespace of its own, with its registry on a host
+# port no pod holds.
+#
+# The plugin it makes is built on the base image the scaffold names. Between
+# moving the scaffold to a new SDK and that SDK's release, which is when this
+# has to pass, the base is not published yet, so it is built from
+# meridian-python beside this checkout, which must be at that version; once
+# published, the release is pulled over any local build of it.
 CORE ?= ../meridian-core
+TEMPLATE_BASE = $(shell sed -n 's/^ARG BASE=//p' plugin-template/Dockerfile)
 
 e2e-up:
 	@test -f "$(CORE)/e2e/cluster/run.py" || { echo "no meridian-core at $(CORE); set CORE=<path>" >&2; exit 1; }
+	@if docker manifest inspect "$(TEMPLATE_BASE)" >/dev/null 2>&1; then \
+		docker pull -q "$(TEMPLATE_BASE)" >/dev/null; \
+	else \
+		want="$(lastword $(subst :, ,$(TEMPLATE_BASE)))"; \
+		have="$$(sed -n 's/^version = "\(.*\)"$$/\1/p' "$(SDK)/pyproject.toml" 2>/dev/null)"; \
+		[ "$$have" = "$$want" ] || { echo "e2e-up: $(TEMPLATE_BASE) is not published, and meridian-python at $(SDK) is $${have:-absent}, not $$want, so it cannot be built here; set SDK=<path>" >&2; exit 1; }; \
+		echo "e2e-up: $(TEMPLATE_BASE) is not published yet; building it from $(SDK)"; \
+		$(MAKE) --no-print-directory -C "$(SDK)" base-image BASE_IMAGE="$(TEMPLATE_BASE)" || exit 1; \
+	fi
 	@$(DOCKER) build -q -f Dockerfile.rust --target e2e -t meridian-cli-e2e:local . >/dev/null
 	@$(MAKE) --no-print-directory -C "$(CORE)" e2e-cluster E2E_DRIVER=cli E2E_CLI_IMAGE=meridian-cli-e2e:local
 
