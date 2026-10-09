@@ -39,8 +39,11 @@ Every command exits non-zero on failure, and `plugin check`, `migrate`, `dev`,
 On macOS (Apple silicon or Intel) or Linux (x86_64 or arm64):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/open-meridian/meridian-cli/main/install.sh | sh
+curl -fsSL https://open-meridian.com/install | sh
 ```
+
+That address redirects to this repository's `install.sh`; the long form works
+the same: `curl -fsSL https://raw.githubusercontent.com/open-meridian/meridian-cli/main/install.sh | sh`.
 
 It downloads this machine's binary from the latest release, checks it against
 the `.sha256` published beside it, and puts it in `~/.local/bin` -- no `sudo`.
