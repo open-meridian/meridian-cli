@@ -66,12 +66,22 @@ async def a_bar_heard(recorder: Recorder) -> None:
     assert plugin.bars_heard == 1
 
 
+async def reporting_currency(recorder: Recorder) -> None:
+    # No position names the currency's cash instrument: it is resolved by its code.
+    recorder.answer(
+        "ResolveIdentifier",
+        lambda _: ops.ResolveIdentifierResult(found=True, instrument_id="LCL-CASH-USD"),
+    )
+    assert await report(recorder).currency(DAY) == "LCL-CASH-USD"
+
+
 PRODUCERS: dict[str, Producer] = {
     "reads-the-datasets-it-may-read": datasets,
     "reads-a-business-dates-closes": valued,
     "hears-a-price-recorded": a_price_heard,
     "reads-daily-bars-over-a-range": valued,
     "hears-a-bar-recorded": a_bar_heard,
+    "resolves-its-reporting-currency": reporting_currency,
 }
 
 

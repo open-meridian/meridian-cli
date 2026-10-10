@@ -10,6 +10,11 @@ datasets it is entitled to read.
 
 Every number stays a `Decimal`, as the lake keeps it: never a `float`.
 
+It names its reporting currency by its ISO 4217 code and has core resolve
+that to the deployment's cash instrument (`resolve_identifier`, read-only
+for a `reporting` plugin from contract v19), rather than finding it among
+what the book happens to hold.
+
 `meridian.suites.run("reporting", producers)` holds this to the role's
 suite (tests/test_suite.py), against a recorder standing in for the sidecar.
 """
@@ -58,6 +63,8 @@ class Report:
     plugin's own when it runs, a recorder's in its tests."""
 
     plugin: meridian.Plugin
+    #: The currency it reports in, by its ISO 4217 code.
+    reporting_currency: str = "USD"
     #: What the lake has recorded since the plugin started, as heard.
     prices_heard: int = 0
     bars_heard: int = 0
@@ -69,6 +76,16 @@ class Report:
         read = await self.plugin.list_datasets()
         self.datasets_read = [ref.dataset for ref in read.datasets]
         return self.datasets_read
+
+    async def currency(self, day: date) -> str:
+        """The deployment's cash instrument for the reporting currency on
+        `day`, resolved by its ISO 4217 code whether or not any position
+        holds it; empty where the deployment holds none."""
+        found = await self.plugin.resolve_identifier(
+            identifiers=[meridian.Identifier(scheme="iso4217", value=self.reporting_currency)],
+            as_of_ns=_start(day),
+        )
+        return str(found.instrument_id) if found.found else ""
 
     async def positions(self, day: date) -> list[ops.BookPosition]:
         """Every position in the plugin's account scope on `day`, page by page."""

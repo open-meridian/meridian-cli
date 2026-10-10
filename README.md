@@ -372,10 +372,12 @@ bars into the lake, its catalogue declared from code, every price parsed from
 the vendor's text as a `Decimal`, with Connection and Datasets pages under
 Manage and their read tools, `read_connection` and `read_datasets`; asked for
 an instrument another source resolved, a custodian's say, it reads that
-instrument's record and serves it by a symbol in it. Replace the vendor with
-your own. The `reporting` plugin values the book's positions at the last close
-from the lake, and records nothing; its Closes page is a read tool too,
-`read_report`. A role with no template of its own is refused: the reference
+instrument's record and serves it by a symbol in it; its suite's cases about
+trades and quotes, which its daily dataset never publishes, are marked not
+presented, with why. Replace the vendor with your own. The `reporting` plugin
+values the book's positions at the last close from the lake, and records
+nothing; it resolves its reporting currency by its ISO 4217 code, and its
+Closes page is a read tool too, `read_report`. A role with no template of its own is refused: the reference
 plugin takes any role in its `pyproject.toml`.
 
 `upload` sends the version's declaration with it (contract v11): where
@@ -388,7 +390,9 @@ storage. `plugin check` holds the same declaration to that (`edge-storage`).
 `plugin check --verified` holds a plugin holding a role with a conformance
 suite (`custody`, and `dgm` from contract v18) to a test that runs the suite
 (`role-suite`), which `--run-tests` then runs: a plugin holding the role is
-verified for it only by passing every case. Without `--verified` the rule is
+verified for it only by passing every case, though from contract v19 the
+SDK's runner lets a case about a kind of data the plugin declares it never
+publishes be named not presented, with why. Without `--verified` the rule is
 not checked, since a plugin not passing its role's suite is not verified and
 breaks no rule: the reference plugin given `custody`, recording a statement no
 vendor sent, keeps every rule. `make check-scaffolds` makes each scaffold with
@@ -537,7 +541,7 @@ meridian-python's `template/` and `templates/` at a pinned commit (`make vendor-
 `check-vendored-template` fails when it drifts), so a release carries the SDK
 version the new plugin pins: 0.20.0 from 0.1.35, 0.21.0 from 0.1.36, 0.22.0
 (contract v18) from 0.1.37, with the `dgm` and `reporting`
-templates from `templates/`.
+templates from `templates/`, and 0.23.0 (contract v19) from the release after it.
 
 ## Licence
 

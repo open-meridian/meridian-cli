@@ -190,6 +190,22 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   datasets, never a price: prices are the reading roles'. Hold it to the
   suite: `meridian.suites.run("dgm", producers)` on synthetic exchanges, each
   case mapped to the plugin's own conversion.
+- **A `dgm` streaming trades and quotes records them as its source states
+  them, converted at the edge.** Declare them in a live dataset apart
+  (`data_types=["meridian.v1.Trade", "meridian.v1.Quote"]`, `modes=["stream"]`)
+  and record in batches of at most 500 (`plugin.record_trades`,
+  `plugin.record_quotes`), keyed by UTC instants with no `business_date`. A
+  trade carries its `meridian.TradeAttributes` in the platform's words,
+  converted from the source's condition codes (a code with no conversion
+  kept as reported in `meta.unconverted`, never guessed), and its
+  `aggressor`, the side that took liquidity: where the source names the
+  resting order's side, record the other; where it says nothing, leave it
+  unset. A withdrawn trade is a new version under the same `row_key`
+  (`cancelled=True`); a quote's empty side is left unset. Keep a standing
+  want of a streamed dataset current from the stream. A case of the suite
+  about a kind of data the plugin declares it never publishes (its `about`:
+  trades, quotes, bars) is named in `not_presented`, with why; every other
+  case is mapped.
 
 This file is for any coding agent working on the plugin, and is committed with
 it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the

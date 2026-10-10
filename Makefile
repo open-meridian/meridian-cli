@@ -52,7 +52,7 @@ ci-mirror-check:
 # template from its templates/, copied to plugin-templates/ the same way. The
 # templates live beside the SDK they are written against and are tested there;
 # this copy is held to them the way the SDK's bindings are held to the schema.
-SDK_REV  := c0f504a0b9a774019814f2da4e9d6d2f3e7303ae
+SDK_REV  := 3297653ab3275df0e1156df711575412f102039a
 SDK_REPO := https://github.com/open-meridian/meridian-python.git
 SCRATCH  := .sdk-scratch
 

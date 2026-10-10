@@ -30,7 +30,8 @@ Its tests run the `dgm` suite the SDK carries (`tests/test_suite.py`): each
 case of the role mapped to one of the vendor's responses and run through the
 plugin's own conversion (`convert.py`). A plugin holding `dgm` is verified
 for it only by passing every case: keep each passing as you replace the
-vendor. Every price is parsed from the vendor's text as a `Decimal`, never
+vendor. A case about trades or quotes, which its daily dataset never
+publishes, is marked not presented, with why, until a dataset declares them. Every price is parsed from the vendor's text as a `Decimal`, never
 through a `float`; every subject and venue is resolved before a row names
 it, and what does not resolve is reported.
 

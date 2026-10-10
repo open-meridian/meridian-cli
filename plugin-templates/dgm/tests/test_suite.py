@@ -11,6 +11,12 @@ or as `answer` says for the case.
 
 When you replace the stand-in vendor with your own, map each case to a
 recorded or synthetic exchange with it, and keep every case passing.
+
+A case about a kind of data (its `about`) the plugin declares it never
+publishes is not presented, with why, rather than mapped: this plugin's one
+dataset is daily closes and bars (declaration.py), so it states no trades
+and no quotes. Declare a dataset of trades or quotes and those cases are
+required again, and fail until each is mapped.
 """
 
 from __future__ import annotations
@@ -19,9 +25,10 @@ from typing import cast
 
 import meridian
 from meridian.plugin.v1 import operations_pb2 as ops
-from meridian.suites import Producer, Recorder, run
+from meridian.suites import Producer, Recorder, run, suite
 
 from reference_plugin.convert import Converter
+from reference_plugin.declaration import DECLARATION
 from reference_plugin.vendor import DAILY, FORMING
 
 INSTANCE = "reference-1"
@@ -147,6 +154,19 @@ PRODUCERS: dict[str, Producer] = {
 }
 
 
+#: Each kind of data a case may be about that is one of the lake's data
+#: types, by its message: a case about one the catalogue does not declare is
+#: about something this plugin never publishes.
+KINDS = {"trades": "meridian.v1.Trade", "quotes": "meridian.v1.Quote"}
+DECLARED = {kind for dataset in DECLARATION.catalogue for kind in dataset.data_types}
+
+NOT_PRESENTED: dict[str, str] = {
+    case.name: f"its datasets publish daily closes and bars, and no {case.about}"
+    for case in suite("dgm").cases
+    if case.about in KINDS and KINDS[case.about] not in DECLARED
+}
+
+
 def test_every_case_of_the_dgm_suite_passes() -> None:
-    report = run("dgm", PRODUCERS, instance_id=INSTANCE)
+    report = run("dgm", PRODUCERS, not_presented=NOT_PRESENTED, instance_id=INSTANCE)
     assert report.passed, report.failures

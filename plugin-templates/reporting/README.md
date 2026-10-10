@@ -27,8 +27,9 @@ Hold it to the rules every Meridian plugin is built to, and run its tests:
 
 Its tests run the `reporting` suite the SDK carries (`tests/test_suite.py`):
 the datasets it may read, a business date's closes, daily bars over a range,
-and the prices and bars the lake records, heard. Every figure stays a
-`Decimal`, as the lake keeps it.
+the prices and bars the lake records, heard, and its reporting currency
+resolved by its ISO 4217 code. Every figure stays a `Decimal`, as the lake
+keeps it.
 
 Its pages: Closes under Open (`write`) and View (`read`), each position in
 the accounts the person may read, its close, the dataset it came from, the
