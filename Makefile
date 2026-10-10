@@ -11,7 +11,7 @@ unexport GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
          GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
 
 .PHONY: help ci-local ci-local-deep build test lint fmt lock install-hooks e2e-up e2e-migrate \
-        vendor-template check-vendored-template check-install check-c-deps \
+        vendor-template check-vendored-template check-install check-c-deps check-scaffolds \
         ci-mirror-check e2e-authority-macos
 
 help:
@@ -21,16 +21,18 @@ help:
 	@echo "  make lint       rustfmt --check and clippy with warnings denied"
 	@echo "  make check-c-deps  aws-lc-sys is the only crate that compiles C (spec/the-cli, req. 2)"
 	@echo "  make check-install  the install script, upgrade and uninstall, against stand-in releases"
+	@echo "  make check-scaffolds  each scaffold plugin new writes, its tests and suite run, and a float caught"
 	@echo "  make fmt        apply rustfmt"
 	@echo "  make lock       regenerate Cargo.lock"
 	@echo "  make e2e-up     install into a throwaway namespace and answer the wizard"
 	@echo "  make e2e-migrate  plugin migrate, for real, over meridian-python's recorded plugins"
 	@echo "  make e2e-authority-macos  authority trust and uninstall on this Mac, for real (needs MERIDIAN_E2E_CHANGES_THIS_MAC=yes)"
 	@echo "  make ci-mirror-check  every CI job is reachable from ci-local, or allowlisted with a reason"
-	@echo "  make vendor-template  move the scaffold \`plugin new\` writes to SDK_REV"
+	@echo "  make vendor-template  move the scaffolds \`plugin new\` writes to SDK_REV"
 
 # Local green is the completion signal; CI is confirmation.
-ci-local: ci-mirror-check check-vendored-template build test lint check-c-deps check-install
+ci-local: ci-mirror-check check-vendored-template build test lint check-c-deps check-install \
+          check-scaffolds
 	@echo
 	@echo "ci-local: GREEN"
 
@@ -46,30 +48,33 @@ ci-mirror-check:
 
 # What `meridian plugin new` writes: meridian-python's template/, at one SDK
 # revision, copied here and compiled into the binary, so scaffolding works
-# offline and gives the same plugin every time. The template lives beside the
-# SDK it is written against and is tested there against the real sidecar;
-# this copy is held to it the way the SDK's bindings are held to the schema.
-SDK_REV  := 60e3c5188486879723471d9895c2e99aba468c18
+# offline and gives the same plugin every time; and with `--role`, that role's
+# template from its templates/, copied to plugin-templates/ the same way. The
+# templates live beside the SDK they are written against and are tested there;
+# this copy is held to them the way the SDK's bindings are held to the schema.
+SDK_REV  := 4e5e4098a147f1de900cc712d2f7f3240d3140a6
 SDK_REPO := https://github.com/open-meridian/meridian-python.git
 SCRATCH  := .sdk-scratch
 
 define fetch_template
 	rm -rf $(SCRATCH) && git init -q $(SCRATCH) \
 	&& git -C $(SCRATCH) fetch -q --depth 1 $(SDK_REPO) $(SDK_REV) \
-	&& git -C $(SCRATCH) checkout -q FETCH_HEAD -- template
+	&& git -C $(SCRATCH) checkout -q FETCH_HEAD -- template templates
 endef
 
 vendor-template:
 	@$(fetch_template)
-	@rm -rf plugin-template && cp -R $(SCRATCH)/template plugin-template && rm -rf $(SCRATCH)
-	@echo "vendor-template: plugin-template is meridian-python's template at $(SDK_REV)"
+	@rm -rf plugin-template plugin-templates \
+		&& cp -R $(SCRATCH)/template plugin-template && cp -R $(SCRATCH)/templates plugin-templates \
+		&& rm -rf $(SCRATCH)
+	@echo "vendor-template: plugin-template and plugin-templates are meridian-python's template and templates at $(SDK_REV)"
 
 check-vendored-template:
 	@$(fetch_template) || { echo "check-vendored-template: could not fetch meridian-python at $(SDK_REV)" >&2; rm -rf $(SCRATCH); exit 1; }
-	@if diff -r $(SCRATCH)/template plugin-template >/dev/null; then \
-		rm -rf $(SCRATCH); echo "check-vendored-template OK: the scaffold is meridian-python's template at $(SDK_REV)"; \
+	@if diff -r $(SCRATCH)/template plugin-template >/dev/null && diff -r $(SCRATCH)/templates plugin-templates >/dev/null; then \
+		rm -rf $(SCRATCH); echo "check-vendored-template OK: the scaffolds are meridian-python's template and templates at $(SDK_REV)"; \
 	else \
-		rm -rf $(SCRATCH); echo "check-vendored-template FAILED: plugin-template is not meridian-python's template at $(SDK_REV). Run 'make vendor-template'." >&2; exit 1; \
+		rm -rf $(SCRATCH); echo "check-vendored-template FAILED: plugin-template or plugin-templates is not meridian-python's at $(SDK_REV). Run 'make vendor-template'." >&2; exit 1; \
 	fi
 
 build:
@@ -106,6 +111,17 @@ check-install:
 		|| { echo "check-install FAILED; see the output with:" >&2; \
 		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target install-test --progress=plain --no-cache-filter install-test ." >&2; exit 1; }
 	@echo "check-install OK: the install script, upgrade and uninstall, against stand-in releases"
+
+# Each scaffold `plugin new` writes, made by the release binary, its tests run
+# for real against the SDK it pins (installed from meridian-python at SDK_REV):
+# the reference plugin, it given custody (every rule; role-suite only when
+# verified), the dgm and reporting templates with their suites, and the dgm
+# with a float in its price path failing. The check's own tests have no Python.
+check-scaffolds:
+	@$(DOCKER) build -f Dockerfile.rust --target scaffolds --build-arg SDK_REV=$(SDK_REV) . >/dev/null 2>&1 \
+		|| { echo "check-scaffolds FAILED; see the output with:" >&2; \
+		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target scaffolds --build-arg SDK_REV=$(SDK_REV) --progress=plain --no-cache-filter scaffolds ." >&2; exit 1; }
+	@echo "check-scaffolds OK: each scaffold keeps the rules, its suite run; a dgm pricing through a float fails"
 
 # Applied in a container and written back, because the host has no toolchain.
 fmt:

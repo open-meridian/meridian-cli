@@ -1,0 +1,14 @@
+{% extends "meridian/base.html" %}
+{% block content %}
+<p class="muted">Signed in as <strong>{{ caller.display_name }}</strong>, to manage this plugin: what it may read, and no account's data. A deployment admin entitles it to each dataset on the dashboard's Data sources page.</p>
+<section class="panel">
+  <div class="panel-body">
+    <h2>What it may read</h2>
+    <p class="muted">{{ datasets | join(", ") or "No dataset yet." }}</p>
+    <dl>
+      <dt>Prices heard since it started</dt><dd>{{ report.prices_heard }}</dd>
+      <dt>Bars heard since it started</dt><dd>{{ report.bars_heard }}</dd>
+    </dl>
+  </div>
+</section>
+{% endblock %}

@@ -22,6 +22,7 @@ COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
 # What `meridian plugin new` writes, compiled into the binary.
 COPY plugin-template/ plugin-template/
+COPY plugin-templates/ plugin-templates/
 
 FROM base AS check
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -84,11 +85,32 @@ RUN sh /w/tests/install/run.sh
 FROM koalaman/shellcheck-alpine:v0.10.0 AS shellcheck
 COPY install.sh tests/install/run.sh /w/
 RUN shellcheck --shell=sh /w/install.sh /w/run.sh
+COPY tests/scaffolds/run.sh /w/scaffolds/run.sh
+RUN shellcheck --shell=sh /w/scaffolds/run.sh
 # The macOS trust test (`make e2e-authority-macos`), which only a Mac runs,
 # held to shellcheck here all the same.
 COPY tests/authority-macos/run.sh /w/authority-macos/run.sh
 COPY tests/authority-macos/security-standin.sh /w/authority-macos/security-standin.sh
 RUN shellcheck --shell=bash /w/authority-macos/run.sh /w/authority-macos/security-standin.sh
+
+# Each scaffold `meridian plugin new` writes, made by the release binary and
+# held to `plugin check --run-tests` with its tests run for real
+# (tests/scaffolds): the reference plugin, it given custody, the dgm and
+# reporting templates with their suites, and the dgm with a float in its price
+# path failing. The SDK they pin is installed from meridian-python at the
+# revision they are vendored from, as it is before its release reaches PyPI.
+FROM python:3.12-slim AS scaffolds
+ARG SDK_REV
+RUN test -n "${SDK_REV}" \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir --root-user-action=ignore \
+      "open-meridian @ git+https://github.com/open-meridian/meridian-python.git@${SDK_REV}" pytest
+ENV PIP_ROOT_USER_ACTION=ignore PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONDONTWRITEBYTECODE=1
+COPY --from=release /meridian /usr/local/bin/meridian
+COPY tests/scaffolds/run.sh /w/run.sh
+RUN sh /w/run.sh
 
 # The CLI as a person runs it, for the end-to-end run: the binary and the two
 # tools it drives, helm and kubectl, at pinned versions and nothing else. It

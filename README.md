@@ -16,7 +16,7 @@ meridian down                # uninstall it, keeping its namespace unless asked
 meridian upgrade-deployment  # move it to a newer chart, in place, after checking it can
 meridian connect [<address>] # sign in to a deployment (default: the local one), and keep the session
 meridian sign-out            # end that session, here and at the deployment
-meridian plugin new <name>   # start a plugin from the SDK's reference plugin
+meridian plugin new <name>   # start a plugin from the SDK's reference plugin; --role dgm or reporting
 meridian plugin check        # hold it to the framework's rules: pages, settings, SDK, tests
 meridian plugin migrate      # move it to a newer SDK: its pins, each release's rewrite, then check
 meridian plugin upload       # build it and put it in the deployment's catalogue
@@ -350,6 +350,7 @@ On that delegation, as the deployment's administrator:
 
 ```
 meridian plugin new my-plugin            # ./my-plugin, from the SDK's reference plugin
+meridian plugin new my-prices --role dgm # a dgm plugin, from the SDK's dgm template
 meridian plugin upload --dir my-plugin   # built with docker, from its own Dockerfile
 meridian plugin list                     # versions uploaded, and what is launched
 meridian plugin launch my-plugin 0.1.0 --instance my-plugin
@@ -364,15 +365,33 @@ loop below. `CLAUDE.md` and the `develop-live` skill lead Claude Code to the
 same text. Commit them with the plugin; `.dockerignore` keeps them out of its
 image.
 
+`--role dgm` and `--role reporting` write that role's template instead, from
+meridian-python's `templates/`: a whole plugin holding the role, its tests
+running the role's suite. The `dgm` puts a stand-in vendor's daily closes and
+bars into the lake, its catalogue declared from code, every price parsed from
+the vendor's text as a `Decimal`, with Connection and Datasets pages under
+Manage and their read tools, `read_connection` and `read_datasets`; replace
+the vendor with your own. The `reporting` plugin values the book's positions
+at the last close from the lake, and records nothing. A role with no template
+of its own is refused: the reference plugin takes any role in its
+`pyproject.toml`.
+
 `upload` sends the version's declaration with it (contract v11): where
 `pyproject.toml`'s `[tool.meridian]` names one, `declaration =
 "<module>:<attribute>"`, it runs the SDK's `meridian-declaration` in the
 image it built, with no network, and sends what it prints: the secret
 settings' names, what the plugin receives and does not carry, and the storage
 it asks for, refused here when a plugin holding no edge role asks for
-storage. `plugin check` holds the same declaration to that (`edge-storage`),
-and a plugin holding a role with a conformance suite (`custody`) to a test
-that runs the suite (`role-suite`), which `--run-tests` then runs.
+storage. `plugin check` holds the same declaration to that (`edge-storage`).
+`plugin check --verified` holds a plugin holding a role with a conformance
+suite (`custody`, and `dgm` from contract v18) to a test that runs the suite
+(`role-suite`), which `--run-tests` then runs: a plugin holding the role is
+verified for it only by passing every case. Without `--verified` the rule is
+not checked, since a plugin not passing its role's suite is not verified and
+breaks no rule: the reference plugin given `custody`, recording a statement no
+vendor sent, keeps every rule. `make check-scaffolds` makes each scaffold with
+the release binary and runs its tests for real: the dgm template with a float
+in its price path fails its suite.
 
 From contract v12 a deployment serves one MCP surface, where an agent a
 person delegated to works as them, and a plugin's tools there are derived by
@@ -511,10 +530,12 @@ The host needs Docker and nothing else: the toolchain is pinned inside
 A version tag, `v<version>` (the version in `Cargo.toml`), publishes a release: one
 binary per target (macOS and Linux, each on x86_64 and arm64), each with its
 `.sha256`, which `install.sh` and `meridian upgrade` fetch. Nothing is
-published from a push to `main`. `plugin new`'s template is vendored from
-meridian-python's `template/` at a pinned commit (`make vendor-template`;
+published from a push to `main`. `plugin new`'s templates are vendored from
+meridian-python's `template/` and `templates/` at a pinned commit (`make vendor-template`;
 `check-vendored-template` fails when it drifts), so a release carries the SDK
-version the new plugin pins: 0.20.0 from 0.1.35, 0.21.0 from 0.1.36.
+version the new plugin pins: 0.20.0 from 0.1.35, 0.21.0 from 0.1.36, 0.22.0
+(contract v18) from the release after it, with the `dgm` and `reporting`
+templates from `templates/`.
 
 ## Licence
 

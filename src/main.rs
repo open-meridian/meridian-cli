@@ -31,7 +31,8 @@ meridian -- bringing a Meridian deployment up
   meridian upgrade-deployment
                              move a running deployment to a newer chart, in place,
                              after checking it can; not this binary
-  meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>
+  meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>;
+                             with --role dgm or reporting, that role's template
   meridian plugin check      hold the plugin here to the framework's rules: its pages,
                              settings, SDK use, [tool.meridian], tests and shape
   meridian plugin migrate    move the plugin here to a newer release of its SDK: its pins,
@@ -116,13 +117,18 @@ up:
 plugin new:
       --into <dir>          where to write it (default: ./<name>). Never somewhere
                             that already exists
+      --role <role>         write that role's template, a whole plugin holding it
+                            with its tests running the role's suite: dgm (a
+                            vendor's prices into the lake) or reporting (the book
+                            valued from the lake). Without it, the reference plugin
 
 plugin check: needs no deployment. Exits 0 when every rule holds, 1 when one does
 not, each failure with its file, line and what to write instead
       --dir <dir>           the plugin's directory (default: .)
       --run-tests           run its tests too, with pytest
       --verified            hold it as a verified plugin is: every changing route
-                            a tool for agents, none kept from them
+                            a tool for agents, none kept from them, and each role
+                            it holds with a suite (custody, dgm) run in its tests
       --json                one JSON object on stdout
 
 plugin migrate: needs no deployment, and docker. Exits 0 when migrated with nothing
@@ -211,8 +217,9 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 23] = [
+const TAKES_A_VALUE: [&str; 24] = [
     "--into",
+    "--role",
     "--since",
     "--print",
     "--level",
@@ -433,9 +440,10 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
                 .value("--into", "--into")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::path::PathBuf::from(name));
-            match plugin::scaffold(name, &into) {
+            let role = arguments.value("--role", "--role");
+            match plugin::scaffold(name, &into, role) {
                 Ok(_) => {
-                    print!("{}", plugin::next_steps(name, &into));
+                    print!("{}", plugin::next_steps(name, &into, role));
                     0
                 }
                 Err(refusal) => {

@@ -1,0 +1,23 @@
+{% extends "meridian/base.html" %}
+{% block content %}
+<p class="muted">Signed in as <strong>{{ caller.display_name }}</strong>. The positions in the accounts you may read, at the close of {{ day }}: each value is computed here and shown, never recorded.</p>
+<section class="panel">
+  <div class="panel-body">
+    <h2>At the close of {{ day }}</h2>
+    <p class="muted">Each close by the deployment's source priority, from a dataset this plugin may read.</p>
+  </div>
+  <om-grid id="closes" row-key="instrument" caption="At the close of {{ day }}" empty="No position in the accounts you may read.">
+    <script type="application/json">{{ {"columns": columns, "rows": rows} | tojson }}</script>
+    <table>
+      <thead><tr><th>Account</th><th>Instrument</th><th>Quantity</th><th>Close</th><th>In</th><th>Value</th><th>Over the week</th><th>From</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr><td><code>{{ row.account }}</code></td><td><code>{{ row.instrument }}</code></td><td>{{ row.quantity }}</td><td>{{ row.close or "not held" }}</td><td>{{ row.currency }}</td><td>{{ row.value }}</td><td>{{ row.week }}</td><td>{{ row.dataset }}</td></tr>
+      {% else %}
+        <tr><td colspan="8">No position in the accounts you may read.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </om-grid>
+</section>
+{% endblock %}

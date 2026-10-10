@@ -39,7 +39,7 @@ pub const RULES: [Rule; 14] = [
     },
     Rule {
         id: "role-suite",
-        holds: "a plugin holding a role with a suite runs the suite in its tests",
+        holds: "a verified plugin holding a role with a suite runs the suite in its tests",
         check: role_suite,
     },
     Rule {
@@ -132,10 +132,20 @@ pub const EDGE_ROLES: [&str; 7] = [
     "settlement",
 ];
 
-/// The roles whose conformance suite the SDK carries, as this release of the
-/// CLI knows them (contract v11): a plugin holding one is verified for it only
-/// by passing every case (spec/vendor-differences-have-a-place-in-the-contract).
-pub const SUITES: [&str; 1] = ["custody"];
+/// The roles whose conformance suite a verified plugin runs in its tests, as
+/// this release of the CLI holds them: `custody` (contract v11) and `dgm`
+/// (contract v18). A plugin holding one is verified for it only by passing
+/// every case (spec/vendor-differences-have-a-place-in-the-contract,
+/// requirement 18).
+pub const SUITES: [&str; 2] = ["custody", "dgm"];
+
+/// The rules only `--verified` holds a plugin to. A plugin holding a role
+/// with a suite and not passing it is not verified, and there is nothing to
+/// declare instead (requirement 18): it is not a plugin breaking the
+/// framework's rules. So the reference plugin, given `custody` to record a
+/// statement nobody's vendor sent, keeps every rule, and a plugin checked as
+/// verified, as SnapTrade's CI checks it, is held to every case.
+pub const ONLY_VERIFIED: [&str; 1] = ["role-suite"];
 
 // ── Which files ──────────────────────────────────────────────────────────
 
@@ -906,7 +916,8 @@ fn role_suite(plugin: &Plugin) -> Vec<Failure> {
                     "a test that runs `meridian.suites.run(\"{role}\", producers)`: each case of \
                      the suite mapped to the plugin's own exchange with its source, run through \
                      its own conversion, and the report asserted passed. `--run-tests` then \
-                     holds the plugin to every case, as its role requires (contract v11)"
+                     holds the plugin to every case, as a verified plugin is held \
+                     (spec/vendor-differences-have-a-place-in-the-contract, requirement 18)"
                 ),
             ));
         }
@@ -1065,7 +1076,7 @@ fn tools_cover_routes(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at 57a603c (contract v15), byte
+/// meridian-schema's boundaries/roles.json at 63d8e40 (contract v18), byte
 /// for byte: its `operations` say which roles hold each command.
 const ROLES_JSON: &str = include_str!("roles.json");
 

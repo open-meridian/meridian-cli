@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "reference-plugin"
 version = "0.1.0"
-description = "A Meridian plugin"
+description = "A Meridian dgm plugin"
 requires-python = ">=3.11"
 # The SDK and nothing else of Meridian's, pinned exactly: the sidecar this runs
 # beside speaks one version of the contract, and a range would let a rebuild
@@ -27,8 +27,11 @@ reference_plugin = ["templates/*.html"]
 [tool.meridian]
 # Roles from the deployment's fixed list -- ccm, compliance, custody, dgm, ems,
 # match, oms, operations, portfolio, reporting, servicing, settlement, signal
-# -- and its grants are theirs. None, as here, is a plugin admitted with no
-# topics.
-roles = []
+# -- and its grants are theirs. `dgm`: it puts its vendor's prices into the
+# lake, W10's steps.
+roles = ["dgm"]
 # Whether it serves a page through its sidecar.
 interface = true
+# Its declaration: the catalogue of datasets it serves the lake (contract
+# v18). Upload reads it from the built image with `meridian-declaration`.
+declaration = "reference_plugin.declaration:DECLARATION"

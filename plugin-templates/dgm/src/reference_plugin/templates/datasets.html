@@ -1,0 +1,29 @@
+{% extends "meridian/base.html" %}
+{% block content %}
+<p class="muted">Signed in as <strong>{{ caller.display_name }}</strong>. A deployment admin licenses each dataset, and entitles who may read it, on the dashboard's Data sources page.</p>
+<section class="panel">
+  <div class="panel-body">
+    <h2>What it serves the lake</h2>
+    <p class="muted">Each dataset as its catalogue declares it, and the standing wants it keeps current.</p>
+  </div>
+  <om-grid id="datasets" row-key="dataset" caption="What it serves the lake" empty="It declares no dataset.">
+    <script type="application/json">{{ {"columns": columns, "rows": rows} | tojson }}</script>
+    <table>
+      <thead><tr><th>Dataset</th><th>Vendor</th><th>Fills</th><th>Arrives by</th><th>Standing wants</th></tr></thead>
+      <tbody>
+      {% for row in data.datasets %}
+        <tr><td><code>{{ row.dataset }}</code></td><td>{{ row.vendor }}</td><td>{{ row.data_types | join(", ") }}</td><td>{{ row.modes | join(", ") }}</td><td>{{ row.standing_wants }}</td></tr>
+      {% else %}
+        <tr><td colspan="5">It declares no dataset.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </om-grid>
+</section>
+<section class="panel">
+  <div class="panel-body">
+    <h2>What the vendor serves its key</h2>
+    <p class="muted">{{ data.entitled | join(", ") or "Nothing." }}</p>
+  </div>
+</section>
+{% endblock %}

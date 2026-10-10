@@ -1,0 +1,22 @@
+{% extends "meridian/base.html" %}
+{% block status %}
+{% if data.healthy %}
+<om-status data-om-header state="ok" label="Answering">Answering.</om-status>
+{% else %}
+<om-status data-om-header state="bad" label="Not answering">Not answering.</om-status>
+{% endif %}
+{% endblock %}
+{% block content %}
+<p class="muted">Signed in as <strong>{{ caller.display_name }}</strong>, to manage this plugin: its connection, and no price.</p>
+<section class="panel">
+  <div class="panel-body">
+    <h2>{{ data.vendor }}</h2>
+    <p class="muted">What this plugin asked of its vendor since it started, and the limit the vendor's terms set.</p>
+    <dl>
+      <dt>Answering</dt><dd>{{ data.detail }}</dd>
+      <dt>Calls made</dt><dd>{{ data.calls }}</dd>
+      <dt>Calls allowed</dt><dd>{{ data.limit_per_minute }} a minute</dd>
+    </dl>
+  </div>
+</section>
+{% endblock %}

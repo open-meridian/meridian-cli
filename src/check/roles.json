@@ -120,13 +120,18 @@
           "ListPositions",
           "ListBreaks",
           "ListAccountFigures",
-          "ListAccountAttributes"
+          "ListAccountAttributes",
+          "ListPrices",
+          "ListBars",
+          "ListDatasets"
         ],
         "hears": [
           "PositionChanged",
           "BreakChanged",
           "AccountFiguresRecorded",
-          "AccountAttributeChanged"
+          "AccountAttributeChanged",
+          "PricesRecorded",
+          "BarsRecorded"
         ]
       }
     },
@@ -277,9 +282,21 @@
       ],
       "edge": true,
       "scope": {
-        "publishes": [],
-        "reads": [],
-        "hears": []
+        "publishes": [
+          "ReportMissingInstrument",
+          "ReportMissingVenue",
+          "RecordPrices",
+          "RecordBars",
+          "DeclineWant"
+        ],
+        "reads": [
+          "ResolveIdentifier",
+          "ResolveVenue"
+        ],
+        "hears": [
+          "ObservationsWanted",
+          "WantWithdrawn"
+        ]
       }
     },
     {
@@ -555,13 +572,18 @@
           "ListPositions",
           "ListBreaks",
           "ListAccountFigures",
-          "ListAccountAttributes"
+          "ListAccountAttributes",
+          "ListPrices",
+          "ListBars",
+          "ListDatasets"
         ],
         "hears": [
           "PositionChanged",
           "BreakChanged",
           "AccountFiguresRecorded",
-          "AccountAttributeChanged"
+          "AccountAttributeChanged",
+          "PricesRecorded",
+          "BarsRecorded"
         ]
       }
     },
@@ -613,13 +635,18 @@
           "ListPositions",
           "ListBreaks",
           "ListAccountFigures",
-          "ListAccountAttributes"
+          "ListAccountAttributes",
+          "ListPrices",
+          "ListBars",
+          "ListDatasets"
         ],
         "hears": [
           "PositionChanged",
           "BreakChanged",
           "AccountFiguresRecorded",
-          "AccountAttributeChanged"
+          "AccountAttributeChanged",
+          "PricesRecorded",
+          "BarsRecorded"
         ]
       }
     },
@@ -716,8 +743,15 @@
       "edge": false,
       "scope": {
         "publishes": [],
-        "reads": [],
-        "hears": []
+        "reads": [
+          "ListPrices",
+          "ListBars",
+          "ListDatasets"
+        ],
+        "hears": [
+          "PricesRecorded",
+          "BarsRecorded"
+        ]
       }
     }
   ],
@@ -782,6 +816,22 @@
       "stability": "preview"
     },
     {
+      "name": "BarsRecorded",
+      "step": "W10.5",
+      "title": "Record, sequence and publish each row",
+      "kind": "event",
+      "topic": "platform.lake.{dataset}.event.bars-recorded",
+      "roles": {
+        "hears": [
+          "compliance",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "BreakChanged",
       "step": "W9.8",
       "title": "Journal each act and publish its changes",
@@ -823,6 +873,19 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "DeclineWant",
+      "step": "W10.7",
+      "title": "Want what a read could not answer",
+      "kind": "command",
+      "topic": "platform.lake.command.decline-want",
+      "roles": {
+        "publishes": [
+          "dgm"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "HandleBreak",
@@ -897,6 +960,22 @@
       "stability": "preview"
     },
     {
+      "name": "ListBars",
+      "step": "W10.6",
+      "title": "Read prices and bars, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-bars",
+      "roles": {
+        "reads": [
+          "compliance",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ListBreaks",
       "step": "W9.11",
       "title": "Read breaks",
@@ -927,6 +1006,22 @@
       "stability": "stable"
     },
     {
+      "name": "ListDatasets",
+      "step": "W10.9",
+      "title": "Read the datasets",
+      "kind": "query",
+      "topic": "platform.lake.query.list-datasets",
+      "roles": {
+        "reads": [
+          "compliance",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ListPositions",
       "step": "W9.10",
       "title": "Read positions",
@@ -942,6 +1037,22 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "ListPrices",
+      "step": "W10.6",
+      "title": "Read prices and bars, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-prices",
+      "roles": {
+        "reads": [
+          "compliance",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "ListStatements",
@@ -970,6 +1081,19 @@
       "stability": "preview"
     },
     {
+      "name": "ObservationsWanted",
+      "step": "W10.7",
+      "title": "Want what a read could not answer",
+      "kind": "event",
+      "topic": "platform.lake.event.observations-wanted",
+      "roles": {
+        "hears": [
+          "dgm"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "PositionChanged",
       "step": "W9.8",
       "title": "Journal each act and publish its changes",
@@ -985,6 +1109,22 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "PricesRecorded",
+      "step": "W10.5",
+      "title": "Record, sequence and publish each row",
+      "kind": "event",
+      "topic": "platform.lake.{dataset}.event.prices-recorded",
+      "roles": {
+        "hears": [
+          "compliance",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "ReResolveActivity",
@@ -1034,6 +1174,19 @@
       "roles": {
         "publishes": [
           "custody"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RecordBars",
+      "step": "W10.4",
+      "title": "Record prices and bars in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-bars",
+      "roles": {
+        "publishes": [
+          "dgm"
         ]
       },
       "stability": "preview"
@@ -1104,6 +1257,19 @@
       "stability": "stable"
     },
     {
+      "name": "RecordPrices",
+      "step": "W10.4",
+      "title": "Record prices and bars in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-prices",
+      "roles": {
+        "publishes": [
+          "dgm"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ReportExternalAccounts",
       "step": "W2.8",
       "title": "Report the accounts a connection reaches",
@@ -1124,10 +1290,24 @@
       "topic": "platform.reference.event.instrument-missing",
       "roles": {
         "publishes": [
-          "custody"
+          "custody",
+          "dgm"
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "ReportMissingVenue",
+      "step": "W3.15",
+      "title": "Report a venue the deployment does not hold",
+      "kind": "event",
+      "topic": "platform.reference.event.venue-missing",
+      "roles": {
+        "publishes": [
+          "dgm"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "ReportSyncStatus",
@@ -1163,7 +1343,8 @@
       "topic": "platform.reference.query.resolve-identifier",
       "roles": {
         "reads": [
-          "custody"
+          "custody",
+          "dgm"
         ]
       },
       "stability": "stable"
@@ -1184,6 +1365,19 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "ResolveVenue",
+      "step": "W3.14",
+      "title": "Resolve a venue",
+      "kind": "query",
+      "topic": "platform.reference.query.resolve-venue",
+      "roles": {
+        "reads": [
+          "dgm"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "StatementRecorded",
@@ -1207,6 +1401,19 @@
       "roles": {
         "hears": [
           "operations"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "WantWithdrawn",
+      "step": "W10.7",
+      "title": "Want what a read could not answer",
+      "kind": "event",
+      "topic": "platform.lake.event.want-withdrawn",
+      "roles": {
+        "hears": [
+          "dgm"
         ]
       },
       "stability": "preview"
@@ -1259,6 +1466,12 @@
       "name": "FiledTickets",
       "step": "W4.12",
       "title": "A plugin files a ticket, and reads what it filed",
+      "stability": "preview"
+    },
+    {
+      "name": "RecordMove",
+      "step": "W4.13",
+      "title": "Report a move of raw records",
       "stability": "preview"
     }
   ],

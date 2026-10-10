@@ -23,7 +23,7 @@ mod rules;
 #[cfg(test)]
 mod tests;
 
-pub use rules::{EDGE_ROLES, RULES};
+pub use rules::{EDGE_ROLES, ROLES, RULES};
 
 /// One of the plugin's files, as text. `path` is relative to the plugin's
 /// directory, with `/` between its parts on every system.
@@ -38,7 +38,8 @@ pub struct Plugin {
     pub files: Vec<Source>,
     /// Checked as a verified plugin is (`--verified`): a changing route may
     /// not be kept from agents (spec/a-deployment-serves-its-mcp,
-    /// requirement 23).
+    /// requirement 23), and a role held with a suite runs it in its tests
+    /// (spec/vendor-differences-have-a-place-in-the-contract, requirement 18).
     pub verified: bool,
 }
 
@@ -74,7 +75,8 @@ pub struct Rule {
 pub enum Outcome {
     Passed,
     Failed,
-    /// Not run: the tests, without `--run-tests`.
+    /// Not run: the tests, without `--run-tests`; a rule only `--verified`
+    /// holds, without it.
     Skipped,
 }
 
@@ -196,7 +198,8 @@ pub fn check(dir: &Path, run_tests: bool) -> Result<Report, String> {
 }
 
 /// The same, held as a verified plugin is when `verified`: no changing
-/// route kept from agents.
+/// route kept from agents, and each role held with a suite run in its tests
+/// (`rules::ONLY_VERIFIED`, skipped otherwise).
 pub fn check_as(dir: &Path, run_tests: bool, verified: bool) -> Result<Report, String> {
     let mut plugin = read(dir)?;
     plugin.verified = verified;
@@ -206,6 +209,12 @@ pub fn check_as(dir: &Path, run_tests: bool, verified: bool) -> Result<Report, S
         failures: Vec::new(),
     };
     for rule in RULES.iter() {
+        if !verified && rules::ONLY_VERIFIED.contains(&rule.id) {
+            report
+                .outcomes
+                .push((rule.id, rule.holds, Outcome::Skipped));
+            continue;
+        }
         let failures = (rule.check)(&plugin);
         let outcome = if failures.is_empty() {
             Outcome::Passed
@@ -231,6 +240,15 @@ pub fn check_as(dir: &Path, run_tests: bool, verified: bool) -> Result<Report, S
             .push((pass.id, pass.holds, Outcome::Skipped));
     }
     Ok(report)
+}
+
+/// What a person adds to be checked against a rule this run skipped.
+fn skipped_unless(id: &str) -> &'static str {
+    if rules::ONLY_VERIFIED.contains(&id) {
+        "--verified holds it"
+    } else {
+        "--run-tests runs them"
+    }
 }
 
 fn located(failure: &Failure) -> String {
@@ -261,7 +279,7 @@ pub fn text(report: &Report) -> String {
             Outcome::Skipped => "--  ",
         };
         let holds = match outcome {
-            Outcome::Skipped => format!("{holds}: --run-tests runs them"),
+            Outcome::Skipped => format!("{holds}: {}", skipped_unless(id)),
             _ => holds.to_string(),
         };
         out.push_str(&format!("  {mark}  {id:width$}  {holds}\n"));

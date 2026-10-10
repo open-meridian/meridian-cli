@@ -17,8 +17,24 @@ impl Scaffolded {
             .expect("after 1970")
             .as_nanos();
         let dir = std::env::temp_dir().join(format!("meridian-check-{label}-{unique}"));
-        crate::plugin::scaffold(NAME, &dir).expect("the template scaffolds");
+        crate::plugin::scaffold(NAME, &dir, None).expect("the template scaffolds");
         Scaffolded(dir)
+    }
+
+    /// A plugin `meridian plugin new --role <role>` wrote.
+    fn of_role(label: &str, role: &str) -> Self {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("after 1970")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("meridian-check-{label}-{unique}"));
+        crate::plugin::scaffold(NAME, &dir, Some(role)).expect("the role's template scaffolds");
+        Scaffolded(dir)
+    }
+
+    /// Checked as a verified plugin is (`--verified`).
+    fn check_verified(&self) -> Report {
+        check_as(&self.0, false, true).expect("a directory")
     }
 
     /// The same, its test replaced by one that needs no SDK to run.
@@ -126,6 +142,75 @@ fn a_freshly_scaffolded_plugin_with_a_test_keeps_every_rule() {
         said.contains("--    tests-pass") && said.contains("--run-tests runs them"),
         "{said}"
     );
+    assert!(
+        said.contains("--    role-suite") && said.contains("--verified holds it"),
+        "{said}"
+    );
+}
+
+// ── role-suite (contract v11, and the dgm suite from v18) ────────────────
+
+#[test]
+fn a_custody_plugin_from_the_template_keeps_every_rule_and_a_verified_one_runs_its_suite() {
+    // The tutorial's plugin: the reference plugin given `custody`, recording a
+    // statement no vendor sent. It is not verified for custody, and that
+    // breaks no rule; checked as verified, it must run the suite.
+    let plugin = Scaffolded::tested("custody-fresh");
+    plugin.replace("pyproject.toml", "roles = []", "roles = [\"custody\"]");
+    let report = plugin.check();
+    assert!(report.passed(), "{}", text(&report));
+    assert!(report
+        .outcomes
+        .iter()
+        .any(|(id, _, outcome)| *id == "role-suite" && *outcome == Outcome::Skipped));
+
+    let verified = plugin.check_verified();
+    assert_eq!(
+        failed_rules(&verified),
+        ["role-suite"],
+        "{}",
+        text(&verified)
+    );
+    let failure = &verified.failures[0];
+    assert_eq!(
+        (failure.found.as_str(), failure.file.as_str(), failure.line),
+        (
+            "it holds `custody`, and no test runs the custody suite",
+            "tests/",
+            0
+        )
+    );
+    assert!(failure
+        .instead
+        .contains("meridian.suites.run(\"custody\", producers)"));
+}
+
+#[test]
+fn each_roles_template_keeps_every_rule_verified_or_not() {
+    for role in ["dgm", "reporting"] {
+        let plugin = Scaffolded::of_role(role, role);
+        for report in [plugin.check(), plugin.check_verified()] {
+            assert!(report.passed(), "{role}: {}", text(&report));
+        }
+    }
+}
+
+#[test]
+fn a_verified_dgm_runs_the_dgm_suite_in_its_tests() {
+    let plugin = Scaffolded::of_role("dgm-no-suite", "dgm");
+    std::fs::remove_file(plugin.path("tests/test_suite.py")).unwrap();
+    assert!(plugin.check().passed(), "not verified, it keeps every rule");
+    let verified = plugin.check_verified();
+    assert_eq!(
+        failed_rules(&verified),
+        ["role-suite"],
+        "{}",
+        text(&verified)
+    );
+    assert_eq!(
+        verified.failures[0].found,
+        "it holds `dgm`, and no test runs the dgm suite"
+    );
 }
 
 #[test]
@@ -156,7 +241,7 @@ DASHBOARD = os.environ.get("MERIDIAN_HARNESS_DASHBOARD", "http://dashboard:8080"
 #[test]
 fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
     type Breaking = fn(&Scaffolded) -> (String, usize);
-    let breakages: [(&str, Breaking, &str); 17] = [
+    let breakages: [(&str, Breaking, &str); 16] = [
         (
             "template-shape",
             |p| {
@@ -168,10 +253,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.21.0", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.22.0", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.21.0",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.22.0",
         ),
         (
             "tool-meridian",
@@ -211,14 +296,6 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
                 (format!("src/{MODULE}/declaration.py"), 4)
             },
             "the declaration asks for storage, and the plugin holds no edge role",
-        ),
-        (
-            "role-suite",
-            |p| {
-                p.replace("pyproject.toml", "roles = []", "roles = [\"custody\"]");
-                ("tests/".into(), 0)
-            },
-            "it holds `custody`, and no test runs the custody suite",
         ),
         (
             "kit-linked",
@@ -392,7 +469,9 @@ fn a_plugin_breaking_every_rule_is_told_each_with_its_place_and_its_fix() {
     );
     plugin.replace(&page_py(), "    params=OpenStatement,\n", "");
 
-    let report = plugin.check();
+    // As a verified plugin is checked, so the rules only --verified holds are
+    // among them.
+    let report = plugin.check_verified();
     let mut failed = failed_rules(&report);
     failed.sort();
     let mut every: Vec<&str> = RULES.iter().map(|rule| rule.id).collect();
@@ -706,7 +785,7 @@ fn a_custody_plugin_running_its_suite_and_asking_for_storage_keeps_both_rules() 
         "from meridian.suites import run\n\n\ndef test_custody():\n    \
          report = run(\"custody\", {})\n    assert report.passed\n",
     );
-    let report = plugin.check();
+    let report = plugin.check_verified();
     assert_eq!(
         failed_rules(&report),
         Vec::<&str>::new(),
