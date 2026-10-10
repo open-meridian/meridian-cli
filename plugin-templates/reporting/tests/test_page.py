@@ -13,6 +13,7 @@ level, no account data under Manage, and what each figure is computed from.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
@@ -132,6 +133,31 @@ def test_closes_values_each_position_at_its_close_for_the_accounts_she_may_read(
     assert "<td>1431.27</td><td>dgm-1:daily</td>" in page
     # ACC-9 is in the plugin's scope, not hers.
     assert "ACC-9" not in page
+
+
+def test_an_agent_reads_the_report_through_its_tool_at_each_level_of_the_page() -> None:
+    # The same rows as the page, for an agent the person delegated to: under
+    # Open and under View, and refused under Manage, as the page is.
+    yesterday = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+    for level in ("write", "read"):
+        answered = client().call_tool("read_report", level=level)
+        assert answered.outcome == "unchanged", answered
+        assert answered.data == {
+            "business_date": yesterday,
+            "rows": [
+                {
+                    "account": "ACC-1",
+                    "instrument": "LCL-1",
+                    "quantity": "10",
+                    "close": "62431.27",
+                    "currency": "USD",
+                    "dataset": "dgm-1:daily",
+                    "value": "624312.70",
+                    "week": "1431.27",
+                }
+            ],
+        }
+    assert client().call_tool("read_report", level="admin").outcome == "refused"
 
 
 def test_manage_shows_what_it_may_read_and_no_accounts_data() -> None:

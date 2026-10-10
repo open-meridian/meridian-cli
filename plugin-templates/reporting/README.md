@@ -32,8 +32,9 @@ and the prices and bars the lake records, heard. Every figure stays a
 
 Its pages: Closes under Open (`write`) and View (`read`), each position in
 the accounts the person may read, its close, the dataset it came from, the
-value it makes and the change over the week; and Datasets under Manage
-(`admin`), what it may read, with no account's data. They are built on Open
+value it makes and the change over the week, also a read tool for an agent
+the person delegates to, `read_report`, answering the same rows; and Datasets
+under Manage (`admin`), what it may read, with no account's data. They are built on Open
 Meridian's plugin UI kit, which the dashboard serves on the plugin's own host
 at `/.meridian/ui/`.
 

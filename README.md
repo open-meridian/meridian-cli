@@ -372,7 +372,8 @@ bars into the lake, its catalogue declared from code, every price parsed from
 the vendor's text as a `Decimal`, with Connection and Datasets pages under
 Manage and their read tools, `read_connection` and `read_datasets`; replace
 the vendor with your own. The `reporting` plugin values the book's positions
-at the last close from the lake, and records nothing. A role with no template
+at the last close from the lake, and records nothing; its Closes page is a
+read tool too, `read_report`. A role with no template
 of its own is refused: the reference plugin takes any role in its
 `pyproject.toml`.
 

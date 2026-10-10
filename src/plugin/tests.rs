@@ -122,6 +122,10 @@ fn a_roles_template_is_a_plugin_holding_the_role_under_its_own_name() {
     scaffold("prices", &into, Some("dgm")).expect("scaffolded");
     let page = std::fs::read_to_string(into.join("src/prices/page.py")).expect("written");
     assert!(page.contains("name=\"read_connection\"") && page.contains("name=\"read_datasets\""));
+    let into = scratch.0.join("report");
+    scaffold("report", &into, Some("reporting")).expect("scaffolded");
+    let page = std::fs::read_to_string(into.join("src/report/page.py")).expect("written");
+    assert!(page.contains("name=\"read_report\""), "{page}");
 }
 
 #[test]
