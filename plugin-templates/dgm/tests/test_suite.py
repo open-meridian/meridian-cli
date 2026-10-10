@@ -90,6 +90,37 @@ def wanted(symbol: str | None) -> Producer:
     return produce
 
 
+async def elsewhere(recorder: Recorder) -> None:
+    """The lake wanting a close for an instrument another source resolved --
+    a custodian's QQQ, known by its symbol and a CUSIP -- which this plugin
+    never resolved: it reads the record and serves its own symbol."""
+    plugin = converter(recorder)
+    subject = "LCL-HELD-ELSEWHERE"
+    recorder.answer(
+        "ResolveInstrument",
+        lambda _: ops.ResolveInstrumentResult(
+            found=True,
+            instrument=ops.InstrumentRecord(
+                instrument_id=subject,
+                identifiers=[
+                    ops.Identifier(scheme="cusip", value="46090E103"),
+                    ops.Identifier(scheme="symbol", value="QQQ", source="custodian"),
+                ],
+            ),
+        ),
+    )
+    want = ops.ObservationsWantedEvent(
+        want_id="WNT-1",
+        dataset=f"{INSTANCE}:daily",
+        data_type="meridian.v1.Price",
+        subjects=[ops.SubjectRef(entity_id=subject)],
+        kinds=[ops.PRICE_KIND_CLOSE],
+        business_date="2026-10-08",
+    )
+    recorder.answer("ObservationsWanted", lambda _: want)
+    await recorder.receive(observations_wanted=plugin.on_want)
+
+
 async def withdrawn(recorder: Recorder) -> None:
     plugin = converter(recorder)
     recorder.answer(
@@ -110,6 +141,7 @@ PRODUCERS: dict[str, Producer] = {
     "a-venue-resolved": daily("QQQ"),
     "a-venue-not-held": venue_not_held,
     "a-want-recorded-against": wanted("BTC-USD"),
+    "a-subject-another-source-resolved": elsewhere,
     "a-subject-declined": wanted(None),
     "a-standing-want-withdrawn": withdrawn,
 }

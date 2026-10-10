@@ -51,6 +51,16 @@ def _ns(moment: datetime) -> int:
     return int(moment.timestamp()) * NS + moment.microsecond * 1_000
 
 
+def _as_of(want: ops.ObservationsWantedEvent) -> int:
+    """The moment a want asks about, to read a record as of (W3.6): its
+    valid time, else the start of its business date, else now."""
+    if want.valid_from_ns:
+        return int(want.valid_from_ns)
+    if want.business_date:
+        return _ns(datetime.fromisoformat(want.business_date).replace(tzinfo=UTC))
+    return _ns(datetime.now(UTC))
+
+
 @dataclass
 class Converter:
     """The plugin's conversion, against whatever operations it is given: the
@@ -112,6 +122,28 @@ class Converter:
             instrument = await self.instrument(str(parse(text)["base"]), as_of_ns)
             if instrument:
                 self.products[instrument] = symbol
+
+    async def symbol_for(self, instrument: str, as_of_ns: int) -> str | None:
+        """The vendor's symbol for an instrument a want names. One this
+        plugin resolved is in `products`; one another source resolved -- a
+        custodian's, say -- is read from its record (W3.6) and matched by a
+        symbol in it to one the vendor serves, then kept. None where nothing
+        in the record is one the vendor serves."""
+        known = self.products.get(instrument)
+        if known is not None:
+            return known
+        found = await self.plugin.resolve_instrument(
+            instrument_id=instrument, as_of_ns=as_of_ns
+        )
+        if not found.found:
+            return None
+        named = {i.value for i in found.instrument.identifiers if i.scheme == "symbol"}
+        for symbol in self.vendor.entitled:
+            text = self.vendor.daily(symbol)
+            if text is not None and str(parse(text)["base"]) in named:
+                self.products[instrument] = symbol
+                return symbol
+        return None
 
     # ── Converting ──────────────────────────────────────────────────────
 
@@ -201,8 +233,9 @@ class Converter:
         prices: list[meridian.Price] = []
         bars: list[meridian.Bar] = []
         declined = []
+        as_of_ns = _as_of(want)
         for subject in want.subjects:
-            symbol = self.products.get(subject.entity_id)
+            symbol = await self.symbol_for(subject.entity_id, as_of_ns)
             text = self.vendor.daily(symbol) if symbol else None
             if symbol is None or text is None:
                 declined.append(subject)
