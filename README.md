@@ -536,7 +536,7 @@ published from a push to `main`. `plugin new`'s templates are vendored from
 meridian-python's `template/` and `templates/` at a pinned commit (`make vendor-template`;
 `check-vendored-template` fails when it drifts), so a release carries the SDK
 version the new plugin pins: 0.20.0 from 0.1.35, 0.21.0 from 0.1.36, 0.22.0
-(contract v18) from the release after it, with the `dgm` and `reporting`
+(contract v18) from 0.1.37, with the `dgm` and `reporting`
 templates from `templates/`.
 
 ## Licence
