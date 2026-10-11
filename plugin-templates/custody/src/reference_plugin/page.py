@@ -105,7 +105,42 @@ class Link:
     account_id: str
 
 
-@pages.route("/links", levels="admin", methods=["POST"], params=Link, name="link_account")
+@pages.route(
+    "/links/check",
+    levels="admin",
+    methods=["POST"],
+    params=Link,
+    answers=custody.LinkRead,
+    reads=True,
+    name="check_link_account",
+)
+async def check_link_account(request: meridian.Request) -> meridian.Response:
+    """Check a link without making it: the external account is one the
+    custodian reaches, and the account is one granted to this plugin."""
+    link: Link = request.params
+    if link.external_account_id not in {a.external_account_id for a in _custodian().accounts}:
+        pages.refuse(
+            "the custodian reaches no such account", ("external_account_id", "not reached")
+        )
+    granted = await request.plugin.read_accounts_for_linking(acting_for=request.caller.header)
+    names = {each.account_id: each.name for each in granted.accounts}
+    if link.account_id not in names:
+        pages.refuse("the account is not granted to this plugin", ("account_id", "not granted"))
+    return pages.answer(
+        "account_links.html",
+        custody.LinkRead(link.external_account_id, link.account_id, names[link.account_id]),
+    )
+
+
+@pages.route(
+    "/links",
+    levels="admin",
+    methods=["POST"],
+    params=Link,
+    name="link_account",
+    checked_by="check_link_account",
+    accounts=["account_id"],
+)
 async def link_account(request: meridian.Request) -> meridian.Response:
     """Link one external account to one of the accounts granted to this
     plugin (W6.4); one not granted is refused."""

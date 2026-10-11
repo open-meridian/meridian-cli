@@ -95,9 +95,9 @@ RUN shellcheck --shell=bash /w/authority-macos/run.sh /w/authority-macos/securit
 
 # Each scaffold `meridian plugin new` writes, made by the release binary and
 # held to `plugin check --run-tests` with its tests run for real
-# (tests/scaffolds): the reference plugin, it given custody, the data,
-# custody, operations and reporting templates, the data and reporting ones
-# with their suites, and the data template with a float in its price path
+# (tests/scaffolds): the reference plugin, it given custody, the custody,
+# data, operations and reporting templates, the custody, data and reporting
+# ones with their suites, and the data template with a float in its price path
 # failing. The SDK they pin is installed from meridian-python at the
 # revision they are vendored from, as it is before its release reaches PyPI.
 FROM python:3.12-slim AS scaffolds

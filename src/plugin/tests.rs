@@ -109,10 +109,7 @@ fn a_roles_template_is_a_plugin_holding_the_role_under_its_own_name() {
                 "{role}"
             );
         } else {
-            assert!(
-                ["custody", "operations"].contains(&role),
-                "{role} runs no suite"
-            );
+            assert_eq!(role, "operations", "{role} runs no suite");
         }
         for file in every_file(&into) {
             let text = std::fs::read_to_string(into.join(&file)).expect("readable");

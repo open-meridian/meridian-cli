@@ -382,7 +382,7 @@ by a symbol in it; its tests run the data suite, its cases about trades and
 quotes, which its daily dataset never publishes, marked not presented, with
 why. Replace the vendor with your own. The `custody` plugin brings a stand-in
 custodian's accounts and statements in, on the role's Connections, Account
-links and Statements pages. The `operations` plugin keeps opening balances,
+links, Statements and History pages, its tests running the custody suite. The `operations` plugin keeps opening balances,
 reconciliation and breaks, on the role's Breaks, Reconciliations and Opening
 balances pages, its confirmation checked by a read tool so an agent may
 prepare it for a person. The `reporting` plugin values the book's positions

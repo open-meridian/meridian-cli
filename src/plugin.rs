@@ -155,8 +155,8 @@ const DATA: [(&str, &str); 19] = [
 
 /// The `custody` template, as it sits in `plugin-templates/custody/`: a
 /// custodian's accounts and statements brought in, on the custody role's
-/// common pages, Connections, Account links and Statements, with their tools.
-const CUSTODY: [(&str, &str); 19] = [
+/// common pages with their tools, and its tests running the suite.
+const CUSTODY: [(&str, &str); 21] = [
     (
         "AGENTS.md",
         include_str!("../plugin-templates/custody/AGENTS.md"),
@@ -198,6 +198,10 @@ const CUSTODY: [(&str, &str); 19] = [
         include_str!("../plugin-templates/custody/src/reference_plugin/__main__.py"),
     ),
     (
+        "src/reference_plugin/convert.py",
+        include_str!("../plugin-templates/custody/src/reference_plugin/convert.py"),
+    ),
+    (
         "src/reference_plugin/custodian.py",
         include_str!("../plugin-templates/custody/src/reference_plugin/custodian.py"),
     ),
@@ -230,6 +234,10 @@ const CUSTODY: [(&str, &str); 19] = [
     (
         "tests/test_page.py",
         include_str!("../plugin-templates/custody/tests/test_page.py"),
+    ),
+    (
+        "tests/test_suite.py",
+        include_str!("../plugin-templates/custody/tests/test_suite.py"),
     ),
     (
         ".github/workflows/check.yaml",

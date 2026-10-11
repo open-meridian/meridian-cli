@@ -205,32 +205,13 @@ fn a_custody_plugin_from_the_template_keeps_every_rule_and_a_verified_one_runs_i
 
 #[test]
 fn each_roles_template_keeps_every_rule_verified_or_not() {
-    for role in ["data", "operations", "reporting"] {
+    for role in ["custody", "data", "operations", "reporting"] {
         let plugin = Scaffolded::of_role(role, role);
         for report in [plugin.check(), plugin.check_verified()] {
             assert!(report.passed(), "{role}: {}", text(&report));
             assert!(report.advice.is_empty(), "{role}: {}", text(&report));
         }
     }
-    // The custody template keeps the role's common pages; its tests run no
-    // custody suite and its link names no check tool (SDK 0.24.0), so
-    // verified it fails those, and is advised of the second meanwhile.
-    let plugin = Scaffolded::of_role("custody", "custody");
-    let report = plugin.check();
-    assert!(report.passed(), "{}", text(&report));
-    let advised: Vec<&str> = report
-        .advice
-        .iter()
-        .map(|advice| advice.found.as_str())
-        .collect();
-    assert_eq!(
-        advised,
-        ["/links is an act and names no check tool, so an agent cannot prepare it"]
-    );
-    assert_eq!(
-        failed_rules(&plugin.check_verified()),
-        ["role-suite", "role-pages"]
-    );
 }
 
 #[test]
@@ -541,6 +522,7 @@ fn a_custody_plugin_links_by_the_roles_act() {
         "name=\"link_account\"",
         "name=\"connect_account\"",
     );
+    plugin.replace(&page_py(), "    checked_by=\"check_link_account\",\n", "");
     let found: Vec<String> = plugin
         .check_verified()
         .failures
@@ -645,10 +627,16 @@ fn a_secret_declared_as_a_settings_field_is_kept_too() {
 
 #[test]
 fn every_act_names_its_check_tool_whatever_roles_the_plugin_holds() {
-    // The reference plugin's two acts name none (SDK 0.24.0): advised, and
-    // failed when verified, with no role's common part asked of it.
+    // The reference plugin's two acts, their check tools taken away: advised,
+    // and failed when verified, with no role's common part asked of it.
     for roles in ["[]", "[\"signal\"]", "[\"oms\"]"] {
         let plugin = Scaffolded::tested("acts");
+        assert!(
+            plugin.check_verified().passed(),
+            "{roles}: the template's acts are checked"
+        );
+        plugin.replace(&page_py(), "    checked_by=\"check_link_account\",\n", "");
+        plugin.replace(&page_py(), "    checked_by=\"check_open_statement\",\n", "");
         plugin.replace("pyproject.toml", "roles = []", &format!("roles = {roles}"));
         let verified = plugin.check_verified();
         assert_eq!(
@@ -684,20 +672,8 @@ fn every_act_names_its_check_tool_whatever_roles_the_plugin_holds() {
     let plugin = Scaffolded::tested("acts-checked");
     plugin.replace(
         &page_py(),
-        "    name=\"link_account\",\n",
-        "    name=\"link_account\",\n    checked_by=\"check_link\",\n",
-    );
-    plugin.replace(
-        &page_py(),
-        "    name=\"open_statement\",\n",
-        "    name=\"open_statement\",\n    checked_by=\"check_statement\",\n",
-    );
-    plugin.write(
-        &format!("src/{MODULE}/checks.py"),
-        &routes_page(
-            "@pages.route(\"/link/check\", levels=\"admin\", methods=[\"POST\"], params=LinkAccount, reads=True, name=\"check_link\")\n\
-             async def check_link(request): ...\n",
-        ),
+        "    checked_by=\"check_open_statement\",\n",
+        "    checked_by=\"check_statement\",\n",
     );
     let found: Vec<String> = plugin
         .check_verified()
@@ -905,10 +881,14 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "tools-cover-routes",
             |p| {
-                p.replace(&page_py(), "    params=OpenStatement,\n", "");
+                p.replace(
+                    &page_py(),
+                    "    params=OpenStatement,\n    name=\"open_statement\",",
+                    "    name=\"open_statement\",",
+                );
                 let text = p.read(&page_py());
                 let at = text
-                    .find("@pages.route(\n    \"/statement\"")
+                    .find("@pages.route(\n    \"/statement\",\n")
                     .expect("the template's statement route");
                 (page_py(), text[..at].matches('\n').count() + 1)
             },
@@ -1446,6 +1426,18 @@ fn two_roles(label: &str) -> Scaffolded {
         "    \"/link\",\n    levels=\"admin\",",
         "    \"/link\",\n    levels=\"admin\",\n    roles=[\"custody\"],",
     );
+    for check in ["/link/check", "/statement/check"] {
+        let level = if check == "/link/check" {
+            "admin"
+        } else {
+            "write"
+        };
+        plugin.replace(
+            &page_py(),
+            &format!("    \"{check}\",\n    levels=\"{level}\","),
+            &format!("    \"{check}\",\n    levels=\"{level}\",\n    roles=[\"custody\"],"),
+        );
+    }
     plugin.write(
         &format!("src/{MODULE}/balances.py"),
         "import meridian\n\n\
@@ -1528,8 +1520,8 @@ fn a_route_sending_a_command_none_of_its_roles_holds_fails_naming_those_that_do(
     let plugin = two_roles("roles-command");
     plugin.replace(
         &page_py(),
-        "    levels=\"write\",\n    roles=[\"custody\"],",
-        "    levels=\"write\",\n    roles=[\"operations\"],",
+        "    \"/statement\",\n    levels=\"write\",\n    roles=[\"custody\"],",
+        "    \"/statement\",\n    levels=\"write\",\n    roles=[\"operations\"],",
     );
     let report = plugin.check();
     assert_eq!(

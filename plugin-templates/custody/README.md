@@ -21,6 +21,12 @@ yet" states:
   reported; `read_account_activities`. A plugin keeping raw records adds
   **Raw records** from `meridian/roles/custody/raw_records.html`.
 
+Its conversion (`convert.py`) puts what the custodian says into the
+deployment in the contract's words, and its tests hold it to every one of
+the custody suite's 42 cases (`tests/test_suite.py`), each mapped to one of
+the custodian's responses. Each act names its check tool, so an agent may
+prepare it: linking is checked by `check_link_account`.
+
 Add the custodian's nuance only at the role templates' blocks
 (`vendor_notices`, `vendor_rows`, `vendor_columns`, `vendor_sections`),
 never by renaming, reordering or dropping a common item.

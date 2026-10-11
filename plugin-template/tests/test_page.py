@@ -289,3 +289,23 @@ def test_a_request_the_sidecar_did_not_forward_is_turned_away() -> None:
     with served(Sidecar()) as address:
         assert ask(address, "/", header=None) == 401
         assert ask(address, "/", caller_header("read")) == 200
+
+
+def test_each_act_names_a_check_tool_so_it_can_be_prepared() -> None:
+    # Contract v20: an agent may prepare a change for the person to make; the
+    # plugin makes each act preparable by its check, which changes nothing.
+    tools = {tool.name: tool.declared() for tool in client().pages.tools}
+    assert tools["link_account"].checked_by == "check_link_account"
+    assert list(tools["link_account"].accounts) == ["account_id"]
+    assert tools["link_account"].made_on == "/setup"
+    assert tools["open_statement"].checked_by == "check_open_statement"
+    assert tools["open_statement"].made_on == "/"
+    sidecar = Sidecar()
+    checked = client(sidecar).call_tool("check_open_statement")
+    assert checked.outcome == "unchanged" and sidecar.sent == []
+    refused = client(Sidecar(links=())).call_tool("check_open_statement")
+    assert refused.outcome == "refused"
+    not_granted = client(Sidecar(links=())).call_tool(
+        "check_link_account", {"external_account_id": "reference-1", "account_id": "ACC-9"}
+    )
+    assert not_granted.outcome == "refused" and not_granted.paths == ["account_id"]

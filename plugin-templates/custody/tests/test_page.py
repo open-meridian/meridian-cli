@@ -88,3 +88,17 @@ def test_history_shows_the_activity_of_the_linked_accounts_the_person_may_read()
     assert "<h2>History</h2>" in page and "<strong>Main</strong>" in page
     answered = client().call_tool("read_account_activities")
     assert [each["account"] for each in answered.data["activities"]] == ["Main"]
+
+
+def test_linking_names_its_check_which_refuses_an_account_not_granted() -> None:
+    tool = client().tool("link_account").declared()
+    assert tool.checked_by == "check_link_account" and tool.made_on == "/links"
+    granted = Sidecar(granted=[ops.AccountRecord(account_id="ACC-1", name="Main")])
+    checked = client(granted).call_tool(
+        "check_link_account", {"external_account_id": "REF-1002", "account_id": "ACC-1"}
+    )
+    assert checked.outcome == "unchanged" and checked.data["account_name"] == "Main"
+    refused = client(granted).call_tool(
+        "check_link_account", {"external_account_id": "REF-1002", "account_id": "ACC-9"}
+    )
+    assert refused.outcome == "refused" and refused.paths == ["account_id"]

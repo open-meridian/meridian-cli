@@ -187,12 +187,44 @@ class Linked:
 
 
 @pages.route(
+    "/link/check",
+    levels="admin",
+    methods=["POST"],
+    params=LinkAccount,
+    answers=Linked,
+    reads=True,
+    name="check_link_account",
+    description="Check a link without making it: the external account is one this plugin "
+    "reaches, and the account one it may link to.",
+)
+async def check_link_account(request: meridian.Request) -> meridian.Response:
+    asked = request.params
+    if asked.external_account_id not in {a.external_account_id for a in REACHES}:
+        pages.refuse(
+            "this plugin reaches no such external account",
+            ("external_account_id", "not reached"),
+        )
+    if asked.account_id:
+        granted = await request.plugin.read_accounts_for_linking(
+            acting_for=request.caller.header
+        )
+        if asked.account_id not in {each.account_id for each in granted.accounts}:
+            pages.refuse(
+                "this plugin may not link to the account", ("account_id", "not granted")
+            )
+    return pages.answer("setup.html", Linked(asked.external_account_id, asked.account_id))
+
+
+@pages.route(
     "/link",
     levels="admin",
     methods=["POST"],
     params=LinkAccount,
     name="link_account",
     description="Link an external account this plugin reaches to one of the deployment's.",
+    checked_by="check_link_account",
+    accounts=["account_id"],
+    made_on="/setup",
 )
 async def link(request: meridian.Request) -> meridian.Response | str:
     # Sent for the admin viewing Setup: the sidecar admits it only in a
@@ -257,12 +289,32 @@ class Opened:
 
 
 @pages.route(
+    "/statement/check",
+    levels="write",
+    methods=["POST"],
+    params=OpenStatement,
+    answers=Linked,
+    reads=True,
+    name="check_open_statement",
+    description="Check opening a statement without opening it: the linked account it "
+    "would be for.",
+)
+async def check_open_statement(request: meridian.Request) -> meridian.Response:
+    linked = _for(await scope(request.plugin), request.caller)
+    if linked is None:
+        pages.refuse(LINK_FIRST, reason="not_linked")
+    return pages.answer("accounts.html", Linked(linked.external_account_id, linked.account_id))
+
+
+@pages.route(
     "/statement",
     levels="write",
     methods=["POST"],
     params=OpenStatement,
     name="open_statement",
     description="Open an empty holdings statement, for the person.",
+    checked_by="check_open_statement",
+    made_on="/",
 )
 async def statement(request: meridian.Request) -> meridian.Response | str:
     # For a linked external account, which names the account it is for. The
