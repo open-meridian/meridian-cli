@@ -44,6 +44,13 @@ time = { version = "0.3", default-features = false, features = ["std"] }
 # The root's SHA-1, which is how macOS's `security` names a certificate to
 # delete. RustCrypto's, beside sha2.
 sha1 = "0.10"
+# `meridian backup key` and `meridian restore` (task
+# kernel/a-deployment-is-backed-up-and-restored): a backup is a tar sealed with
+# age to the administrator's recipient, in the cluster by the age tool in the
+# backup image, opened here. Pure Rust; never in the runtime (the product
+# owner, 2026-10-11: no third-party dependency in the kernel).
+age = { version = "0.11", default-features = false }
+tar = { version = "0.4", default-features = false }
 
 [dev-dependencies]
 # test-util: a paused clock, so a wait of minutes is tested in no time.

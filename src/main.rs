@@ -5,6 +5,7 @@
 //! convenient is possible without it (spec/the-cli, requirement 16).
 
 mod authority;
+mod backup;
 mod catalogue;
 mod check;
 mod connect;
@@ -68,6 +69,13 @@ meridian -- bringing a Meridian deployment up
                              Claude app reads. Asked first; the install script runs it
   meridian authority remove  take it out of the login keychain and apps' environment,
                              and off this machine
+  meridian backup            back the deployment up now, as its schedule does: its keys,
+                             credentials, values and the database it brought, sealed to
+                             backup.recipient; --to <dir> copies the file here too
+  meridian backup key        make the identity backups are sealed with, and print its
+                             public half, for backup.recipient
+  meridian restore <file> --identity <file>
+                             restore a backup into a namespace holding no deployment
   meridian uninstall         revoke every delegation this holds, and remove it
   meridian --version         which release this is
 
@@ -211,6 +219,27 @@ uninstall:
 authority remove:
       --yes                 remove without being asked
 
+backup: runs the deployment's backup CronJob once (set backup.recipient and
+backup.path or backup.existingClaim first), and says what it wrote
+      --release <name>      the Helm release (default: meridian)
+      --to <dir>            copy the file to this directory here as well, its hash checked
+      --timeout <d>         how long to wait for it (default: 10m)
+
+backup key: needs no deployment
+      --to <file>           where to write the identity (default: ./meridian-backup-identity.txt).
+                            Never over a file already there. Keep it off the cluster:
+                            a backup opens with it alone
+
+restore: only into a namespace without the release and without the backup's Secrets.
+The database's URL is withheld until the database is restored and every table's row
+count matches the backup's; then the components start
+      --identity <file>     the identity the backup was sealed to (required)
+  -n, --namespace <name>    where to restore it (default: where it was taken)
+      --release <name>      must be the backup's own release, which it defaults to
+      --chart <ref>         the chart to install (default: the published one)
+      --chart-version <v>   which version (default: the one the backup was taken on)
+      --timeout <d>         how long to wait for each step (default: 15m)
+
 connect:
   <address> is the dashboard's: https://<host>, or http://127.0.0.1:<port> for a
   local one. The sign-in opens in your browser; this never takes a password.
@@ -225,7 +254,8 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 24] = [
+const TAKES_A_VALUE: [&str; 25] = [
+    "--identity",
     "--into",
     "--role",
     "--since",
@@ -287,7 +317,7 @@ fn parse(said: Vec<String>) -> Result<Arguments, String> {
             // rather than ignored, as it always was.
             if matches!(
                 command.as_str(),
-                "plugin" | "connect" | "sign-out" | "authority"
+                "plugin" | "connect" | "sign-out" | "authority" | "backup" | "restore"
             ) {
                 words.push(argument);
                 continue;
@@ -414,6 +444,8 @@ async fn main() {
         }
         "uninstall" => std::process::exit(uninstall_command(&arguments).await),
         "authority" => std::process::exit(authority_command(&arguments)),
+        "backup" => std::process::exit(backup_command(&arguments, &intended.namespace).await),
+        "restore" => std::process::exit(restore_command(&arguments).await),
         "--version" | "version" => println!("{}", release::version_line()),
         "-h" | "--help" | "help" | "" => print!("{USAGE}"),
         other => {
@@ -1105,6 +1137,116 @@ async fn down_command(arguments: &Arguments, namespace: &str) -> i32 {
         }
         Err(refusal) => {
             eprintln!("meridian down: {refusal}");
+            1
+        }
+    }
+}
+
+/// `meridian backup`, once and now, and `meridian backup key` (task
+/// kernel/a-deployment-is-backed-up-and-restored).
+async fn backup_command(arguments: &Arguments, namespace: &str) -> i32 {
+    match arguments.words.as_slice() {
+        [word] if word == "key" => {
+            let to = arguments
+                .value("--to", "--to")
+                .unwrap_or(backup::IDENTITY_FILE);
+            let now = time::OffsetDateTime::now_utc().to_string();
+            match backup::write_identity(std::path::Path::new(to), &now) {
+                Ok(recipient) => {
+                    println!(
+                        "Wrote the identity to {to}, readable by you alone. Keep it off the cluster, \
+                         and where a reset of this machine does not reach: a backup opens with it \
+                         and nothing else.\n\nIts public half, for backup.recipient:\n  {recipient}"
+                    );
+                    0
+                }
+                Err(refusal) => {
+                    eprintln!("meridian backup key: {refusal}");
+                    1
+                }
+            }
+        }
+        [] => {
+            let timeout = arguments.value("--timeout", "--timeout").unwrap_or("10m");
+            let Some(timeout) = upgrade_deployment::duration(timeout) else {
+                eprintln!("meridian backup: --timeout takes a duration as Helm writes one: 10m, 90s, 1h30m");
+                return 2;
+            };
+            let asked = backup::Take {
+                release: arguments
+                    .value("--release", "--release")
+                    .unwrap_or("meridian")
+                    .into(),
+                namespace: namespace.into(),
+                to: arguments
+                    .value("--to", "--to")
+                    .map(std::path::PathBuf::from),
+                timeout,
+            };
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_secs())
+                .unwrap_or_default();
+            match backup::take(&asked, now).await {
+                Ok(said) => {
+                    print!("{said}");
+                    0
+                }
+                Err(refusal) => {
+                    eprintln!("meridian backup: {refusal}");
+                    1
+                }
+            }
+        }
+        _ => {
+            eprintln!("meridian backup: takes `key` or nothing\n\n{USAGE}");
+            2
+        }
+    }
+}
+
+/// `meridian restore <file> --identity <file>`.
+async fn restore_command(arguments: &Arguments) -> i32 {
+    let [file] = arguments.words.as_slice() else {
+        eprintln!("meridian restore: name one backup file\n\n{USAGE}");
+        return 2;
+    };
+    let Some(identity) = arguments.value("--identity", "--identity") else {
+        eprintln!(
+            "meridian restore: --identity <file> names the identity the backup was sealed to, \
+             which `meridian backup key` wrote"
+        );
+        return 2;
+    };
+    let timeout = arguments.value("--timeout", "--timeout").unwrap_or("15m");
+    let Some(timeout) = upgrade_deployment::duration(timeout) else {
+        eprintln!(
+            "meridian restore: --timeout takes a duration as Helm writes one: 10m, 90s, 1h30m"
+        );
+        return 2;
+    };
+    let asked = backup::Restore {
+        file: file.into(),
+        identity: identity.into(),
+        namespace: arguments.value("--namespace", "-n").map(String::from),
+        release: arguments.value("--release", "--release").map(String::from),
+        chart: arguments
+            .value("--chart", "--chart")
+            .unwrap_or(backup::PUBLISHED_CHART)
+            .into(),
+        chart_version: arguments
+            .value("--chart-version", "--chart-version")
+            .map(String::from),
+        timeout,
+    };
+    let mut step = |said: &str| eprintln!("  {said}");
+    match backup::restore(&asked, &mut step).await {
+        Ok(report) => {
+            print!("{report}");
+            0
+        }
+        Err(refusal) => {
+            eprintln!("meridian restore: {refusal}");
             1
         }
     }
