@@ -81,3 +81,10 @@ def test_an_agent_links_an_account_and_a_person_posts_the_same_form() -> None:
         "/links", "admin", {"external_account_id": "REF-1002", "account_id": "ACC-1"}
     )
     assert posted.status == 200 and "<om-account-map" in posted.text
+
+
+def test_history_shows_the_activity_of_the_linked_accounts_the_person_may_read() -> None:
+    page = client().get("/history", "read").text
+    assert "<h2>History</h2>" in page and "<strong>Main</strong>" in page
+    answered = client().call_tool("read_account_activities")
+    assert [each["account"] for each in answered.data["activities"]] == ["Main"]

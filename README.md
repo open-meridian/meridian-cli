@@ -431,10 +431,16 @@ settings' labels kept for them, `synthetic` declared as `sample_data`. What
 is held is only what is common: the data role's Connection and Datasets; a
 custody plugin's Account links and Statements and its `link_account`; an
 operations plugin's Breaks, Reconciliations and Opening balances and its
-`confirm_opening_balance`; a reporting plugin's `reporting_currency`. The
-rest the templates offer stays a candidate until a second plugin of the role
-needs it. Without `--verified` the same findings are printed as advice, and
-fail nothing.
+`confirm_opening_balance`; a reporting plugin's `reporting_currency`; and a
+custody plugin keeping raw records (a `RecordKind` declared) titles its page
+for them Raw records, under Open and View. The rest the templates offer stays
+a candidate until a second plugin of the role needs it. Whatever roles it
+holds, every act -- a route that changes something, offered to agents --
+names its check tool (`checked_by=`), a read route (`reads=True`) the plugin
+declares, so an agent may prepare the act for a person to make (contract
+v20). Without `--verified` the same findings are printed as advice, and fail
+nothing. `secrets-kept` reads a secret declared as a field of a class
+`@meridian.settings` makes, as it reads one declared by `Setting(...)`.
 
 From contract v12 a deployment serves one MCP surface, where an agent a
 person delegated to works as them, and a plugin's tools there are derived by

@@ -52,7 +52,7 @@ ci-mirror-check:
 # template from its templates/, copied to plugin-templates/ the same way. The
 # templates live beside the SDK they are written against and are tested there;
 # this copy is held to them the way the SDK's bindings are held to the schema.
-SDK_REV  := e5234c57baeb16dd29caa392609099a64116b10c
+SDK_REV  := d216e15975fac1b2e223a4528a06728cb799a134
 SDK_REPO := https://github.com/open-meridian/meridian-python.git
 SCRATCH  := .sdk-scratch
 
@@ -114,8 +114,9 @@ check-install:
 
 # Each scaffold `plugin new` writes, made by the release binary, its tests run
 # for real against the SDK it pins (installed from meridian-python at SDK_REV):
-# the reference plugin, it given custody (every rule, the role's common part as
-# advice; role-suite and role-pages failing only when verified), the data,
+# the reference plugin (verified, its acts with no check tool failing), it
+# given custody (every rule, the role's common part as advice; role-suite and
+# role-pages failing only when verified), the data,
 # custody, operations and reporting templates, the data and reporting ones
 # with their suites, and the data template with a float in its price path
 # failing. The check's own tests have no Python.

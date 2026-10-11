@@ -151,3 +151,34 @@ async def statements(request: meridian.Request) -> meridian.Response:
         said,
         what="This plugin brings a custodian's accounts into this deployment",
     )
+
+
+@pages.page(
+    "/history",
+    "History",
+    levels=["write", "read"],
+    answers=custody.HistoryRead,
+    name="read_account_activities",
+)
+async def history(request: meridian.Request) -> meridian.Response:
+    """The custodian's activity on each linked account the person may read,
+    as reported."""
+    linked = {link.external_account_id: link for link in _links()}
+    said = custody.HistoryRead(
+        activities=[
+            custody.ActivityRead(
+                account=linked[each.external_account_id].account_name or each.name,
+                kind="deposit",
+                trade_date=each.as_of,
+                description="Opening deposit",
+            )
+            for each in _custodian().accounts
+            if each.external_account_id in linked
+            and request.caller.may_read(linked[each.external_account_id].account_id)
+        ]
+    )
+    return pages.answer(
+        "history.html",
+        said,
+        what="This plugin brings a custodian's accounts into this deployment",
+    )

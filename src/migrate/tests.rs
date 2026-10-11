@@ -37,7 +37,8 @@ impl Plugin {
             .expect("after 1970")
             .as_nanos();
         let dir = std::env::temp_dir().join(format!("meridian-migrate-{label}-{unique}"));
-        crate::plugin::scaffold("migrated-plugin", &dir, Some(role)).expect("the template scaffolds");
+        crate::plugin::scaffold("migrated-plugin", &dir, Some(role))
+            .expect("the template scaffolds");
         let plugin = Plugin(dir);
         let current = sdk_pin(&PYTHON, &plugin.read("pyproject.toml")).expect("pinned");
         for file in ["pyproject.toml", "Dockerfile"] {

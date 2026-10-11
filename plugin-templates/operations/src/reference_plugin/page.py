@@ -47,7 +47,12 @@ async def breaks(request: meridian.Request) -> meridian.Response:
         if each.first_seen_date and date.fromisoformat(each.first_seen_date) + due < today
     ]
     said = operations.BreaksRead(open_breaks=len(mine), overdue_breaks=len(overdue))
-    return pages.answer("breaks.html", said, breaks=mine)
+    return pages.answer(
+        "breaks.html",
+        said,
+        breaks=mine,
+        last_reconciliation=str(running["last_reconciliation"]),
+    )
 
 
 @pages.page(

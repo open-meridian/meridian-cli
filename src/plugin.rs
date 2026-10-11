@@ -156,7 +156,7 @@ const DATA: [(&str, &str); 19] = [
 /// The `custody` template, as it sits in `plugin-templates/custody/`: a
 /// custodian's accounts and statements brought in, on the custody role's
 /// common pages, Connections, Account links and Statements, with their tools.
-const CUSTODY: [(&str, &str); 18] = [
+const CUSTODY: [(&str, &str); 19] = [
     (
         "AGENTS.md",
         include_str!("../plugin-templates/custody/AGENTS.md"),
@@ -211,11 +211,17 @@ const CUSTODY: [(&str, &str); 18] = [
     ),
     (
         "src/reference_plugin/templates/account_links.html",
-        include_str!("../plugin-templates/custody/src/reference_plugin/templates/account_links.html"),
+        include_str!(
+            "../plugin-templates/custody/src/reference_plugin/templates/account_links.html"
+        ),
     ),
     (
         "src/reference_plugin/templates/connections.html",
         include_str!("../plugin-templates/custody/src/reference_plugin/templates/connections.html"),
+    ),
+    (
+        "src/reference_plugin/templates/history.html",
+        include_str!("../plugin-templates/custody/src/reference_plugin/templates/history.html"),
     ),
     (
         "src/reference_plugin/templates/statements.html",
@@ -290,11 +296,15 @@ const OPERATIONS: [(&str, &str); 17] = [
     ),
     (
         "src/reference_plugin/templates/opening_balances.html",
-        include_str!("../plugin-templates/operations/src/reference_plugin/templates/opening_balances.html"),
+        include_str!(
+            "../plugin-templates/operations/src/reference_plugin/templates/opening_balances.html"
+        ),
     ),
     (
         "src/reference_plugin/templates/reconciliations.html",
-        include_str!("../plugin-templates/operations/src/reference_plugin/templates/reconciliations.html"),
+        include_str!(
+            "../plugin-templates/operations/src/reference_plugin/templates/reconciliations.html"
+        ),
     ),
     (
         "tests/test_page.py",
@@ -500,11 +510,8 @@ pub fn next_steps(name: &str, into: &Path, role: Option<&str>) -> String {
     };
     // A role's template that runs the role's suite in its tests says so: a
     // plugin holding the role is verified for it only by passing every case.
-    let with_suite = template(role).is_ok_and(|files| {
-        files
-            .iter()
-            .any(|(path, _)| *path == "tests/test_suite.py")
-    });
+    let with_suite = template(role)
+        .is_ok_and(|files| files.iter().any(|(path, _)| *path == "tests/test_suite.py"));
     let suite = match role.filter(|_| with_suite) {
         Some(role) => format!(
             "\nIts tests run the {role} suite, each case through its own code; hold it to\n\

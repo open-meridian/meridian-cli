@@ -167,7 +167,11 @@ fn a_custody_plugin_from_the_template_keeps_every_rule_and_a_verified_one_runs_i
             .any(|(id, _, outcome)| *id == rule && *outcome == Outcome::Skipped));
     }
     assert!(
-        report.advice.iter().all(|advice| advice.rule == "role-pages") && !report.advice.is_empty()
+        report
+            .advice
+            .iter()
+            .all(|advice| advice.rule == "role-pages")
+            && !report.advice.is_empty()
     );
     let said = text(&report);
     assert!(
@@ -208,12 +212,25 @@ fn each_roles_template_keeps_every_rule_verified_or_not() {
             assert!(report.advice.is_empty(), "{role}: {}", text(&report));
         }
     }
-    // The custody template keeps the role's common part; its tests run no
-    // custody suite (SDK 0.24.0), so verified it fails that alone.
+    // The custody template keeps the role's common pages; its tests run no
+    // custody suite and its link names no check tool (SDK 0.24.0), so
+    // verified it fails those, and is advised of the second meanwhile.
     let plugin = Scaffolded::of_role("custody", "custody");
     let report = plugin.check();
-    assert!(report.passed() && report.advice.is_empty(), "{}", text(&report));
-    assert_eq!(failed_rules(&plugin.check_verified()), ["role-suite"]);
+    assert!(report.passed(), "{}", text(&report));
+    let advised: Vec<&str> = report
+        .advice
+        .iter()
+        .map(|advice| advice.found.as_str())
+        .collect();
+    assert_eq!(
+        advised,
+        ["/links is an act and names no check tool, so an agent cannot prepare it"]
+    );
+    assert_eq!(
+        failed_rules(&plugin.check_verified()),
+        ["role-suite", "role-pages"]
+    );
 }
 
 #[test]
@@ -291,11 +308,19 @@ fn the_suites_are_suites_jsons() {
         );
     }
     let data = super::rules::suite_cases("data");
-    let optional = |name: &str| data.iter().find(|(case, _)| case == name).map(|(_, may)| *may);
+    let optional = |name: &str| {
+        data.iter()
+            .find(|(case, _)| case == name)
+            .map(|(_, may)| *may)
+    };
     assert_eq!(optional("the-takers-side-stated"), Some(true));
     assert_eq!(optional("a-daily-close"), Some(true), "about closes");
     assert_eq!(optional("reads-its-datasets-licences"), Some(false));
-    assert_eq!(optional("a-restarts-gap-backfilled"), Some(true), "about trades");
+    assert_eq!(
+        optional("a-restarts-gap-backfilled"),
+        Some(true),
+        "about trades"
+    );
 }
 
 // ── role-pages (spec/plugin-pages-follow-their-role) ─────────────────────
@@ -304,7 +329,11 @@ fn the_suites_are_suites_jsons() {
 /// each place said, and only advises it otherwise.
 fn role_pages_found(plugin: &Scaffolded) -> Vec<(String, String, usize)> {
     let unverified = plugin.check();
-    assert!(unverified.passed(), "advice fails nothing: {}", text(&unverified));
+    assert!(
+        unverified.passed(),
+        "advice fails nothing: {}",
+        text(&unverified)
+    );
     let verified = plugin.check_verified();
     assert_eq!(
         failed_rules(&verified),
@@ -361,12 +390,12 @@ fn a_data_plugin_keeps_its_roles_common_pages() {
 
     // Its tool renamed and its record not the role's.
     let plugin = Scaffolded::of_role("pages-tool", "data");
-    plugin.replace(&page_py(), "name=\"read_connection\"", "name=\"read_status\"");
     plugin.replace(
         &page_py(),
-        "answers=data.ConnectionRead",
-        "answers=Status",
+        "name=\"read_connection\"",
+        "name=\"read_status\"",
     );
+    plugin.replace(&page_py(), "answers=data.ConnectionRead", "answers=Status");
     plugin.add_after(
         &page_py(),
         "TITLE = \"Reference prices\"",
@@ -397,9 +426,17 @@ fn a_data_plugin_keeps_its_roles_common_pages() {
 
     // Out of the role's order, and a page of its own ahead of them.
     let plugin = Scaffolded::of_role("pages-order", "data");
-    plugin.replace(&page_py(), "\"/datasets\", \"Datasets\"", "\"/datasets\", \"Feeds\"");
+    plugin.replace(
+        &page_py(),
+        "\"/datasets\", \"Datasets\"",
+        "\"/datasets\", \"Feeds\"",
+    );
     plugin.replace(&page_py(), "\"/\", \"Connection\"", "\"/\", \"Datasets\"");
-    plugin.replace(&page_py(), "\"/datasets\", \"Feeds\"", "\"/datasets\", \"Connection\"");
+    plugin.replace(
+        &page_py(),
+        "\"/datasets\", \"Feeds\"",
+        "\"/datasets\", \"Connection\"",
+    );
     let datasets = line_of(&plugin, &page_py(), "\"/\", \"Datasets\"") - 1;
     let connection = line_of(&plugin, &page_py(), "\"/datasets\", \"Connection\"") - 1;
     let found = role_pages_found(&plugin);
@@ -412,10 +449,8 @@ fn a_data_plugin_keeps_its_roles_common_pages() {
         "{found:?}"
     );
     assert!(
-        found
-            .iter()
-            .any(|(said, _, at)| *at == connection
-                && said.starts_with("the data role's Connection page: its path is not /;")),
+        found.iter().any(|(said, _, at)| *at == connection
+            && said.starts_with("the data role's Connection page: its path is not /;")),
         "{found:?}"
     );
 }
@@ -501,7 +536,11 @@ fn a_reporting_plugin_values_in_its_reporting_currency() {
 #[test]
 fn a_custody_plugin_links_by_the_roles_act() {
     let plugin = Scaffolded::of_role("custody-link", "custody");
-    plugin.replace(&page_py(), "name=\"link_account\"", "name=\"connect_account\"");
+    plugin.replace(
+        &page_py(),
+        "name=\"link_account\"",
+        "name=\"connect_account\"",
+    );
     let found: Vec<String> = plugin
         .check_verified()
         .failures
@@ -511,19 +550,165 @@ fn a_custody_plugin_links_by_the_roles_act() {
         .collect();
     assert_eq!(
         found,
-        ["it holds `custody`, and declares no route named link_account"]
+        [
+            "/links is an act and names no check tool, so an agent cannot prepare it",
+            "it holds `custody`, and declares no route named link_account"
+        ]
     );
 }
 
 #[test]
-fn a_plugin_holding_no_role_with_a_common_part_is_not_held_to_one() {
+fn a_custody_plugin_keeping_raw_records_has_the_roles_page_for_them() {
+    let plugin = Scaffolded::of_role("custody-raw", "custody");
+    plugin.add_after(
+        &format!("src/{MODULE}/declaration.py"),
+        "from meridian.roles import custody",
+        "\nKINDS = [meridian.RecordKind(\"responses\", \"Raw responses\", window_days=30)]",
+    );
+    let raw = |plugin: &Scaffolded| -> Vec<String> {
+        plugin
+            .check_verified()
+            .failures
+            .into_iter()
+            .filter(|failure| {
+                failure.rule == "role-pages"
+                    && !failure.found.contains("is an act")
+                    && !failure.found.contains("comes before")
+            })
+            .map(|failure| failure.found)
+            .collect()
+    };
+    assert_eq!(
+        raw(&plugin),
+        ["it keeps raw records, and declares no Raw records page"]
+    );
+    let line = plugin.add_after(
+        &page_py(),
+        "return found if isinstance(found, Custodian) else Custodian()",
+        "\n\n@pages.page(\"/raw\", \"Raw responses\", levels=\"admin\")\nasync def raw(request):\n    return \"\"\n",
+    ) + 2;
+    let found = raw(&plugin);
+    assert_eq!(
+        found,
+        ["a page titled Raw responses, the custody role's Raw records page"]
+    );
+    assert_eq!(
+        plugin
+            .check_verified()
+            .failures
+            .iter()
+            .find(|failure| failure.found == found[0])
+            .map(|failure| failure.line),
+        Some(line)
+    );
+    plugin.replace(
+        &page_py(),
+        "\"Raw responses\", levels=\"admin\"",
+        "\"Raw records\", levels=\"admin\"",
+    );
+    assert_eq!(
+        raw(&plugin),
+        ["the custody role's Raw records page is under Manage"]
+    );
+    plugin.replace(
+        &page_py(),
+        "\"Raw records\", levels=\"admin\"",
+        "\"Raw records\", levels=[\"write\", \"read\"]",
+    );
+    assert!(raw(&plugin).is_empty());
+}
+
+#[test]
+fn a_secret_declared_as_a_settings_field_is_kept_too() {
+    let plugin = Scaffolded::of_role("class-secret", "custody");
+    let declaration = format!("src/{MODULE}/declaration.py");
+    let line = plugin.add_after(
+        &declaration,
+        "DECLARATION = meridian.Declaration(",
+        "print(Config.api_key)",
+    );
+    let found: Vec<(String, usize)> = plugin
+        .check()
+        .failures
+        .into_iter()
+        .filter(|failure| failure.rule == "secrets-kept")
+        .map(|failure| (failure.found, failure.line))
+        .collect();
+    assert_eq!(
+        found,
+        [("the secret setting `api_key` is logged".to_string(), line)]
+    );
+    assert!(secrets(&super::read(&plugin.0).unwrap())
+        .iter()
+        .any(|secret| secret.name.as_deref() == Some("api_key")));
+}
+
+#[test]
+fn every_act_names_its_check_tool_whatever_roles_the_plugin_holds() {
+    // The reference plugin's two acts name none (SDK 0.24.0): advised, and
+    // failed when verified, with no role's common part asked of it.
     for roles in ["[]", "[\"signal\"]", "[\"oms\"]"] {
-        let plugin = Scaffolded::tested("no-common-part");
+        let plugin = Scaffolded::tested("acts");
         plugin.replace("pyproject.toml", "roles = []", &format!("roles = {roles}"));
         let verified = plugin.check_verified();
-        assert!(verified.passed(), "{roles}: {}", text(&verified));
-        assert!(plugin.check().advice.is_empty());
+        assert_eq!(
+            failed_rules(&verified),
+            ["role-pages"],
+            "{roles}: {}",
+            text(&verified)
+        );
+        let found: Vec<(&str, usize)> = verified
+            .failures
+            .iter()
+            .map(|failure| (failure.found.as_str(), failure.line))
+            .collect();
+        let at = |path: &str| line_of(&plugin, &page_py(), &format!("    \"{path}\",")) - 1;
+        assert_eq!(
+            found,
+            [
+                (
+                    "/link is an act and names no check tool, so an agent cannot prepare it",
+                    at("/link")
+                ),
+                (
+                    "/statement is an act and names no check tool, so an agent cannot prepare it",
+                    at("/statement")
+                ),
+            ],
+            "{roles}"
+        );
+        assert_eq!(plugin.check().advice.len(), 2);
     }
+
+    // Named, the check must be a read route the plugin declares.
+    let plugin = Scaffolded::tested("acts-checked");
+    plugin.replace(
+        &page_py(),
+        "    name=\"link_account\",\n",
+        "    name=\"link_account\",\n    checked_by=\"check_link\",\n",
+    );
+    plugin.replace(
+        &page_py(),
+        "    name=\"open_statement\",\n",
+        "    name=\"open_statement\",\n    checked_by=\"check_statement\",\n",
+    );
+    plugin.write(
+        &format!("src/{MODULE}/checks.py"),
+        &routes_page(
+            "@pages.route(\"/link/check\", levels=\"admin\", methods=[\"POST\"], params=LinkAccount, reads=True, name=\"check_link\")\n\
+             async def check_link(request): ...\n",
+        ),
+    );
+    let found: Vec<String> = plugin
+        .check_verified()
+        .failures
+        .into_iter()
+        .map(|failure| failure.found)
+        .collect();
+    assert_eq!(
+        found,
+        ["/statement names the check tool check_statement, which no read route declares"]
+    );
 }
 
 #[test]
@@ -1101,8 +1286,8 @@ fn a_custody_plugin_running_its_suite_and_asking_for_storage_keeps_both_rules() 
     let report = plugin.check_verified();
     assert_eq!(
         failed_rules(&report),
-        Vec::<&str>::new(),
-        "{}",
+        ["role-pages"],
+        "only the role's common part, which the reference plugin has not: {}",
         text(&report)
     );
 }

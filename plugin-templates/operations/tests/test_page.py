@@ -13,7 +13,7 @@ from meridian.plugin.v1 import operations_pb2 as ops
 from meridian.testing import PageClient
 from meridian.v1 import sidecar_pb2
 
-from reference_plugin.page import pages
+from reference_plugin.page import pages, running
 
 
 @dataclass
@@ -51,8 +51,13 @@ def test_each_page_is_served_at_open_and_view_the_daily_page_first() -> None:
     assert served[("/", "write")] == 200 and served[("/", "admin")] == 403
 
 
-def test_breaks_say_the_next_step_until_there_are_some() -> None:
+def test_breaks_say_the_next_step_until_a_reconciliation_runs() -> None:
+    running["last_reconciliation"] = ""
     assert "No breaks yet" in client().get("/", "read").text
+    running["last_reconciliation"] = "2026-10-11 09:00 UTC"
+    page = client().get("/", "read").text
+    assert "No breaks yet" not in page and "No open breaks" in page
+    running["last_reconciliation"] = ""
     sidecar = Sidecar(
         open=[ops.Break(break_id="B-1", account_id="ACC-1", first_seen_date="2026-01-02")]
     )
@@ -92,3 +97,17 @@ def test_a_page_opened_from_a_prepared_change_starts_from_it() -> None:
         "confirm_opening_balance", {"account_id": "ACC-1", "as_of_date": "2026-09-30"}
     )
     assert made.outcome == "made" and sidecar.recorded[0]["account_id"] == "ACC-1"
+
+
+def test_under_a_second_pair_of_eyes_the_page_offers_prepare_and_no_confirm() -> None:
+    gated = PageClient(
+        pages,
+        Sidecar(),
+        read={"ACC-1"},
+        write={"ACC-1"},
+        second_pair_of_eyes=["confirm_opening_balance"],
+    )
+    page = gated.get("/opening", "write").text
+    assert "Needs a second person" in page
+    assert ">Confirm</button>" not in page and ">Prepare</button>" in page
+    assert ">Confirm</button>" in client().get("/opening", "write").text

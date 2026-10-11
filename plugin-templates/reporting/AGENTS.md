@@ -235,7 +235,9 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   SDK fills the page it is made on. A page opened from a prepared change
   reads it (`await request.prepared()`), starts its form from its
   `arguments_json` and says "prepared by" its preparer, with its reason as
-  text, never followed. Name no field of a record `prepare`.
+  text, never followed. Name no field of a record `prepare`. For an act in
+  `request.second_pair_of_eyes`, draw no Save or Confirm, only Prepare, and
+  say a second person makes it; the role templates do.
 - **Keep a person's own views per person.** A setting each person sets for
   themselves -- a watchlist -- is declared `per_person=True`; save it for
   them (`plugin.set_own_settings({...}, for_caller=request.caller)`) and read

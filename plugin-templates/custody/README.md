@@ -17,6 +17,9 @@ yet" states:
   `read_account_links` and `link_account`.
 - **Statements** (Open and View): a row per account the person may read;
   `read_statements`.
+- **History** (Open and View): the custodian's activity on those accounts, as
+  reported; `read_account_activities`. A plugin keeping raw records adds
+  **Raw records** from `meridian/roles/custody/raw_records.html`.
 
 Add the custodian's nuance only at the role templates' blocks
 (`vendor_notices`, `vendor_rows`, `vendor_columns`, `vendor_sections`),

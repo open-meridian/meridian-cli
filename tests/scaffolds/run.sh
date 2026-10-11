@@ -5,7 +5,8 @@
 # ci-local. Its tests run for real, the role's suite among them, which the
 # check's own tests cannot: they have no Python.
 #
-#   - The reference plugin keeps every rule, checked as verified too.
+#   - The reference plugin keeps every rule; checked as verified, it fails
+#     role-pages alone, since its two acts name no check tool (SDK 0.24.0).
 #   - Given `custody`, as the tutorial gives it to record a statement no
 #     vendor sent, it keeps every rule, told the custody role's common part
 #     as advice; checked as verified, it fails role-suite, since no test of
@@ -14,8 +15,9 @@
 #   - The `data`, `operations` and `reporting` templates keep every rule,
 #     verified, the data and reporting templates' tests running their role's
 #     suite; the `custody` template keeps every rule and the role's common
-#     part, and its tests run no custody suite (SDK 0.24.0), so verified it
-#     fails role-suite alone.
+#     pages, and its tests run no custody suite and its link names no check
+#     tool (SDK 0.24.0), so verified it fails role-suite and role-pages on
+#     those alone.
 #   - The `data` template with a float in its price path fails: its suite's
 #     cases, run by its own tests, catch the price recorded through a float.
 #
@@ -73,7 +75,13 @@ fails_saying() {
 
 meridian plugin new reference --into reference >/dev/null
 install reference
-passes reference --verified --run-tests
+passes reference --run-tests
+fails_saying reference "/statement is an act and names no check tool" --verified
+if grep -q "FAIL  role-suite\|FAIL  tests-pass" reference.out; then
+    say "FAIL  reference: verified, it fails more than its acts' check tools:"
+    cat reference.out
+    failed=1
+fi
 
 sed -i 's/^roles = \[\]$/roles = ["custody"]/' reference/pyproject.toml
 grep -q '^roles = \["custody"\]$' reference/pyproject.toml
@@ -97,8 +105,9 @@ for role in data operations reporting; do
     passes "$role-plugin" --verified --run-tests
 done
 fails_saying custody-plugin "it holds \`custody\`, and no test runs the custody suite" --verified
-if grep -q "FAIL  role-pages" custody-plugin.out; then
-    say "FAIL  custody-plugin: it does not keep the custody role's common part:"
+if ! grep -q "/links is an act and names no check tool" custody-plugin.out \
+    || grep -q "declares no\|comes before" custody-plugin.out; then
+    say "FAIL  custody-plugin: verified, it does not keep the custody role's common pages:"
     cat custody-plugin.out
     failed=1
 fi

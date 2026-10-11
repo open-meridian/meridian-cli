@@ -109,7 +109,10 @@ fn a_roles_template_is_a_plugin_holding_the_role_under_its_own_name() {
                 "{role}"
             );
         } else {
-            assert!(["custody", "operations"].contains(&role), "{role} runs no suite");
+            assert!(
+                ["custody", "operations"].contains(&role),
+                "{role} runs no suite"
+            );
         }
         for file in every_file(&into) {
             let text = std::fs::read_to_string(into.join(&file)).expect("readable");
@@ -127,17 +130,28 @@ fn a_roles_template_is_a_plugin_holding_the_role_under_its_own_name() {
         ("data", &["read_connection", "read_datasets"][..]),
         (
             "custody",
-            &["read_connections", "read_account_links", "link_account", "read_statements"][..],
+            &[
+                "read_connections",
+                "read_account_links",
+                "link_account",
+                "read_statements",
+            ][..],
         ),
         (
             "operations",
-            &["read_breaks", "read_reconciliations", "read_opening_balances", "confirm_opening_balance"][..],
+            &[
+                "read_breaks",
+                "read_reconciliations",
+                "read_opening_balances",
+                "confirm_opening_balance",
+            ][..],
         ),
         ("reporting", &["read_report", "read_datasets"][..]),
     ] {
         let into = scratch.0.join(role);
         scaffold(role, &into, Some(role)).expect("scaffolded");
-        let page = std::fs::read_to_string(into.join(format!("src/{role}/page.py"))).expect("written");
+        let page =
+            std::fs::read_to_string(into.join(format!("src/{role}/page.py"))).expect("written");
         for tool in tools {
             assert!(page.contains(&format!("name=\"{tool}\"")), "{role}: {tool}");
         }
@@ -158,7 +172,10 @@ fn a_role_with_no_template_is_refused_naming_those_that_have_one() {
     // The roles renamed in contract v20 are no roles at all now, with no alias.
     for old in ["dgm", "ccm", "match"] {
         let refused = scaffold("orders", &scratch.0.join("orders"), Some(old)).unwrap_err();
-        assert!(refused.contains(&format!("\"{old}\" is not a role")), "{refused}");
+        assert!(
+            refused.contains(&format!("\"{old}\" is not a role")),
+            "{refused}"
+        );
     }
     let refused = scaffold("orders", &scratch.0.join("orders"), Some("trading")).unwrap_err();
     assert!(refused.contains("\"trading\" is not a role"), "{refused}");

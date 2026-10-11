@@ -45,7 +45,7 @@ pub const RULES: [Rule; 15] = [
     Rule {
         id: "role-pages",
         holds: "a plugin holding a role with a common part keeps its common pages, tools and \
-                settings, in the role's order",
+                settings, in the role's order, and every act names its check tool",
         check: role_pages,
     },
     Rule {
@@ -903,7 +903,7 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at de0e29d (contract v20), byte
+/// meridian-schema's boundaries/suites.json at 9d1230b (contract v20), byte
 /// for byte: each role's suite and its cases.
 const SUITES_JSON: &str = include_str!("suites.json");
 
@@ -1026,7 +1026,9 @@ fn role_suite(plugin: &Plugin) -> Vec<Failure> {
         for source in tests {
             for (line, case) in named_not_presented(&source.text) {
                 let found = match cases.iter().find(|(name, _)| *name == case) {
-                    None => format!("it names `{case}` not presented, and the {role} suite has no such case"),
+                    None => format!(
+                        "it names `{case}` not presented, and the {role} suite has no such case"
+                    ),
                     Some((_, true)) => continue,
                     Some((_, false)) => format!(
                         "it names `{case}` not presented, a case of the {role} suite every plugin \
@@ -1068,6 +1070,9 @@ struct CommonPart {
     /// The candidates' page titles: the role's, not yet held, and no page of
     /// the plugin's own when the role's order is checked.
     candidates: &'static [&'static str],
+    /// The title of the page for the raw records it keeps, where it keeps
+    /// any (a duty of the role).
+    kept: Option<&'static str>,
     acts: &'static [&'static str],
     settings: &'static [&'static str],
 }
@@ -1107,6 +1112,7 @@ const COMMON: [CommonPart; 4] = [
             },
         ],
         candidates: &[],
+        kept: None,
         acts: &[],
         settings: &[],
     },
@@ -1131,6 +1137,7 @@ const COMMON: [CommonPart; 4] = [
             },
         ],
         candidates: &["Connections", "History", "Raw records"],
+        kept: Some("Raw records"),
         acts: &["link_account"],
         settings: &[],
     },
@@ -1163,6 +1170,7 @@ const COMMON: [CommonPart; 4] = [
             },
         ],
         candidates: &[],
+        kept: None,
         acts: &["confirm_opening_balance"],
         settings: &[],
     },
@@ -1170,6 +1178,7 @@ const COMMON: [CommonPart; 4] = [
         role: "reporting",
         pages: &[],
         candidates: &["Datasets"],
+        kept: None,
         acts: &[],
         settings: &["reporting_currency"],
     },
@@ -1219,6 +1228,9 @@ fn positional(arguments: &str, n: usize) -> Option<&str> {
         .nth(n)
 }
 
+/// A kind of raw record declared: what a plugin at the edge keeps.
+static KIND: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bRecordKind\s*\(").unwrap());
+
 /// A page the plugin declares, as `role-pages` reads it.
 struct PageAt<'a> {
     declaration: Declaration<'a>,
@@ -1246,18 +1258,23 @@ struct SettingAt<'a> {
     line: usize,
     name: String,
     label: Option<String>,
+    /// Declared `secret=True`.
+    secret: bool,
 }
 
-fn settings_in_order<'a>(plugin: &'a Plugin, constants: &HashMap<String, String>) -> Vec<SettingAt<'a>> {
-    static DECORATOR: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^\s*@\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)*settings\s*$").unwrap()
-    });
-    static CLASS: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^\s*class\s+[A-Za-z_]").unwrap());
+fn settings_in_order<'a>(
+    plugin: &'a Plugin,
+    constants: &HashMap<String, String>,
+) -> Vec<SettingAt<'a>> {
+    static DECORATOR: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*@\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)*settings\s*$").unwrap());
+    static CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*class\s+[A-Za-z_]").unwrap());
     static FIELD: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?s)^[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*:[^=]*=[ \t]*(.*)$").unwrap()
     });
     static SETTING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bSetting\s*\(").unwrap());
+    static SECRET: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\bsecret\s*=\s*True\b").unwrap());
     static HELPER: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^(?:[A-Za-z_][A-Za-z0-9_]*\.)*(setting|sample_data|environment)\s*\(").unwrap()
     });
@@ -1280,16 +1297,14 @@ fn settings_in_order<'a>(plugin: &'a Plugin, constants: &HashMap<String, String>
                 if indent > class {
                     if let Some(field) = FIELD.captures(&statement) {
                         let value = field[2].trim();
-                        let label = HELPER.captures(value).and_then(|helper| {
-                            match &helper[1] {
-                                "sample_data" => Some("Sample data".to_string()),
-                                "environment" => Some("Environment".to_string()),
-                                _ => {
-                                    let arguments = enclosed(&value[helper.get(0)?.end()..]);
-                                    keyword(arguments, "label")
-                                        .or_else(|| positional(arguments, 0))
-                                        .and_then(|label| string_named(label, constants))
-                                }
+                        let label = HELPER.captures(value).and_then(|helper| match &helper[1] {
+                            "sample_data" => Some("Sample data".to_string()),
+                            "environment" => Some("Environment".to_string()),
+                            _ => {
+                                let arguments = enclosed(&value[helper.get(0)?.end()..]);
+                                keyword(arguments, "label")
+                                    .or_else(|| positional(arguments, 0))
+                                    .and_then(|label| string_named(label, constants))
                             }
                         });
                         found.push(SettingAt {
@@ -1297,6 +1312,7 @@ fn settings_in_order<'a>(plugin: &'a Plugin, constants: &HashMap<String, String>
                             line,
                             name: field[1].to_string(),
                             label,
+                            secret: SECRET.is_match(value),
                         });
                     }
                     continue;
@@ -1324,6 +1340,7 @@ fn settings_in_order<'a>(plugin: &'a Plugin, constants: &HashMap<String, String>
                         "environment" => Some("Environment".to_string()),
                         _ => None,
                     },
+                    secret: false,
                 });
             }
             for call in SETTING.find_iter(&statement) {
@@ -1338,6 +1355,7 @@ fn settings_in_order<'a>(plugin: &'a Plugin, constants: &HashMap<String, String>
                     name,
                     label: keyword(arguments, "label")
                         .and_then(|label| string_named(label, constants)),
+                    secret: SECRET.is_match(arguments),
                 });
             }
         }
@@ -1361,7 +1379,10 @@ fn holds_fields(plugin: &Plugin, answers: &str, page: &CommonPage) -> Result<(),
         let Some(found) = class.captures(&text) else {
             continue;
         };
-        if found.get(1).is_some_and(|bases| extends.is_match(bases.as_str())) {
+        if found
+            .get(1)
+            .is_some_and(|bases| extends.is_match(bases.as_str()))
+        {
             return Ok(());
         }
         let body = &text[found.get(0).expect("matched").end()..];
@@ -1371,7 +1392,10 @@ fn holds_fields(plugin: &Plugin, answers: &str, page: &CommonPage) -> Result<(),
             .filter_map(|(_, statement)| {
                 let name = statement.trim_start();
                 let end = name.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))?;
-                name[end..].trim_start().starts_with(':').then(|| name[..end].to_string())
+                name[end..]
+                    .trim_start()
+                    .starts_with(':')
+                    .then(|| name[..end].to_string())
             })
             .collect();
         let missing: Vec<&str> = page
@@ -1399,18 +1423,75 @@ fn holds_fields(plugin: &Plugin, answers: &str, page: &CommonPage) -> Result<(),
     }
 }
 
+/// Every act a plugin declares -- a route that changes something, offered to
+/// agents as a tool -- names its check tool (`checked_by=`), a read tool
+/// taking the same record, so an agent may prepare it for a person to make
+/// (contract v20, W6.26; the plan's Q5: required of a verified plugin).
+fn acts_checked(declared: &[Declaration]) -> Vec<Failure> {
+    let named = |declaration: &Declaration| {
+        keyword(&declaration.arguments, "name")
+            .map(|name| name.trim_matches(['"', '\'']).to_string())
+    };
+    let mut failures = Vec::new();
+    for route in declared.iter().filter(|route| route.kind == "route") {
+        let changing = methods_of(&route.arguments)
+            .iter()
+            .any(|method| method != "GET" && method != "HEAD");
+        let reads = keyword(&route.arguments, "reads") == Some("True");
+        let kept = keyword(&route.arguments, "tool") == Some("False");
+        if !changing || reads || kept {
+            continue;
+        }
+        let path = first_argument(&route.arguments)
+            .trim()
+            .trim_matches(['"', '\'']);
+        if let Some(check) = keyword(&route.arguments, "checked_by") {
+            let check = check.trim_matches(['"', '\'']);
+            let declared_reading = declared.iter().any(|other| {
+                other.kind != "setting"
+                    && named(other).as_deref() == Some(check)
+                    && keyword(&other.arguments, "reads") == Some("True")
+            });
+            if !declared_reading {
+                failures.push(failure(
+                    "role-pages",
+                    &route.source.path,
+                    route.line,
+                    format!("{path} names the check tool {check}, which no read route declares"),
+                    "declare the check: a route with `reads=True`, `name=` the tool `checked_by=` \
+                     names, taking the same record and answering what the act would do and \
+                     whether this person may (contract v20)",
+                ));
+            }
+            continue;
+        }
+        failures.push(failure(
+            "role-pages",
+            &route.source.path,
+            route.line,
+            format!("{path} is an act and names no check tool, so an agent cannot prepare it"),
+            "`checked_by=\"<tool>\"`: a read tool (`reads=True`) taking the same record, \
+             answering what the act would do and whether this person may, and `accounts=` \
+             naming the record's paths that hold the accounts it touches, so an agent may \
+             prepare the act for a person to make (contract v20)",
+        ));
+    }
+    failures
+}
+
 fn role_pages(plugin: &Plugin) -> Vec<Failure> {
     const ID: &str = "role-pages";
     let (held, _) = declared(plugin);
+    let declared_all = declarations(plugin);
+    let mut failures = acts_checked(&declared_all);
     let parts: Vec<&CommonPart> = COMMON
         .iter()
         .filter(|part| held.iter().any(|role| role == part.role))
         .collect();
     if parts.is_empty() {
-        return Vec::new();
+        return failures;
     }
     let constants = bound_strings(plugin);
-    let declared_all = declarations(plugin);
     let tools: Vec<String> = declared_all
         .iter()
         .filter(|declaration| declaration.kind != "setting")
@@ -1452,11 +1533,11 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
                 .chain(part.candidates.iter().copied())
         })
         .collect();
-    let mut failures = Vec::new();
 
     for part in &parts {
         let role = part.role;
-        let template = format!("the role's common part, as `meridian plugin new --role {role}` writes it");
+        let template =
+            format!("the role's common part, as `meridian plugin new --role {role}` writes it");
         // Each common page, by its title: once, where the role says, its tool
         // under the role's name answering the role's record.
         let mut placed: Vec<(usize, &PageAt)> = Vec::new();
@@ -1465,9 +1546,16 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
             let declare = format!(
                 "`@pages.page({}\"{}\", levels={}, answers={role}.{}, name=\"{}\")`: {template} \
                  (spec/plugin-pages-follow-their-role)",
-                common.path.map(|path| format!("\"{path}\", ")).unwrap_or_else(|| "\"<path>\", ".into()),
+                common
+                    .path
+                    .map(|path| format!("\"{path}\", "))
+                    .unwrap_or_else(|| "\"<path>\", ".into()),
                 common.title,
-                if common.levels.len() == 1 { format!("\"{levels}\"") } else { format!("[\"{levels}\"]") },
+                if common.levels.len() == 1 {
+                    format!("\"{levels}\"")
+                } else {
+                    format!("[\"{levels}\"]")
+                },
                 common.record,
                 common.tool,
             );
@@ -1490,7 +1578,10 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
                     ID,
                     &again.declaration.source.path,
                     again.declaration.line,
-                    format!("a second page titled {}, the {role} role's common page's title", common.title),
+                    format!(
+                        "a second page titled {}, the {role} role's common page's title",
+                        common.title
+                    ),
                     "title a page of the plugin's own in its own words: a common page's title is \
                      the role's, so a person finds it where every plugin of the role has it",
                 ));
@@ -1499,7 +1590,10 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
             let file = &page.declaration.source.path;
             let line = page.declaration.line;
             let mut wrong = Vec::new();
-            if let Some(path) = common.path.filter(|path| page.path.as_deref() != Some(*path)) {
+            if let Some(path) = common
+                .path
+                .filter(|path| page.path.as_deref() != Some(*path))
+            {
                 wrong.push(format!("its path is not {path}"));
             }
             if let Some(levels) = &page.levels {
@@ -1508,7 +1602,11 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
                 given.sort_unstable();
                 wanted.sort_unstable();
                 if given != wanted {
-                    wrong.push(format!("it serves {}, not {}", levels.join(" and "), common.levels.join(" and ")));
+                    wrong.push(format!(
+                        "it serves {}, not {}",
+                        levels.join(" and "),
+                        common.levels.join(" and ")
+                    ));
                 }
             }
             if held.len() > 1 {
@@ -1524,7 +1622,9 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
                 wrong.push(format!("its tool is not named {}", common.tool));
             }
             match keyword(&page.declaration.arguments, "answers") {
-                None => wrong.push("it declares no record (`answers=`), so it is no read tool".into()),
+                None => {
+                    wrong.push("it declares no record (`answers=`), so it is no read tool".into())
+                }
                 Some(answers) => {
                     if let Err(said) = holds_fields(plugin, answers, common) {
                         wrong.push(said);
@@ -1536,7 +1636,11 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
                     ID,
                     file,
                     line,
-                    format!("the {role} role's {} page: {}", common.title, wrong.join("; ")),
+                    format!(
+                        "the {role} role's {} page: {}",
+                        common.title,
+                        wrong.join("; ")
+                    ),
                     &declare,
                 ));
             }
@@ -1562,7 +1666,11 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
                     ),
                     &format!(
                         "declare the role's common pages in the role's order: {}",
-                        part.pages.iter().map(|page| page.title).collect::<Vec<_>>().join(", ")
+                        part.pages
+                            .iter()
+                            .map(|page| page.title)
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
                 ));
             }
@@ -1600,13 +1708,68 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
             ));
         }
 
-        for act in part.acts.iter().filter(|act| !tools.iter().any(|tool| tool == *act)) {
+        // Where the plugin keeps raw records (a `RecordKind` declared), the
+        // role's page for them, under Open and View, titled as the role's.
+        if let Some(kept) = part.kept {
+            let keeps =
+                python(plugin).any(|source| KIND.is_match(&python_uncommented(&source.text)));
+            let titled = |title: &str| {
+                pages
+                    .iter()
+                    .find(|page| page.title.as_deref() == Some(title))
+            };
+            for old in pages
+                .iter()
+                .filter(|page| page.title.as_deref() == Some("Raw responses"))
+            {
+                failures.push(failure(
+                    ID,
+                    &old.declaration.source.path,
+                    old.declaration.line,
+                    format!("a page titled Raw responses, the {role} role's {kept} page"),
+                    &format!(
+                        "title it `{kept}`, its path and tools unchanged: the role's page for \
+                              the raw records it keeps"
+                    ),
+                ));
+            }
+            match titled(kept) {
+                None if keeps && titled("Raw responses").is_none() => failures.push(failure(
+                    ID,
+                    &pages_file,
+                    0,
+                    format!("it keeps raw records, and declares no {kept} page"),
+                    &format!(
+                        "`@pages.page(\"<path>\", \"{kept}\", levels=[\"write\", \"read\"])`, \
+                         drawn from `meridian/roles/{role}/raw_records.html`: each kind kept, its \
+                         window, the archive, and a raw record followed from a row's reference"
+                    ),
+                )),
+                Some(page) if page.manage() == Some(true) => failures.push(failure(
+                    ID,
+                    &page.declaration.source.path,
+                    page.declaration.line,
+                    format!("the {role} role's {kept} page is under Manage"),
+                    "serve it at `levels=[\"write\", \"read\"]`, under Open and View, beside \
+                     the records it is the source of",
+                )),
+                _ => {}
+            }
+        }
+
+        for act in part
+            .acts
+            .iter()
+            .filter(|act| !tools.iter().any(|tool| tool == *act))
+        {
             failures.push(failure(
                 ID,
                 &pages_file,
                 0,
                 format!("it holds `{role}`, and declares no route named {act}"),
-                &format!("the route whose tool is `{act}`, by that name (`name=\"{act}\"`): {template}"),
+                &format!(
+                    "the route whose tool is `{act}`, by that name (`name=\"{act}\"`): {template}"
+                ),
             ));
         }
     }
@@ -1616,7 +1779,11 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
     // for the common settings.
     let settings = settings_in_order(plugin, &constants);
     for part in &parts {
-        for wanted in part.settings.iter().filter(|wanted| !settings.iter().any(|setting| setting.name == **wanted)) {
+        for wanted in part
+            .settings
+            .iter()
+            .filter(|wanted| !settings.iter().any(|setting| setting.name == **wanted))
+        {
             failures.push(failure(
                 ID,
                 &pages_file,
@@ -1662,13 +1829,19 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
             }
             _ => {}
         }
-        for (common, label) in [("environment", "Environment"), ("sample_data", "Sample data")] {
+        for (common, label) in [
+            ("environment", "Environment"),
+            ("sample_data", "Sample data"),
+        ] {
             if setting.name != common && setting.label.as_deref() == Some(label) {
                 failures.push(failure(
                     ID,
                     file,
                     setting.line,
-                    format!("the setting {} is labelled {label}, the common setting {common}'s label", setting.name),
+                    format!(
+                        "the setting {} is labelled {label}, the common setting {common}'s label",
+                        setting.name
+                    ),
                     &format!("label it in its own words, or declare it as the common {common}"),
                 ));
             }
@@ -1828,7 +2001,7 @@ fn tools_cover_routes(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at de0e29d (contract v20, the
+/// meridian-schema's boundaries/roles.json at 9d1230b (contract v20, the
 /// roles renamed), byte for byte: its `operations` say which roles hold each
 /// command.
 const ROLES_JSON: &str = include_str!("roles.json");
@@ -2671,6 +2844,20 @@ pub fn secrets(plugin: &Plugin) -> Vec<Secret> {
             if (secret.name.is_some() || secret.constant.is_some()) && !found.contains(&secret) {
                 found.push(secret);
             }
+        }
+    }
+    // A field of a class `@meridian.settings` makes, declared `secret=True`:
+    // the setting is named as the field (SDK 0.24.0).
+    for setting in settings_in_order(plugin, &constants) {
+        if setting.secret
+            && !found
+                .iter()
+                .any(|held| held.name.as_ref() == Some(&setting.name))
+        {
+            found.push(Secret {
+                name: Some(setting.name),
+                constant: None,
+            });
         }
     }
     found
