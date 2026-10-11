@@ -47,7 +47,7 @@ async def a_price_heard(recorder: Recorder) -> None:
     recorder.answer(
         "PricesRecorded",
         lambda _: ops.PricesRecordedEvent(
-            price=ops.Price(meta=ops.ObservationMeta(source=ops.Source(dataset="dgm-1:daily")))
+            price=ops.Price(meta=ops.ObservationMeta(source=ops.Source(dataset="data-1:daily")))
         ),
     )
     await recorder.receive(prices_recorded=plugin.on_price, subjects=["LCL-1"])
@@ -59,7 +59,7 @@ async def a_bar_heard(recorder: Recorder) -> None:
     recorder.answer(
         "BarsRecorded",
         lambda _: ops.BarsRecordedEvent(
-            bar=ops.Bar(meta=ops.ObservationMeta(source=ops.Source(dataset="dgm-1:daily")))
+            bar=ops.Bar(meta=ops.ObservationMeta(source=ops.Source(dataset="data-1:daily")))
         ),
     )
     await recorder.receive(bars_recorded=plugin.on_bar, subjects=["LCL-1"])

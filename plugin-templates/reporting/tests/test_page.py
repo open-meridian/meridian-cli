@@ -36,7 +36,7 @@ def wire(text: str) -> ops.Decimal:
 def meta(subject: str, day: int = 0) -> ops.ObservationMeta:
     return ops.ObservationMeta(
         subjects=[ops.SubjectRef(entity_id=subject)],
-        source=ops.Source(dataset="dgm-1:daily"),
+        source=ops.Source(dataset="data-1:daily"),
         valid_from_ns=day,
     )
 
@@ -64,7 +64,7 @@ class Sidecar(Operations):
     async def _operate(self, method: Any, params: Any) -> Any:
         self.read.append(cast(str, method))
         if method == "ListDatasets":
-            return ops.ListDatasetsResult(datasets=[ops.DatasetRef(dataset="dgm-1:daily")])
+            return ops.ListDatasetsResult(datasets=[ops.DatasetRef(dataset="data-1:daily")])
         if method == "ListPositions":
             return ops.ListPositionsResult(
                 positions=[
@@ -130,7 +130,7 @@ def test_closes_values_each_position_at_its_close_for_the_accounts_she_may_read(
     assert "<td><code>ACC-1</code></td><td><code>LCL-1</code></td><td>10</td>" in page
     assert "<td>62431.27</td><td>USD</td><td>624312.70</td>" in page
     # The week's change: the last bar's close less the first one's open.
-    assert "<td>1431.27</td><td>dgm-1:daily</td>" in page
+    assert "<td>1431.27</td><td>data-1:daily</td>" in page
     # ACC-9 is in the plugin's scope, not hers.
     assert "ACC-9" not in page
 
@@ -151,7 +151,7 @@ def test_an_agent_reads_the_report_through_its_tool_at_each_level_of_the_page() 
                     "quantity": "10",
                     "close": "62431.27",
                     "currency": "USD",
-                    "dataset": "dgm-1:daily",
+                    "dataset": "data-1:daily",
                     "value": "624312.70",
                     "week": "1431.27",
                 }
@@ -163,7 +163,14 @@ def test_an_agent_reads_the_report_through_its_tool_at_each_level_of_the_page() 
 def test_manage_shows_what_it_may_read_and_no_accounts_data() -> None:
     sidecar = Sidecar()
     page = client(sidecar).get("/datasets", "admin").text
-    assert "dgm-1:daily" in page
+    assert "data-1:daily" in page
+    # The reporting role's common page: not entitled until a deployment
+    # admin entitles it on Data sources, and a read tool under its name.
+    assert "Not entitled yet" in page
+    answered = client(sidecar).call_tool("read_datasets")
+    assert answered.data == {
+        "datasets": [{"dataset": "data-1:daily", "entitled": False, "fields": [], "misses": 0}]
+    }
     client(sidecar).assert_no_account_data("ACC-1", "62431.27")
 
 

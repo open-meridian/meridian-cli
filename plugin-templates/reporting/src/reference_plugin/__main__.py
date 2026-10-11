@@ -18,6 +18,7 @@ import os
 import signal
 
 import meridian
+from meridian.roles import reporting
 
 from .page import TITLE, last_close, pages, use
 from .report import Report
@@ -36,7 +37,10 @@ async def run() -> None:
 
     port = int(os.environ.get("REFERENCE_PAGE_PORT", "8000"))
     async with await meridian.connect(
-        interface=meridian.Interface(port=port, title=TITLE, pages=pages)
+        interface=meridian.Interface(port=port, title=TITLE, pages=pages),
+        # The reporting role's common setting (spec/plugin-pages-follow-
+        # their-role): every reporting plugin values in a currency.
+        settings=[reporting.reporting_currency()],
     ) as plugin:
         log.info(
             "registered as %s, roles %s",
@@ -45,6 +49,11 @@ async def run() -> None:
         )
         report = Report(plugin)
         use(report)
+        async for first in plugin.settings():
+            report.reporting_currency = str(first.values["reporting_currency"])
+            break
+        # The reporting role's figures, first on its Summary.
+        plugin.figures = reporting.figures(last_valued="Not yet")
         log.info("may read %s", ", ".join(await report.datasets()) or "no dataset yet")
         # What the lake records is heard for the subjects named: here the
         # instruments held at the last close. A plugin following its book

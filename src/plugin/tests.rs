@@ -102,12 +102,15 @@ fn a_roles_template_is_a_plugin_holding_the_role_under_its_own_name() {
             pyproject.contains("prices-2 = \"prices_2.__main__:main\""),
             "{pyproject}"
         );
-        // Its tests run the role's suite.
-        let suite = std::fs::read_to_string(into.join("tests/test_suite.py")).expect("written");
-        assert!(
-            suite.contains(&format!("run(\"{role}\", PRODUCERS")),
-            "{role}"
-        );
+        // Its tests run the role's suite, where the template has one.
+        if let Ok(suite) = std::fs::read_to_string(into.join("tests/test_suite.py")) {
+            assert!(
+                suite.contains(&format!("run(\"{role}\", PRODUCERS")),
+                "{role}"
+            );
+        } else {
+            assert!(["custody", "operations"].contains(&role), "{role} runs no suite");
+        }
         for file in every_file(&into) {
             let text = std::fs::read_to_string(into.join(&file)).expect("readable");
             assert!(!file.contains("reference"), "{file}");
@@ -117,15 +120,28 @@ fn a_roles_template_is_a_plugin_holding_the_role_under_its_own_name() {
             );
         }
     }
-    let scratch = Scratch::new("dgm-pages");
-    let into = scratch.0.join("prices");
-    scaffold("prices", &into, Some("dgm")).expect("scaffolded");
-    let page = std::fs::read_to_string(into.join("src/prices/page.py")).expect("written");
-    assert!(page.contains("name=\"read_connection\"") && page.contains("name=\"read_datasets\""));
-    let into = scratch.0.join("report");
-    scaffold("report", &into, Some("reporting")).expect("scaffolded");
-    let page = std::fs::read_to_string(into.join("src/report/page.py")).expect("written");
-    assert!(page.contains("name=\"read_report\""), "{page}");
+    // Each on its role's common part: the common pages' tools by the role's
+    // names (spec/plugin-pages-follow-their-role).
+    let scratch = Scratch::new("role-pages");
+    for (role, tools) in [
+        ("data", &["read_connection", "read_datasets"][..]),
+        (
+            "custody",
+            &["read_connections", "read_account_links", "link_account", "read_statements"][..],
+        ),
+        (
+            "operations",
+            &["read_breaks", "read_reconciliations", "read_opening_balances", "confirm_opening_balance"][..],
+        ),
+        ("reporting", &["read_report", "read_datasets"][..]),
+    ] {
+        let into = scratch.0.join(role);
+        scaffold(role, &into, Some(role)).expect("scaffolded");
+        let page = std::fs::read_to_string(into.join(format!("src/{role}/page.py"))).expect("written");
+        for tool in tools {
+            assert!(page.contains(&format!("name=\"{tool}\"")), "{role}: {tool}");
+        }
+    }
 }
 
 #[test]
@@ -134,9 +150,16 @@ fn a_role_with_no_template_is_refused_naming_those_that_have_one() {
     let refused = scaffold("orders", &scratch.0.join("orders"), Some("oms")).unwrap_err();
     assert!(
         refused.contains("no template for `oms`")
-            && refused.contains("`--role dgm` or `--role reporting`"),
+            && refused.contains(
+                "`--role custody`, `--role data`, `--role operations` or `--role reporting`"
+            ),
         "{refused}"
     );
+    // The roles renamed in contract v20 are no roles at all now, with no alias.
+    for old in ["dgm", "ccm", "match"] {
+        let refused = scaffold("orders", &scratch.0.join("orders"), Some(old)).unwrap_err();
+        assert!(refused.contains(&format!("\"{old}\" is not a role")), "{refused}");
+    }
     let refused = scaffold("orders", &scratch.0.join("orders"), Some("trading")).unwrap_err();
     assert!(refused.contains("\"trading\" is not a role"), "{refused}");
     assert!(!scratch.0.join("orders").exists(), "nothing written");
@@ -144,12 +167,17 @@ fn a_role_with_no_template_is_refused_naming_those_that_have_one() {
 
 #[test]
 fn what_to_do_next_says_how_a_roles_plugin_is_held_to_its_suite() {
-    let said = next_steps("prices", Path::new("prices"), Some("dgm"));
-    assert!(said.contains("a `dgm` plugin"), "{said}");
+    let said = next_steps("prices", Path::new("prices"), Some("data"));
+    assert!(said.contains("a `data` plugin"), "{said}");
+    assert!(said.contains("Its tests run the data suite"), "{said}");
     assert!(
         said.contains("meridian plugin check --verified --run-tests"),
         "{said}"
     );
+    // A template whose tests run no suite does not say they do.
+    let said = next_steps("books", Path::new("books"), Some("operations"));
+    assert!(said.contains("an `operations` plugin"), "{said}");
+    assert!(!said.contains("suite"), "{said}");
     let plain = next_steps("prices", Path::new("prices"), None);
     assert!(!plain.contains("--verified"), "{plain}");
     assert!(plain.contains("with the plugin, so whoever works on it next has them too.\n"));

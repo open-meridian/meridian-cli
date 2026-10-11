@@ -94,6 +94,9 @@ pub struct Report {
     pub dir: String,
     pub outcomes: Vec<(&'static str, &'static str, Outcome)>,
     pub failures: Vec<Failure>,
+    /// What a rule only `--verified` holds found on a plugin not checked as
+    /// verified, said as advice and failing nothing (`rules::ADVISED`).
+    pub advice: Vec<Failure>,
 }
 
 impl Report {
@@ -198,8 +201,9 @@ pub fn check(dir: &Path, run_tests: bool) -> Result<Report, String> {
 }
 
 /// The same, held as a verified plugin is when `verified`: no changing
-/// route kept from agents, and each role held with a suite run in its tests
-/// (`rules::ONLY_VERIFIED`, skipped otherwise).
+/// route kept from agents, each role held with a suite run in its tests, and
+/// each role's common part kept (`rules::ONLY_VERIFIED`, skipped otherwise,
+/// the common part's findings then said as advice).
 pub fn check_as(dir: &Path, run_tests: bool, verified: bool) -> Result<Report, String> {
     let mut plugin = read(dir)?;
     plugin.verified = verified;
@@ -207,9 +211,13 @@ pub fn check_as(dir: &Path, run_tests: bool, verified: bool) -> Result<Report, S
         dir: dir.display().to_string(),
         outcomes: Vec::new(),
         failures: Vec::new(),
+        advice: Vec::new(),
     };
     for rule in RULES.iter() {
         if !verified && rules::ONLY_VERIFIED.contains(&rule.id) {
+            if rules::ADVISED.contains(&rule.id) {
+                report.advice.extend((rule.check)(&plugin));
+            }
             report
                 .outcomes
                 .push((rule.id, rule.holds, Outcome::Skipped));
@@ -284,7 +292,9 @@ pub fn text(report: &Report) -> String {
         };
         out.push_str(&format!("  {mark}  {id:width$}  {holds}\n"));
         let mut said_instead = "";
-        for failure in report.failures.iter().filter(|failure| failure.rule == *id) {
+        // A skipped rule's advice is said where its failures would be.
+        let found = report.failures.iter().chain(&report.advice);
+        for failure in found.filter(|failure| failure.rule == *id) {
             out.push_str(&format!(
                 "        {}: {}\n",
                 located(failure),
@@ -302,6 +312,13 @@ pub fn text(report: &Report) -> String {
         .iter()
         .filter(|(_, _, outcome)| *outcome == Outcome::Failed)
         .count();
+    if !report.advice.is_empty() {
+        out.push_str(&format!(
+            "\nAdvice, {} place(s), failing nothing: a verified plugin is held to it \
+             (--verified).\n",
+            report.advice.len()
+        ));
+    }
     if failed == 0 {
         out.push_str("\nEvery rule it was checked against holds.\n");
     } else {

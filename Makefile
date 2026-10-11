@@ -52,7 +52,7 @@ ci-mirror-check:
 # template from its templates/, copied to plugin-templates/ the same way. The
 # templates live beside the SDK they are written against and are tested there;
 # this copy is held to them the way the SDK's bindings are held to the schema.
-SDK_REV  := 3297653ab3275df0e1156df711575412f102039a
+SDK_REV  := e5234c57baeb16dd29caa392609099a64116b10c
 SDK_REPO := https://github.com/open-meridian/meridian-python.git
 SCRATCH  := .sdk-scratch
 
@@ -114,14 +114,16 @@ check-install:
 
 # Each scaffold `plugin new` writes, made by the release binary, its tests run
 # for real against the SDK it pins (installed from meridian-python at SDK_REV):
-# the reference plugin, it given custody (every rule; role-suite only when
-# verified), the dgm and reporting templates with their suites, and the dgm
-# with a float in its price path failing. The check's own tests have no Python.
+# the reference plugin, it given custody (every rule, the role's common part as
+# advice; role-suite and role-pages failing only when verified), the data,
+# custody, operations and reporting templates, the data and reporting ones
+# with their suites, and the data template with a float in its price path
+# failing. The check's own tests have no Python.
 check-scaffolds:
 	@$(DOCKER) build -f Dockerfile.rust --target scaffolds --build-arg SDK_REV=$(SDK_REV) . >/dev/null 2>&1 \
 		|| { echo "check-scaffolds FAILED; see the output with:" >&2; \
 		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target scaffolds --build-arg SDK_REV=$(SDK_REV) --progress=plain --no-cache-filter scaffolds ." >&2; exit 1; }
-	@echo "check-scaffolds OK: each scaffold keeps the rules, its suite run; a dgm pricing through a float fails"
+	@echo "check-scaffolds OK: each scaffold keeps the rules, its suite run; a data plugin pricing through a float fails"
 
 # Applied in a container and written back, because the host has no toolchain.
 fmt:

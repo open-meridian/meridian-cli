@@ -4,7 +4,7 @@
   "scope_is": "the matrix's at this revision of meridian-schema: publishes, the operations a role may call; reads, the queries it may ask; hears, the deliveries it receives. The SDK that vendors this file says which contract version that is.",
   "roles": [
     {
-      "name": "ccm",
+      "name": "connectivity",
       "status": "ruled",
       "persona": "the desk's connection to a broker or venue",
       "archetype": "Venue connectivity, an edge",
@@ -76,7 +76,7 @@
           "duty": "Records a verdict on each act it checks, naming the version of the order or placement it checked."
         },
         {
-          "duty": "Sets the limits of a mandate and the firm-wide credit limits a market-access ccm enforces."
+          "duty": "Sets the limits of a mandate and the firm-wide credit limits a market-access connectivity plugin enforces."
         },
         {
           "duty": "In the fast and high-frequency tiers, posts standing approved limits execution may act within, in place of a verdict on each order."
@@ -94,7 +94,7 @@
           "to": [
             "oms",
             "ems",
-            "ccm"
+            "connectivity"
           ]
         },
         {
@@ -108,7 +108,7 @@
           "to": [
             "oms",
             "ems",
-            "ccm"
+            "connectivity"
           ]
         }
       ],
@@ -226,7 +226,7 @@
         {
           "what": "trading",
           "to": [
-            "ccm"
+            "connectivity"
           ]
         }
       ],
@@ -250,7 +250,7 @@
       }
     },
     {
-      "name": "dgm",
+      "name": "data",
       "status": "ruled",
       "persona": "the firm's data management",
       "archetype": "External data ingress, an edge",
@@ -258,6 +258,13 @@
       "duties": [
         {
           "duty": "Puts market, reference and alternative data into the lake, converting its vendor's codes at the edge."
+        },
+        {
+          "duty": "Resolves the subjects and venues its source names, reads an instrument's record to name to its vendor one another source resolved, and reports what it could not resolve; it never mints reference data.",
+          "basis": [
+            "W10.3",
+            "W3.6"
+          ]
         },
         {
           "duty": "Keeps its vendor's raw files and cursors in its own storage.",
@@ -287,11 +294,16 @@
           "ReportMissingVenue",
           "RecordPrices",
           "RecordBars",
+          "RecordTrades",
+          "RecordQuotes",
           "DeclineWant"
         ],
         "reads": [
           "ResolveIdentifier",
-          "ResolveVenue"
+          "ResolveInstrument",
+          "ResolveVenue",
+          "ListTrades",
+          "ListDatasets"
         ],
         "hears": [
           "ObservationsWanted",
@@ -332,7 +344,7 @@
         {
           "what": "the venue",
           "to": [
-            "ccm"
+            "connectivity"
           ]
         },
         {
@@ -346,12 +358,19 @@
       "edge": false,
       "scope": {
         "publishes": [],
-        "reads": [],
-        "hears": []
+        "reads": [
+          "ListTrades",
+          "ListQuotes",
+          "ListDatasets"
+        ],
+        "hears": [
+          "TradesRecorded",
+          "QuotesRecorded"
+        ]
       }
     },
     {
-      "name": "match",
+      "name": "confirmation",
       "status": "ruled",
       "persona": "the middle office",
       "archetype": "Confirmation and affirmation, an edge",
@@ -424,7 +443,7 @@
         {
           "what": "the venue",
           "to": [
-            "ccm"
+            "connectivity"
           ]
         },
         {
@@ -482,7 +501,7 @@
           "to": [
             "oms",
             "ems",
-            "ccm"
+            "connectivity"
           ]
         },
         {
@@ -611,7 +630,7 @@
             "portfolio",
             "oms",
             "ems",
-            "ccm"
+            "connectivity"
           ]
         },
         {
@@ -631,6 +650,7 @@
       "scope": {
         "publishes": [],
         "reads": [
+          "ResolveIdentifier",
           "ResolveInstrument",
           "ListPositions",
           "ListBreaks",
@@ -746,11 +766,15 @@
         "reads": [
           "ListPrices",
           "ListBars",
+          "ListTrades",
+          "ListQuotes",
           "ListDatasets"
         ],
         "hears": [
           "PricesRecorded",
-          "BarsRecorded"
+          "BarsRecorded",
+          "TradesRecorded",
+          "QuotesRecorded"
         ]
       }
     }
@@ -882,7 +906,7 @@
       "topic": "platform.lake.command.decline-want",
       "roles": {
         "publishes": [
-          "dgm"
+          "data"
         ]
       },
       "stability": "preview"
@@ -962,7 +986,7 @@
     {
       "name": "ListBars",
       "step": "W10.6",
-      "title": "Read prices and bars, point in time, by source",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
       "kind": "query",
       "topic": "platform.lake.query.list-bars",
       "roles": {
@@ -1014,6 +1038,8 @@
       "roles": {
         "reads": [
           "compliance",
+          "data",
+          "ems",
           "portfolio",
           "reporting",
           "signal"
@@ -1041,7 +1067,7 @@
     {
       "name": "ListPrices",
       "step": "W10.6",
-      "title": "Read prices and bars, point in time, by source",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
       "kind": "query",
       "topic": "platform.lake.query.list-prices",
       "roles": {
@@ -1049,6 +1075,20 @@
           "compliance",
           "portfolio",
           "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ListQuotes",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-quotes",
+      "roles": {
+        "reads": [
+          "ems",
           "signal"
         ]
       },
@@ -1081,6 +1121,21 @@
       "stability": "preview"
     },
     {
+      "name": "ListTrades",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-trades",
+      "roles": {
+        "reads": [
+          "data",
+          "ems",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ObservationsWanted",
       "step": "W10.7",
       "title": "Want what a read could not answer",
@@ -1088,7 +1143,7 @@
       "topic": "platform.lake.event.observations-wanted",
       "roles": {
         "hears": [
-          "dgm"
+          "data"
         ]
       },
       "stability": "preview"
@@ -1121,6 +1176,20 @@
           "compliance",
           "portfolio",
           "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "QuotesRecorded",
+      "step": "W10.5",
+      "title": "Record, sequence and publish each row",
+      "kind": "event",
+      "topic": "platform.lake.{dataset}.event.quotes-recorded",
+      "roles": {
+        "hears": [
+          "ems",
           "signal"
         ]
       },
@@ -1181,12 +1250,12 @@
     {
       "name": "RecordBars",
       "step": "W10.4",
-      "title": "Record prices and bars in batches",
+      "title": "Record prices, bars, trades and quotes in batches",
       "kind": "command",
       "topic": "platform.lake.command.record-bars",
       "roles": {
         "publishes": [
-          "dgm"
+          "data"
         ]
       },
       "stability": "preview"
@@ -1259,12 +1328,38 @@
     {
       "name": "RecordPrices",
       "step": "W10.4",
-      "title": "Record prices and bars in batches",
+      "title": "Record prices, bars, trades and quotes in batches",
       "kind": "command",
       "topic": "platform.lake.command.record-prices",
       "roles": {
         "publishes": [
-          "dgm"
+          "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RecordQuotes",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-quotes",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RecordTrades",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-trades",
+      "roles": {
+        "publishes": [
+          "data"
         ]
       },
       "stability": "preview"
@@ -1291,7 +1386,7 @@
       "roles": {
         "publishes": [
           "custody",
-          "dgm"
+          "data"
         ]
       },
       "stability": "stable"
@@ -1304,7 +1399,7 @@
       "topic": "platform.reference.event.venue-missing",
       "roles": {
         "publishes": [
-          "dgm"
+          "data"
         ]
       },
       "stability": "preview"
@@ -1344,7 +1439,8 @@
       "roles": {
         "reads": [
           "custody",
-          "dgm"
+          "data",
+          "reporting"
         ]
       },
       "stability": "stable"
@@ -1358,6 +1454,7 @@
       "roles": {
         "reads": [
           "compliance",
+          "data",
           "oms",
           "operations",
           "portfolio",
@@ -1374,7 +1471,7 @@
       "topic": "platform.reference.query.resolve-venue",
       "roles": {
         "reads": [
-          "dgm"
+          "data"
         ]
       },
       "stability": "preview"
@@ -1406,6 +1503,20 @@
       "stability": "preview"
     },
     {
+      "name": "TradesRecorded",
+      "step": "W10.5",
+      "title": "Record, sequence and publish each row",
+      "kind": "event",
+      "topic": "platform.lake.{dataset}.event.trades-recorded",
+      "roles": {
+        "hears": [
+          "ems",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "WantWithdrawn",
       "step": "W10.7",
       "title": "Want what a read could not answer",
@@ -1413,7 +1524,7 @@
       "topic": "platform.lake.event.want-withdrawn",
       "roles": {
         "hears": [
-          "dgm"
+          "data"
         ]
       },
       "stability": "preview"
@@ -1473,6 +1584,18 @@
       "step": "W4.13",
       "title": "Report a move of raw records",
       "stability": "preview"
+    },
+    {
+      "name": "ReadPreparedCall",
+      "step": "W4.14",
+      "title": "Read the prepared change a page was opened from",
+      "stability": "preview"
+    },
+    {
+      "name": "SetOwnSettings",
+      "step": "W6.31",
+      "title": "Save one's own settings for a plugin",
+      "stability": "preview"
     }
   ],
   "combinations": [
@@ -1502,7 +1625,7 @@
       "name": "an aggregator of brokerage accounts that also trades",
       "roles": [
         "custody",
-        "ccm"
+        "connectivity"
       ]
     }
   ],
@@ -1703,7 +1826,7 @@
       ],
       "reshaped": false,
       "why": "Comparing targets with positions and proposing orders is the investment decision. One vendor's plugin may hold portfolio, oms and ems for unattended trading, and the duties stay separate in the records; the mandate's limits stay compliance's.",
-      "deployment_needs": "an oms plugin to work the orders and a ccm plugin for the broker",
+      "deployment_needs": "an oms plugin to work the orders and a connectivity plugin for the broker",
       "people": "write",
       "needs": [
         {
@@ -1724,10 +1847,10 @@
       "request": "Trade bonds by request for quote",
       "least_roles": [
         "ems",
-        "ccm"
+        "connectivity"
       ],
       "reshaped": false,
-      "why": "ems, or ccm, or both. Coordinating a request for quote across dealers is ems's; speaking to the venue that carries it is ccm's. A trader's quote screen is ems alone, the venue's adapter ccm alone, and a vendor offering both in one plugin holds both. The order still comes from portfolio and is worked by oms. The request's parameters, its due, firm-until and expiry times among them, are standard fields of the order path, converted by the ccm at the edge, never a venue's extras.",
+      "why": "ems, or connectivity, or both. Coordinating a request for quote across dealers is ems's; speaking to the venue that carries it is connectivity's. A trader's quote screen is ems alone, the venue's adapter connectivity alone, and a vendor offering both in one plugin holds both. The order still comes from portfolio and is worked by oms. The request's parameters, its due, firm-until and expiry times among them, are standard fields of the order path, converted by the connectivity plugin at the edge, never a venue's extras.",
       "deployment_needs": "a portfolio plugin to decide and an oms plugin to work the order",
       "people": "write",
       "needs": [
@@ -1737,7 +1860,7 @@
           "pending": "the order path's revisions, after the book's"
         },
         {
-          "role": "ccm",
+          "role": "connectivity",
           "what": "sending placements and reporting the venue's answers",
           "pending": "the order path's first revision, after the book's"
         },

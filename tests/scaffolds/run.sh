@@ -7,12 +7,17 @@
 #
 #   - The reference plugin keeps every rule, checked as verified too.
 #   - Given `custody`, as the tutorial gives it to record a statement no
-#     vendor sent, it keeps every rule; checked as verified, it fails
-#     role-suite, since no test of its runs the custody suite.
-#   - The `dgm` and `reporting` templates keep every rule, verified, their
-#     tests running their role's suite.
-#   - The `dgm` with a float in its price path fails: its suite's cases,
-#     run by its own tests, catch the price recorded through a float.
+#     vendor sent, it keeps every rule, told the custody role's common part
+#     as advice; checked as verified, it fails role-suite, since no test of
+#     its runs the custody suite, and role-pages, since it has none of the
+#     role's common pages.
+#   - The `data`, `operations` and `reporting` templates keep every rule,
+#     verified, the data and reporting templates' tests running their role's
+#     suite; the `custody` template keeps every rule and the role's common
+#     part, and its tests run no custody suite (SDK 0.24.0), so verified it
+#     fails role-suite alone.
+#   - The `data` template with a float in its price path fails: its suite's
+#     cases, run by its own tests, catch the price recorded through a float.
 #
 # Runs inside the scaffolds stage of Dockerfile.rust.
 set -eu
@@ -73,31 +78,48 @@ passes reference --verified --run-tests
 sed -i 's/^roles = \[\]$/roles = ["custody"]/' reference/pyproject.toml
 grep -q '^roles = \["custody"\]$' reference/pyproject.toml
 passes reference --run-tests
-fails_saying reference "it holds \`custody\`, and no test runs the custody suite" --verified
-
-for role in dgm reporting; do
-    meridian plugin new "$role-plugin" --role "$role" --into "$role-plugin" >/dev/null
-    install "$role-plugin"
-    passes "$role-plugin" --verified --run-tests
-done
-
-# The fixture: the dgm's vendor's JSON read with Python's floats, every price
-# passed through one on its way to the lake.
-convert=dgm-plugin/src/dgm_plugin/convert.py
-sed -i 's/json.loads(text, parse_float=Decimal, parse_int=Decimal)/json.loads(text)/' "$convert"
-if ! grep -q '= json.loads(text)$' "$convert"; then
-    say "FAIL  the fixture did not put a float in the dgm's price path"
+if grep -q "declares no Account links page" reference.out; then
+    say "ok    reference: given custody, it is told the role's common part as advice"
+else
+    say "FAIL  reference: given custody, it was not told the role's common part:"
+    cat reference.out
     failed=1
 fi
-fails_saying dgm-plugin "FAIL  tests-pass" --verified --run-tests
+fails_saying reference "it holds \`custody\`, and no test runs the custody suite" --verified
+fails_saying reference "it holds \`custody\`, and declares no Account links page" --verified
+
+for role in data operations reporting custody; do
+    meridian plugin new "$role-plugin" --role "$role" --into "$role-plugin" >/dev/null
+    install "$role-plugin"
+    passes "$role-plugin" --run-tests
+done
+for role in data operations reporting; do
+    passes "$role-plugin" --verified --run-tests
+done
+fails_saying custody-plugin "it holds \`custody\`, and no test runs the custody suite" --verified
+if grep -q "FAIL  role-pages" custody-plugin.out; then
+    say "FAIL  custody-plugin: it does not keep the custody role's common part:"
+    cat custody-plugin.out
+    failed=1
+fi
+
+# The fixture: the data plugin's vendor's JSON read with Python's floats,
+# every price passed through one on its way to the lake.
+convert=data-plugin/src/data_plugin/convert.py
+sed -i 's/json.loads(text, parse_float=Decimal, parse_int=Decimal)/json.loads(text)/' "$convert"
+if ! grep -q '= json.loads(text)$' "$convert"; then
+    say "FAIL  the fixture did not put a float in the data plugin's price path"
+    failed=1
+fi
+fails_saying data-plugin "FAIL  tests-pass" --verified --run-tests
 # And the case that names it: a price with more decimal places than a float
 # holds. (Every case recording a price fails; this one is the float's.)
-(cd dgm-plugin && python3 -m pytest -vv -p no:cacheprovider tests/test_suite.py) >dgm-suite.out 2>&1 || true
-if grep -q "'an-exact-price': 'raised" dgm-suite.out; then
-    say "ok    dgm-plugin: its suite fails an-exact-price"
+(cd data-plugin && python3 -m pytest -vv -p no:cacheprovider tests/test_suite.py) >data-suite.out 2>&1 || true
+if grep -q "'an-exact-price': 'raised" data-suite.out; then
+    say "ok    data-plugin: its suite fails an-exact-price"
 else
-    say "FAIL  dgm-plugin: its suite did not fail an-exact-price:"
-    cat dgm-suite.out
+    say "FAIL  data-plugin: its suite did not fail an-exact-price:"
+    cat data-suite.out
     failed=1
 fi
 

@@ -32,7 +32,8 @@ meridian -- bringing a Meridian deployment up
                              move a running deployment to a newer chart, in place,
                              after checking it can; not this binary
   meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>;
-                             with --role dgm or reporting, that role's template
+                             with --role custody, data, operations or reporting,
+                             that role's template
   meridian plugin check      hold the plugin here to the framework's rules: its pages,
                              settings, SDK use, [tool.meridian], tests and shape
   meridian plugin migrate    move the plugin here to a newer release of its SDK: its pins,
@@ -118,17 +119,23 @@ plugin new:
       --into <dir>          where to write it (default: ./<name>). Never somewhere
                             that already exists
       --role <role>         write that role's template, a whole plugin holding it
-                            with its tests running the role's suite: dgm (a
-                            vendor's prices into the lake) or reporting (the book
-                            valued from the lake). Without it, the reference plugin
+                            on the role's common pages and settings: custody (a
+                            custodian's accounts and statements), data (a
+                            vendor's prices into the lake, its tests running the
+                            suite), operations (opening balances, reconciliation
+                            and breaks) or reporting (the book valued from the
+                            lake, its tests running the suite). Without it, the
+                            reference plugin
 
 plugin check: needs no deployment. Exits 0 when every rule holds, 1 when one does
 not, each failure with its file, line and what to write instead
       --dir <dir>           the plugin's directory (default: .)
       --run-tests           run its tests too, with pytest
       --verified            hold it as a verified plugin is: every changing route
-                            a tool for agents, none kept from them, and each role
-                            it holds with a suite (custody, dgm) run in its tests
+                            a tool for agents, none kept from them, each role it
+                            holds with a suite (custody, data) run in its tests,
+                            and each role's common pages, tools and settings kept
+                            (role-pages; without --verified, said as advice)
       --json                one JSON object on stdout
 
 plugin migrate: needs no deployment, and docker. Exits 0 when migrated with nothing

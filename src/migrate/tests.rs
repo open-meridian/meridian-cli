@@ -29,6 +29,34 @@ impl Plugin {
         plugin
     }
 
+    /// A role's template, as `plugin new --role` writes it, moved back to
+    /// `version` with each of its files' `from` written `to`.
+    fn of_role(label: &str, role: &str, version: &str, renamed: &[(&str, &str, &str)]) -> Self {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("after 1970")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("meridian-migrate-{label}-{unique}"));
+        crate::plugin::scaffold("migrated-plugin", &dir, Some(role)).expect("the template scaffolds");
+        let plugin = Plugin(dir);
+        let current = sdk_pin(&PYTHON, &plugin.read("pyproject.toml")).expect("pinned");
+        for file in ["pyproject.toml", "Dockerfile"] {
+            let text = plugin.read(file);
+            plugin.write(
+                file,
+                &text
+                    .replace(&format!("=={current}"), &format!("=={version}"))
+                    .replace(&format!("python:{current}"), &format!("python:{version}")),
+            );
+        }
+        for (file, from, to) in renamed {
+            let text = plugin.read(file);
+            assert!(text.contains(from), "{file} holds {from:?}");
+            plugin.write(file, &text.replace(from, to));
+        }
+        plugin
+    }
+
     fn read(&self, file: &str) -> String {
         std::fs::read_to_string(self.0.join(file)).expect("a file")
     }
@@ -522,4 +550,74 @@ fn the_image_is_kept_under_a_tag_of_its_own() {
         tag_for("plugin-python:local"),
         "meridian-migrate:plugin-python-local"
     );
+}
+
+#[tokio::test]
+async fn a_data_plugin_written_as_a_dgm_on_0_23_0_comes_out_holding_data() {
+    // A data plugin as 0.23.0 wrote it: holding `dgm`, its suite run as the
+    // dgm suite. This release knows no role `dgm`, with no alias.
+    let plugin = Plugin::of_role(
+        "dgm",
+        "data",
+        "0.23.0",
+        &[
+            ("pyproject.toml", "roles = [\"data\"]", "roles = [\"dgm\"]"),
+            ("tests/test_suite.py", "run(\"data\",", "run(\"dgm\","),
+        ],
+    );
+    let before = crate::check::check(&plugin.0, false).unwrap();
+    assert!(
+        before
+            .failures
+            .iter()
+            .any(|failure| failure.found == "`dgm` is not one of the deployment's roles"),
+        "{}",
+        crate::check::text(&before)
+    );
+
+    // The SDK's 0.23.0 to 0.24.0 step, as it answers: each role's name
+    // rewritten where the plugin names a role.
+    let pyproject = plugin
+        .read("pyproject.toml")
+        .replace("open-meridian==0.23.0", "open-meridian==0.24.0")
+        .replace("roles = [\"dgm\"]", "roles = [\"data\"]");
+    let suite = plugin
+        .read("tests/test_suite.py")
+        .replace("run(\"dgm\",", "run(\"data\",");
+    let mut fake = Fake::new(
+        &serde_json::json!({
+            "from": "0.23.0",
+            "to": "0.24.0",
+            "steps": [{
+                "from": "0.23.0",
+                "to": "0.24.0",
+                "summary": "The SDK declares contract v20 (meridian.SCHEMA_VERSION). Three roles are renamed.",
+                "breaking": true,
+                "rewrote": [
+                    {"file": "pyproject.toml", "rule": "metadata-role-renamed", "what": "the role in [tool.meridian] roles", "places": 1},
+                    {"file": "tests/test_suite.py", "rule": "role-renamed", "what": "the role a suite is run for", "places": 1},
+                ],
+            }],
+            "files": {"pyproject.toml": pyproject, "tests/test_suite.py": suite},
+            "by_hand": [],
+        })
+        .to_string(),
+    );
+    fake.index = Ok((
+        200,
+        r#"{"info": {"version": "0.24.0"}, "releases": {"0.23.0": [], "0.24.0": []}}"#.into(),
+    ));
+    let report = done(migrate(&fake, &PYTHON, &plugin.asked()).await);
+
+    let (run, _) = fake.ran_docker("run").unwrap();
+    assert!(run.ends_with(&["--from", "0.23.0", "--to", "0.24.0"].map(String::from)));
+    assert!(plugin.read("pyproject.toml").contains("roles = [\"data\"]"));
+    assert!(plugin.read("tests/test_suite.py").contains("run(\"data\","));
+    assert!(plugin.read("Dockerfile").contains("plugin-python:0.24.0"));
+    assert!(report.done(), "{}", text(&report));
+    assert!(report.steps[0].breaking);
+    // And as a verified data plugin is held: its suite run, its common part
+    // kept.
+    let verified = crate::check::check_as(&plugin.0, false, true).unwrap();
+    assert!(verified.passed(), "{}", crate::check::text(&verified));
 }

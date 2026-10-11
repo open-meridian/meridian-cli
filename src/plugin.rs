@@ -5,10 +5,11 @@
 //! sidecar -- copied into this repository at one SDK revision (`SDK_REV` in the
 //! Makefile) and compiled into the binary. So scaffolding needs no network and
 //! gives the same plugin every time, and `check-vendored-template` fails when
-//! this copy stops being the SDK's. With `--role dgm` or `--role reporting` it
-//! writes that role's template instead, from the SDK's `templates/<role>/`,
-//! vendored the same way: a whole plugin holding the role, its tests running
-//! the role's suite.
+//! this copy stops being the SDK's. With `--role` and `custody`, `data`,
+//! `operations` or `reporting` it writes that role's template instead, from the
+//! SDK's `templates/<role>/`, vendored the same way: a whole plugin holding the
+//! role, on the role's common part (spec/plugin-pages-follow-their-role), its
+//! tests running the role's suite where the template has one.
 //!
 //! The only thing changed on the way out is the name: the templates call
 //! themselves `reference-plugin`, importable as `reference_plugin`, and both
@@ -69,91 +70,245 @@ const TEMPLATE: [(&str, &str); 15] = [
     ),
 ];
 
-/// The `dgm` template, as it sits in `plugin-templates/dgm/`: a vendor's
-/// prices put into the lake, its catalogue declared, its Connection and
-/// Datasets pages with their read tools, and its tests running the suite.
-const DGM: [(&str, &str); 19] = [
+/// The `data` template, as it sits in `plugin-templates/data/`: a vendor's
+/// prices put into the lake, its catalogue declared, the data role's common
+/// pages, Connection and Datasets, with their read tools, and its tests
+/// running the suite.
+const DATA: [(&str, &str); 19] = [
     (
         "AGENTS.md",
-        include_str!("../plugin-templates/dgm/AGENTS.md"),
+        include_str!("../plugin-templates/data/AGENTS.md"),
     ),
     (
         ".claude/skills/develop-live/SKILL.md",
-        include_str!("../plugin-templates/dgm/.claude/skills/develop-live/SKILL.md"),
+        include_str!("../plugin-templates/data/.claude/skills/develop-live/SKILL.md"),
     ),
     (
         ".dockerignore",
-        include_str!("../plugin-templates/dgm/.dockerignore"),
+        include_str!("../plugin-templates/data/.dockerignore"),
     ),
     (
         "CLAUDE.md",
-        include_str!("../plugin-templates/dgm/CLAUDE.md"),
+        include_str!("../plugin-templates/data/CLAUDE.md"),
     ),
     (
         ".gitignore",
-        include_str!("../plugin-templates/dgm/.gitignore"),
+        include_str!("../plugin-templates/data/.gitignore"),
     ),
     (
         "Dockerfile",
-        include_str!("../plugin-templates/dgm/Dockerfile"),
+        include_str!("../plugin-templates/data/Dockerfile"),
     ),
     (
         "README.md",
-        include_str!("../plugin-templates/dgm/README.md"),
+        include_str!("../plugin-templates/data/README.md"),
     ),
     (
         "pyproject.toml",
-        include_str!("../plugin-templates/dgm/pyproject.toml"),
+        include_str!("../plugin-templates/data/pyproject.toml"),
     ),
     (
         "src/reference_plugin/__init__.py",
-        include_str!("../plugin-templates/dgm/src/reference_plugin/__init__.py"),
+        include_str!("../plugin-templates/data/src/reference_plugin/__init__.py"),
     ),
     (
         "src/reference_plugin/__main__.py",
-        include_str!("../plugin-templates/dgm/src/reference_plugin/__main__.py"),
+        include_str!("../plugin-templates/data/src/reference_plugin/__main__.py"),
     ),
     (
         "src/reference_plugin/convert.py",
-        include_str!("../plugin-templates/dgm/src/reference_plugin/convert.py"),
+        include_str!("../plugin-templates/data/src/reference_plugin/convert.py"),
     ),
     (
         "src/reference_plugin/declaration.py",
-        include_str!("../plugin-templates/dgm/src/reference_plugin/declaration.py"),
+        include_str!("../plugin-templates/data/src/reference_plugin/declaration.py"),
     ),
     (
         "src/reference_plugin/page.py",
-        include_str!("../plugin-templates/dgm/src/reference_plugin/page.py"),
-    ),
-    (
-        "src/reference_plugin/vendor.py",
-        include_str!("../plugin-templates/dgm/src/reference_plugin/vendor.py"),
+        include_str!("../plugin-templates/data/src/reference_plugin/page.py"),
     ),
     (
         "src/reference_plugin/templates/connection.html",
-        include_str!("../plugin-templates/dgm/src/reference_plugin/templates/connection.html"),
+        include_str!("../plugin-templates/data/src/reference_plugin/templates/connection.html"),
     ),
     (
         "src/reference_plugin/templates/datasets.html",
-        include_str!("../plugin-templates/dgm/src/reference_plugin/templates/datasets.html"),
+        include_str!("../plugin-templates/data/src/reference_plugin/templates/datasets.html"),
+    ),
+    (
+        "src/reference_plugin/vendor.py",
+        include_str!("../plugin-templates/data/src/reference_plugin/vendor.py"),
     ),
     (
         "tests/test_page.py",
-        include_str!("../plugin-templates/dgm/tests/test_page.py"),
+        include_str!("../plugin-templates/data/tests/test_page.py"),
     ),
     (
         "tests/test_suite.py",
-        include_str!("../plugin-templates/dgm/tests/test_suite.py"),
+        include_str!("../plugin-templates/data/tests/test_suite.py"),
     ),
     (
         ".github/workflows/check.yaml",
-        include_str!("../plugin-templates/dgm/.github/workflows/check.yaml"),
+        include_str!("../plugin-templates/data/.github/workflows/check.yaml"),
+    ),
+];
+
+/// The `custody` template, as it sits in `plugin-templates/custody/`: a
+/// custodian's accounts and statements brought in, on the custody role's
+/// common pages, Connections, Account links and Statements, with their tools.
+const CUSTODY: [(&str, &str); 18] = [
+    (
+        "AGENTS.md",
+        include_str!("../plugin-templates/custody/AGENTS.md"),
+    ),
+    (
+        ".claude/skills/develop-live/SKILL.md",
+        include_str!("../plugin-templates/custody/.claude/skills/develop-live/SKILL.md"),
+    ),
+    (
+        ".dockerignore",
+        include_str!("../plugin-templates/custody/.dockerignore"),
+    ),
+    (
+        "CLAUDE.md",
+        include_str!("../plugin-templates/custody/CLAUDE.md"),
+    ),
+    (
+        ".gitignore",
+        include_str!("../plugin-templates/custody/.gitignore"),
+    ),
+    (
+        "Dockerfile",
+        include_str!("../plugin-templates/custody/Dockerfile"),
+    ),
+    (
+        "README.md",
+        include_str!("../plugin-templates/custody/README.md"),
+    ),
+    (
+        "pyproject.toml",
+        include_str!("../plugin-templates/custody/pyproject.toml"),
+    ),
+    (
+        "src/reference_plugin/__init__.py",
+        include_str!("../plugin-templates/custody/src/reference_plugin/__init__.py"),
+    ),
+    (
+        "src/reference_plugin/__main__.py",
+        include_str!("../plugin-templates/custody/src/reference_plugin/__main__.py"),
+    ),
+    (
+        "src/reference_plugin/custodian.py",
+        include_str!("../plugin-templates/custody/src/reference_plugin/custodian.py"),
+    ),
+    (
+        "src/reference_plugin/declaration.py",
+        include_str!("../plugin-templates/custody/src/reference_plugin/declaration.py"),
+    ),
+    (
+        "src/reference_plugin/page.py",
+        include_str!("../plugin-templates/custody/src/reference_plugin/page.py"),
+    ),
+    (
+        "src/reference_plugin/templates/account_links.html",
+        include_str!("../plugin-templates/custody/src/reference_plugin/templates/account_links.html"),
+    ),
+    (
+        "src/reference_plugin/templates/connections.html",
+        include_str!("../plugin-templates/custody/src/reference_plugin/templates/connections.html"),
+    ),
+    (
+        "src/reference_plugin/templates/statements.html",
+        include_str!("../plugin-templates/custody/src/reference_plugin/templates/statements.html"),
+    ),
+    (
+        "tests/test_page.py",
+        include_str!("../plugin-templates/custody/tests/test_page.py"),
+    ),
+    (
+        ".github/workflows/check.yaml",
+        include_str!("../plugin-templates/custody/.github/workflows/check.yaml"),
+    ),
+];
+
+/// The `operations` template, as it sits in `plugin-templates/operations/`:
+/// the operations role's common pages, Breaks, Reconciliations and Opening
+/// balances, with their tools, an opening balance's confirmation checked so
+/// an agent may prepare it.
+const OPERATIONS: [(&str, &str); 17] = [
+    (
+        "AGENTS.md",
+        include_str!("../plugin-templates/operations/AGENTS.md"),
+    ),
+    (
+        ".claude/skills/develop-live/SKILL.md",
+        include_str!("../plugin-templates/operations/.claude/skills/develop-live/SKILL.md"),
+    ),
+    (
+        ".dockerignore",
+        include_str!("../plugin-templates/operations/.dockerignore"),
+    ),
+    (
+        "CLAUDE.md",
+        include_str!("../plugin-templates/operations/CLAUDE.md"),
+    ),
+    (
+        ".gitignore",
+        include_str!("../plugin-templates/operations/.gitignore"),
+    ),
+    (
+        "Dockerfile",
+        include_str!("../plugin-templates/operations/Dockerfile"),
+    ),
+    (
+        "README.md",
+        include_str!("../plugin-templates/operations/README.md"),
+    ),
+    (
+        "pyproject.toml",
+        include_str!("../plugin-templates/operations/pyproject.toml"),
+    ),
+    (
+        "src/reference_plugin/__init__.py",
+        include_str!("../plugin-templates/operations/src/reference_plugin/__init__.py"),
+    ),
+    (
+        "src/reference_plugin/__main__.py",
+        include_str!("../plugin-templates/operations/src/reference_plugin/__main__.py"),
+    ),
+    (
+        "src/reference_plugin/declaration.py",
+        include_str!("../plugin-templates/operations/src/reference_plugin/declaration.py"),
+    ),
+    (
+        "src/reference_plugin/page.py",
+        include_str!("../plugin-templates/operations/src/reference_plugin/page.py"),
+    ),
+    (
+        "src/reference_plugin/templates/breaks.html",
+        include_str!("../plugin-templates/operations/src/reference_plugin/templates/breaks.html"),
+    ),
+    (
+        "src/reference_plugin/templates/opening_balances.html",
+        include_str!("../plugin-templates/operations/src/reference_plugin/templates/opening_balances.html"),
+    ),
+    (
+        "src/reference_plugin/templates/reconciliations.html",
+        include_str!("../plugin-templates/operations/src/reference_plugin/templates/reconciliations.html"),
+    ),
+    (
+        "tests/test_page.py",
+        include_str!("../plugin-templates/operations/tests/test_page.py"),
+    ),
+    (
+        ".github/workflows/check.yaml",
+        include_str!("../plugin-templates/operations/.github/workflows/check.yaml"),
     ),
 ];
 
 /// The `reporting` template, as it sits in `plugin-templates/reporting/`: the
-/// book's positions valued at the close from the lake, its tests running the
-/// suite.
+/// book's positions valued at the close from the lake, its Datasets page, its
+/// tests running the suite.
 const REPORTING: [(&str, &str); 17] = [
     (
         "AGENTS.md",
@@ -226,7 +381,12 @@ const REPORTING: [(&str, &str); 17] = [
 ];
 
 /// The roles `plugin new --role` has a template for, each with its files.
-pub const ROLE_TEMPLATES: [(&str, &[(&str, &str)]); 2] = [("dgm", &DGM), ("reporting", &REPORTING)];
+pub const ROLE_TEMPLATES: [(&str, &[(&str, &str)]); 4] = [
+    ("custody", &CUSTODY),
+    ("data", &DATA),
+    ("operations", &OPERATIONS),
+    ("reporting", &REPORTING),
+];
 
 /// The files to write: the reference plugin's, or the template of `role`.
 /// A role from the fixed list with no template of its own is refused, naming
@@ -238,11 +398,16 @@ fn template(role: Option<&str>) -> Result<&'static [(&'static str, &'static str)
     if let Some((_, files)) = ROLE_TEMPLATES.iter().find(|(held, _)| *held == role) {
         return Ok(files);
     }
-    let with = ROLE_TEMPLATES
+    let mut with = ROLE_TEMPLATES
         .iter()
         .map(|(held, _)| format!("`--role {held}`"))
-        .collect::<Vec<_>>()
-        .join(" or ");
+        .collect::<Vec<_>>();
+    let last = with.pop().unwrap_or_default();
+    let with = if with.is_empty() {
+        last
+    } else {
+        format!("{} or {last}", with.join(", "))
+    };
     if crate::check::ROLES.contains(&role) {
         Err(format!(
             "there is no template for `{role}` yet: `plugin new` writes the reference plugin, \
@@ -327,12 +492,20 @@ fn renamed(text: &str, name: &str, module: &str) -> String {
 /// What to do next, said once the files are written.
 pub fn next_steps(name: &str, into: &Path, role: Option<&str>) -> String {
     let made = match role {
+        Some(role) if role.starts_with(['a', 'e', 'i', 'o', 'u']) => {
+            format!("an `{role}` plugin, ")
+        }
         Some(role) => format!("a `{role}` plugin, "),
         None => String::new(),
     };
-    // A role's template runs the role's suite in its tests, and a plugin
-    // holding the role is verified for it only by passing every case.
-    let suite = match role {
+    // A role's template that runs the role's suite in its tests says so: a
+    // plugin holding the role is verified for it only by passing every case.
+    let with_suite = template(role).is_ok_and(|files| {
+        files
+            .iter()
+            .any(|(path, _)| *path == "tests/test_suite.py")
+    });
+    let suite = match role.filter(|_| with_suite) {
         Some(role) => format!(
             "\nIts tests run the {role} suite, each case through its own code; hold it to\n\
              every case, as a verified plugin is held:\n\

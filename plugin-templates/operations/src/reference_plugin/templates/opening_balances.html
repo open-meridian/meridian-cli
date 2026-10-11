@@ -1,0 +1,10 @@
+{% extends "meridian/roles/operations/opening_balances.html" %}
+{% block vendor_sections %}
+{% if level == "write" and data.awaiting_an_opening_balance is defined %}
+<section class="panel"><h2>Confirm</h2>
+<form method="post" action="/opening/confirm">{{ csrf_input }}
+<label>Account <input name="account_id" value="{{ started.account_id|default('') }}"></label>
+<label>As of <input name="as_of_date" value="{{ started.as_of_date|default('') }}"></label>
+<button class="primary">Confirm</button></form></section>
+{% endif %}
+{% endblock %}

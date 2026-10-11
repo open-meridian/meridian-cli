@@ -27,6 +27,7 @@ from decimal import Decimal
 
 import meridian
 from meridian.plugin.v1 import operations_pb2 as ops
+from meridian.roles import reporting
 
 NS = 1_000_000_000
 
@@ -73,9 +74,23 @@ class Report:
 
     async def datasets(self) -> list[str]:
         """The datasets this plugin may read, by name."""
+        return [each.dataset for each in await self.entitled()]
+
+    async def entitled(self) -> list[reporting.DatasetRead]:
+        """Each dataset this plugin may read, whether it is entitled to it
+        and to which fields (none: every field): the reporting role's
+        Datasets page's rows."""
         read = await self.plugin.list_datasets()
         self.datasets_read = [ref.dataset for ref in read.datasets]
-        return self.datasets_read
+        mine = {each.dataset: each for each in read.entitlements}
+        return [
+            reporting.DatasetRead(
+                dataset=name,
+                entitled=name in mine and mine[name].allowed,
+                fields=list(mine[name].fields) if name in mine else [],
+            )
+            for name in self.datasets_read
+        ]
 
     async def currency(self, day: date) -> str:
         """The deployment's cash instrument for the reporting currency on

@@ -148,29 +148,43 @@ fn a_freshly_scaffolded_plugin_with_a_test_keeps_every_rule() {
     );
 }
 
-// ── role-suite (contract v11, and the dgm suite from v18) ────────────────
+// ── role-suite (contract v11, and the data suite from v18) ───────────────
 
 #[test]
 fn a_custody_plugin_from_the_template_keeps_every_rule_and_a_verified_one_runs_its_suite() {
     // The tutorial's plugin: the reference plugin given `custody`, recording a
     // statement no vendor sent. It is not verified for custody, and that
-    // breaks no rule; checked as verified, it must run the suite.
+    // breaks no rule; checked as verified, it must run the suite and keep the
+    // role's common part, which it is told as advice meanwhile.
     let plugin = Scaffolded::tested("custody-fresh");
     plugin.replace("pyproject.toml", "roles = []", "roles = [\"custody\"]");
     let report = plugin.check();
     assert!(report.passed(), "{}", text(&report));
-    assert!(report
-        .outcomes
-        .iter()
-        .any(|(id, _, outcome)| *id == "role-suite" && *outcome == Outcome::Skipped));
+    for rule in ["role-suite", "role-pages"] {
+        assert!(report
+            .outcomes
+            .iter()
+            .any(|(id, _, outcome)| *id == rule && *outcome == Outcome::Skipped));
+    }
+    assert!(
+        report.advice.iter().all(|advice| advice.rule == "role-pages") && !report.advice.is_empty()
+    );
+    let said = text(&report);
+    assert!(
+        said.contains("it holds `custody`, and declares no Account links page")
+            && said.contains("failing nothing")
+            && said.contains("Every rule it was checked against holds."),
+        "{said}"
+    );
 
     let verified = plugin.check_verified();
     assert_eq!(
         failed_rules(&verified),
-        ["role-suite"],
+        ["role-suite", "role-pages"],
         "{}",
         text(&verified)
     );
+    assert!(verified.advice.is_empty());
     let failure = &verified.failures[0];
     assert_eq!(
         (failure.found.as_str(), failure.file.as_str(), failure.line),
@@ -187,17 +201,24 @@ fn a_custody_plugin_from_the_template_keeps_every_rule_and_a_verified_one_runs_i
 
 #[test]
 fn each_roles_template_keeps_every_rule_verified_or_not() {
-    for role in ["dgm", "reporting"] {
+    for role in ["data", "operations", "reporting"] {
         let plugin = Scaffolded::of_role(role, role);
         for report in [plugin.check(), plugin.check_verified()] {
             assert!(report.passed(), "{role}: {}", text(&report));
+            assert!(report.advice.is_empty(), "{role}: {}", text(&report));
         }
     }
+    // The custody template keeps the role's common part; its tests run no
+    // custody suite (SDK 0.24.0), so verified it fails that alone.
+    let plugin = Scaffolded::of_role("custody", "custody");
+    let report = plugin.check();
+    assert!(report.passed() && report.advice.is_empty(), "{}", text(&report));
+    assert_eq!(failed_rules(&plugin.check_verified()), ["role-suite"]);
 }
 
 #[test]
-fn a_verified_dgm_runs_the_dgm_suite_in_its_tests() {
-    let plugin = Scaffolded::of_role("dgm-no-suite", "dgm");
+fn a_verified_data_plugin_runs_the_data_suite_in_its_tests() {
+    let plugin = Scaffolded::of_role("data-no-suite", "data");
     std::fs::remove_file(plugin.path("tests/test_suite.py")).unwrap();
     assert!(plugin.check().passed(), "not verified, it keeps every rule");
     let verified = plugin.check_verified();
@@ -209,8 +230,300 @@ fn a_verified_dgm_runs_the_dgm_suite_in_its_tests() {
     );
     assert_eq!(
         verified.failures[0].found,
-        "it holds `dgm`, and no test runs the dgm suite"
+        "it holds `data`, and no test runs the data suite"
     );
+}
+
+#[test]
+fn a_case_not_presented_is_one_the_suite_lets_a_source_never_present() {
+    // The data suite's cases about a field (`about_field`, contract v20) may
+    // be named not presented, with why; reads-its-datasets-licences, every
+    // data plugin's, may not; nor may a name no case has.
+    let plugin = Scaffolded::of_role("data-not-presented", "data");
+    plugin.replace(
+        "tests/test_suite.py",
+        "not_presented=NOT_PRESENTED,",
+        "not_presented={\n        **NOT_PRESENTED,\n        \"the-takers-side-stated\": \"its trades name no side\",\n        \"reads-its-datasets-licences\": \"it reads none\",\n        \"a-made-up-case\": \"none\",\n    },",
+    );
+    assert!(plugin.check().passed(), "not verified, it keeps every rule");
+    let verified = plugin.check_verified();
+    assert_eq!(
+        failed_rules(&verified),
+        ["role-suite"],
+        "{}",
+        text(&verified)
+    );
+    let line = plugin
+        .read("tests/test_suite.py")
+        .lines()
+        .position(|line| line.contains("reads-its-datasets-licences\": \"it reads none"))
+        .unwrap()
+        + 1;
+    let found: Vec<(&str, usize)> = verified
+        .failures
+        .iter()
+        .map(|failure| (failure.found.as_str(), failure.line))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (
+                "it names `reads-its-datasets-licences` not presented, a case of the data suite \
+                 every plugin of the role passes",
+                line
+            ),
+            (
+                "it names `a-made-up-case` not presented, and the data suite has no such case",
+                line + 1
+            ),
+        ]
+    );
+    assert_eq!(verified.failures[0].file, "tests/test_suite.py");
+    assert!(verified.failures[0].instead.contains("about_field"));
+}
+
+#[test]
+fn the_suites_are_suites_jsons() {
+    for role in super::rules::SUITES {
+        assert!(
+            !super::rules::suite_cases(role).is_empty(),
+            "{role} has a suite"
+        );
+    }
+    let data = super::rules::suite_cases("data");
+    let optional = |name: &str| data.iter().find(|(case, _)| case == name).map(|(_, may)| *may);
+    assert_eq!(optional("the-takers-side-stated"), Some(true));
+    assert_eq!(optional("a-daily-close"), Some(true), "about closes");
+    assert_eq!(optional("reads-its-datasets-licences"), Some(false));
+    assert_eq!(optional("a-restarts-gap-backfilled"), Some(true), "about trades");
+}
+
+// ── role-pages (spec/plugin-pages-follow-their-role) ─────────────────────
+
+/// The data template, changed one way, fails role-pages alone as verified,
+/// each place said, and only advises it otherwise.
+fn role_pages_found(plugin: &Scaffolded) -> Vec<(String, String, usize)> {
+    let unverified = plugin.check();
+    assert!(unverified.passed(), "advice fails nothing: {}", text(&unverified));
+    let verified = plugin.check_verified();
+    assert_eq!(
+        failed_rules(&verified),
+        ["role-pages"],
+        "{}",
+        text(&verified)
+    );
+    let found: Vec<(String, String, usize)> = verified
+        .failures
+        .iter()
+        .map(|failure| (failure.found.clone(), failure.file.clone(), failure.line))
+        .collect();
+    let advised: Vec<(String, String, usize)> = unverified
+        .advice
+        .iter()
+        .map(|failure| (failure.found.clone(), failure.file.clone(), failure.line))
+        .collect();
+    assert_eq!(found, advised, "the same places, advised");
+    found
+}
+
+fn line_of(plugin: &Scaffolded, file: &str, holding: &str) -> usize {
+    plugin
+        .read(file)
+        .lines()
+        .position(|line| line.contains(holding))
+        .unwrap_or_else(|| panic!("{file} holds {holding:?}"))
+        + 1
+}
+
+#[test]
+fn a_data_plugin_keeps_its_roles_common_pages() {
+    // Renamed: the common page is gone, and its title's words are the
+    // plugin's own.
+    let plugin = Scaffolded::of_role("pages-renamed", "data");
+    plugin.replace(&page_py(), "\"/\", \"Connection\"", "\"/\", \"Status\"");
+    let status = line_of(&plugin, &page_py(), "\"/\", \"Status\"") - 1;
+    assert_eq!(
+        role_pages_found(&plugin),
+        [
+            (
+                "it holds `data`, and declares no Connection page".to_string(),
+                page_py(),
+                0
+            ),
+            (
+                "a page of the plugin's own, Status, comes before the data role's Datasets page"
+                    .into(),
+                page_py(),
+                status
+            ),
+        ]
+    );
+
+    // Its tool renamed and its record not the role's.
+    let plugin = Scaffolded::of_role("pages-tool", "data");
+    plugin.replace(&page_py(), "name=\"read_connection\"", "name=\"read_status\"");
+    plugin.replace(
+        &page_py(),
+        "answers=data.ConnectionRead",
+        "answers=Status",
+    );
+    plugin.add_after(
+        &page_py(),
+        "TITLE = \"Reference prices\"",
+        "\n\nclass Status:\n    mode: str\n    calls: int\n",
+    );
+    let line = line_of(&plugin, &page_py(), "\"/\", \"Connection\"") - 1;
+    assert_eq!(
+        role_pages_found(&plugin),
+        [(
+            "the data role's Connection page: its tool is not named read_connection; its \
+             record, Status, does not hold the role's common fields credentials, \
+             entitled_at_vendor, limit, rate_limited, last_call_at, last_error, sessions"
+                .into(),
+            page_py(),
+            line
+        )]
+    );
+
+    // A record of the plugin's own extending the role's holds its fields.
+    let plugin = Scaffolded::of_role("pages-extended", "data");
+    plugin.replace(&page_py(), "answers=data.ConnectionRead", "answers=Feeds");
+    plugin.add_after(
+        &page_py(),
+        "TITLE = \"Reference prices\"",
+        "\n\nclass Feeds(data.ConnectionRead):\n    feeds: str = \"\"\n",
+    );
+    assert!(plugin.check_verified().passed());
+
+    // Out of the role's order, and a page of its own ahead of them.
+    let plugin = Scaffolded::of_role("pages-order", "data");
+    plugin.replace(&page_py(), "\"/datasets\", \"Datasets\"", "\"/datasets\", \"Feeds\"");
+    plugin.replace(&page_py(), "\"/\", \"Connection\"", "\"/\", \"Datasets\"");
+    plugin.replace(&page_py(), "\"/datasets\", \"Feeds\"", "\"/datasets\", \"Connection\"");
+    let datasets = line_of(&plugin, &page_py(), "\"/\", \"Datasets\"") - 1;
+    let connection = line_of(&plugin, &page_py(), "\"/datasets\", \"Connection\"") - 1;
+    let found = role_pages_found(&plugin);
+    assert!(
+        found.contains(&(
+            "the data role's Datasets page comes before its Connection".into(),
+            page_py(),
+            datasets
+        )),
+        "{found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|(said, _, at)| *at == connection
+                && said.starts_with("the data role's Connection page: its path is not /;")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_page_of_its_own_comes_after_the_roles_in_its_tab_row() {
+    let plugin = Scaffolded::of_role("pages-own-first", "data");
+    let line = plugin.add_after(
+        &page_py(),
+        "return running[0] if running else Converter(request.plugin)",
+        "\n\n@pages.page(\"/feeds\", \"Feeds\", levels=\"admin\")\nasync def feeds(request):\n    return pages.answer(\"connection.html\", None)\n",
+    ) + 2;
+    assert_eq!(
+        role_pages_found(&plugin),
+        [(
+            "a page of the plugin's own, Feeds, comes before the data role's Datasets page".into(),
+            page_py(),
+            line
+        )]
+    );
+}
+
+#[test]
+fn a_plugin_keeps_the_common_settings_in_their_order() {
+    let declaration = format!("src/{MODULE}/declaration.py");
+    let plugin = Scaffolded::of_role("settings-order", "data");
+    plugin.replace(
+        &declaration,
+        "    sample_data: bool = meridian.sample_data()",
+        "    synthetic: bool = meridian.setting(\"Synthetic mode\", developer=True)\n    \
+         sample_data: bool = meridian.sample_data()\n    \
+         environment: str = meridian.environment()\n    \
+         sandbox: bool = meridian.setting(\"Environment\")",
+    );
+    let at = |name: &str| line_of(&plugin, &declaration, &format!("    {name}:"));
+    assert_eq!(
+        role_pages_found(&plugin),
+        [
+            (
+                "the setting synthetic, which is sample data now".to_string(),
+                declaration.clone(),
+                at("synthetic")
+            ),
+            (
+                "the setting sample_data comes before another".into(),
+                declaration.clone(),
+                at("sample_data")
+            ),
+            (
+                "the setting environment comes after another".into(),
+                declaration.clone(),
+                at("environment")
+            ),
+            (
+                "the setting sandbox is labelled Environment, the common setting \
+                 environment's label"
+                    .into(),
+                declaration.clone(),
+                at("sandbox")
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_reporting_plugin_values_in_its_reporting_currency() {
+    let plugin = Scaffolded::of_role("reporting-currency", "reporting");
+    plugin.replace(
+        &main_py(),
+        "settings=[reporting.reporting_currency()]",
+        "settings=[]",
+    );
+    assert_eq!(
+        role_pages_found(&plugin),
+        [(
+            "it holds `reporting`, and declares no setting reporting_currency".into(),
+            page_py(),
+            0
+        )]
+    );
+}
+
+#[test]
+fn a_custody_plugin_links_by_the_roles_act() {
+    let plugin = Scaffolded::of_role("custody-link", "custody");
+    plugin.replace(&page_py(), "name=\"link_account\"", "name=\"connect_account\"");
+    let found: Vec<String> = plugin
+        .check_verified()
+        .failures
+        .into_iter()
+        .filter(|failure| failure.rule == "role-pages")
+        .map(|failure| failure.found)
+        .collect();
+    assert_eq!(
+        found,
+        ["it holds `custody`, and declares no route named link_account"]
+    );
+}
+
+#[test]
+fn a_plugin_holding_no_role_with_a_common_part_is_not_held_to_one() {
+    for roles in ["[]", "[\"signal\"]", "[\"oms\"]"] {
+        let plugin = Scaffolded::tested("no-common-part");
+        plugin.replace("pyproject.toml", "roles = []", &format!("roles = {roles}"));
+        let verified = plugin.check_verified();
+        assert!(verified.passed(), "{roles}: {}", text(&verified));
+        assert!(plugin.check().advice.is_empty());
+    }
 }
 
 #[test]
@@ -253,10 +566,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.23.0", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.24.0", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.23.0",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.24.0",
         ),
         (
             "tool-meridian",

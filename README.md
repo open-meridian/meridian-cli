@@ -16,7 +16,7 @@ meridian down                # uninstall it, keeping its namespace unless asked
 meridian upgrade-deployment  # move it to a newer chart, in place, after checking it can
 meridian connect [<address>] # sign in to a deployment (default: the local one), and keep the session
 meridian sign-out            # end that session, here and at the deployment
-meridian plugin new <name>   # start a plugin from the SDK's reference plugin; --role dgm or reporting
+meridian plugin new <name>   # start a plugin from the SDK's reference plugin; --role custody, data, operations or reporting
 meridian plugin check        # hold it to the framework's rules: pages, settings, SDK, tests
 meridian plugin migrate      # move it to a newer SDK: its pins, each release's rewrite, then check
 meridian plugin upload       # build it and put it in the deployment's catalogue
@@ -350,7 +350,7 @@ On that delegation, as the deployment's administrator:
 
 ```
 meridian plugin new my-plugin            # ./my-plugin, from the SDK's reference plugin
-meridian plugin new my-prices --role dgm # a dgm plugin, from the SDK's dgm template
+meridian plugin new my-prices --role data # a data plugin, from the SDK's data template
 meridian plugin upload --dir my-plugin   # built with docker, from its own Dockerfile
 meridian plugin list                     # versions uploaded, and what is launched
 meridian plugin launch my-plugin 0.1.0 --instance my-plugin
@@ -365,20 +365,33 @@ loop below. `CLAUDE.md` and the `develop-live` skill lead Claude Code to the
 same text. Commit them with the plugin; `.dockerignore` keeps them out of its
 image.
 
-`--role dgm` and `--role reporting` write that role's template instead, from
-meridian-python's `templates/`: a whole plugin holding the role, its tests
-running the role's suite. The `dgm` puts a stand-in vendor's daily closes and
-bars into the lake, its catalogue declared from code, every price parsed from
-the vendor's text as a `Decimal`, with Connection and Datasets pages under
-Manage and their read tools, `read_connection` and `read_datasets`; asked for
-an instrument another source resolved, a custodian's say, it reads that
-instrument's record and serves it by a symbol in it; its suite's cases about
-trades and quotes, which its daily dataset never publishes, are marked not
-presented, with why. Replace the vendor with your own. The `reporting` plugin
-values the book's positions at the last close from the lake, and records
-nothing; it resolves its reporting currency by its ISO 4217 code, and its
-Closes page is a read tool too, `read_report`. A role with no template of its own is refused: the reference
-plugin takes any role in its `pyproject.toml`.
+`--role` with `custody`, `data`, `operations` or `reporting` writes that
+role's template instead, from meridian-python's `templates/`: a whole plugin
+holding the role, built on the role's common part (`meridian.roles.<role>`,
+spec/plugin-pages-follow-their-role), so a person who knows the role knows the
+plugin: the role's common settings in their order, its common pages and
+sections in the role's order with their "not set up yet" states, its
+figures, and the vendor's nuance only at the templates' blocks. The `data`
+plugin puts a stand-in vendor's daily closes and bars into the lake, its
+catalogue declared from code, every price parsed from the vendor's text as a
+`Decimal`, with the role's Connection and Datasets pages under Manage and
+their read tools, `read_connection` and `read_datasets`, each dataset said
+licensed or not (contract v20); asked for an instrument another source
+resolved, a custodian's say, it reads that instrument's record and serves it
+by a symbol in it; its tests run the data suite, its cases about trades and
+quotes, which its daily dataset never publishes, marked not presented, with
+why. Replace the vendor with your own. The `custody` plugin brings a stand-in
+custodian's accounts and statements in, on the role's Connections, Account
+links and Statements pages. The `operations` plugin keeps opening balances,
+reconciliation and breaks, on the role's Breaks, Reconciliations and Opening
+balances pages, its confirmation checked by a read tool so an agent may
+prepare it for a person. The `reporting` plugin values the book's positions
+at the last close from the lake, and records nothing; it resolves its
+reporting currency by its ISO 4217 code, its tests run the reporting suite,
+and its Closes page is a read tool too, `read_report`. A role with no
+template of its own is refused: the reference plugin takes any role in its
+`pyproject.toml`. Contract v20 renamed three roles, `dgm` to `data`, `ccm` to
+`connectivity` and `match` to `confirmation`; the old names are no roles.
 
 `upload` sends the version's declaration with it (contract v11): where
 `pyproject.toml`'s `[tool.meridian]` names one, `declaration =
@@ -388,16 +401,40 @@ settings' names, what the plugin receives and does not carry, and the storage
 it asks for, refused here when a plugin holding no edge role asks for
 storage. `plugin check` holds the same declaration to that (`edge-storage`).
 `plugin check --verified` holds a plugin holding a role with a conformance
-suite (`custody`, and `dgm` from contract v18) to a test that runs the suite
+suite (`custody`, and `data` from contract v18) to a test that runs the suite
 (`role-suite`), which `--run-tests` then runs: a plugin holding the role is
 verified for it only by passing every case, though from contract v19 the
 SDK's runner lets a case about a kind of data the plugin declares it never
-publishes be named not presented, with why. Without `--verified` the rule is
-not checked, since a plugin not passing its role's suite is not verified and
-breaks no rule: the reference plugin given `custody`, recording a statement no
-vendor sent, keeps every rule. `make check-scaffolds` makes each scaffold with
-the release binary and runs its tests for real: the dgm template with a float
-in its price path fails its suite.
+publishes be named not presented, with why, and from contract v20 a case
+about a field its source never states (`about_field`). `role-suite` reads
+the cases a test names in `not_presented` against meridian-schema's
+`suites.json`: one no case of the suite has, or one every plugin of the role
+passes -- the data suite's `reads-its-datasets-licences` among them -- fails
+it. Without `--verified` the rule is not checked, since a plugin not passing
+its role's suite is not verified and breaks no rule: the reference plugin
+given `custody`, recording a statement no vendor sent, keeps every rule.
+`make check-scaffolds` makes each scaffold with the release binary and runs
+its tests for real: the data template with a float in its price path fails
+its suite.
+
+`--verified` also holds a plugin holding `data`, `custody`, `operations` or
+`reporting` to its role's common part (`role-pages`,
+spec/plugin-pages-follow-their-role): the role's common pages declared by
+their titles, with their paths where the role fixes them, their levels and,
+on a plugin of several roles, their role, in the role's order and ahead of
+the plugin's own pages in the same tab row; each common page's tool by the
+role's name, answering the role's record (`meridian.roles.<role>`'s
+`<Page>Read`), one extending it, or one of the plugin's own holding its
+common fields; the role's acts by their names; and the settings in the
+common order, `environment` first and `sample_data` last, the common
+settings' labels kept for them, `synthetic` declared as `sample_data`. What
+is held is only what is common: the data role's Connection and Datasets; a
+custody plugin's Account links and Statements and its `link_account`; an
+operations plugin's Breaks, Reconciliations and Opening balances and its
+`confirm_opening_balance`; a reporting plugin's `reporting_currency`. The
+rest the templates offer stays a candidate until a second plugin of the role
+needs it. Without `--verified` the same findings are printed as advice, and
+fail nothing.
 
 From contract v12 a deployment serves one MCP surface, where an agent a
 person delegated to works as them, and a plugin's tools there are derived by
@@ -444,7 +481,12 @@ steps run in docker, cut off from the network and given the plugin's files
 on stdin; this binary alone writes the plugin's directory, once every step
 has run. It refuses changes git does not hold yet, unless `--force`, and it
 never goes backwards. `make e2e-migrate` runs it, for real, over the plugins
-meridian-python records its migrations for.
+meridian-python records its migrations for. From 0.23.0 to 0.24.0 (contract
+v20) the SDK's step rewrites the renamed roles where a plugin names a role:
+its `[tool.meridian]` roles, a `roles=` argument, and the role a suite is run
+or an access is read for (`dgm` to `data`, `ccm` to `connectivity`, `match`
+to `confirmation`); anything else naming an old role is the plugin's to
+change.
 
 ## Developing a plugin live
 
@@ -541,7 +583,9 @@ meridian-python's `template/` and `templates/` at a pinned commit (`make vendor-
 `check-vendored-template` fails when it drifts), so a release carries the SDK
 version the new plugin pins: 0.20.0 from 0.1.35, 0.21.0 from 0.1.36, 0.22.0
 (contract v18) from 0.1.37, with the `dgm` and `reporting`
-templates from `templates/`, and 0.23.0 (contract v19) from 0.1.38.
+templates from `templates/`, 0.23.0 (contract v19) from 0.1.38, and 0.24.0
+(contract v20) from 0.1.39, with the `custody`, `data`, `operations` and
+`reporting` templates on their roles' common parts.
 
 ## Licence
 

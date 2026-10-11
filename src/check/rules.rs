@@ -21,7 +21,7 @@ use super::{Failure, Plugin, Rule, Source};
 /// The rules, in the order they are reported: what the project is, what it
 /// declares, its pages, its settings, how it reaches the deployment, and its
 /// tests. Running the tests is `TESTS_PASS`, which only `--run-tests` asks.
-pub const RULES: [Rule; 14] = [
+pub const RULES: [Rule; 15] = [
     Rule {
         id: "template-shape",
         holds: "the project keeps the template's shape",
@@ -41,6 +41,12 @@ pub const RULES: [Rule; 14] = [
         id: "role-suite",
         holds: "a verified plugin holding a role with a suite runs the suite in its tests",
         check: role_suite,
+    },
+    Rule {
+        id: "role-pages",
+        holds: "a plugin holding a role with a common part keeps its common pages, tools and \
+                settings, in the role's order",
+        check: role_pages,
     },
     Rule {
         id: "kit-linked",
@@ -105,12 +111,12 @@ pub const TESTS_PASS: Rule = Rule {
 /// matrix/roles.tsv, as this release of the CLI knows it. What a plugin may
 /// publish and subscribe to is its roles', and nothing else.
 pub const ROLES: [&str; 13] = [
-    "ccm",
     "compliance",
+    "confirmation",
+    "connectivity",
     "custody",
-    "dgm",
+    "data",
     "ems",
-    "match",
     "oms",
     "operations",
     "portfolio",
@@ -123,29 +129,37 @@ pub const ROLES: [&str; 13] = [
 /// The roles at the edge, which alone may own the storage a deployment
 /// grants an instance for its raw external records (decisions/028).
 pub const EDGE_ROLES: [&str; 7] = [
-    "ccm",
+    "confirmation",
+    "connectivity",
     "custody",
-    "dgm",
-    "match",
+    "data",
     "reporting",
     "servicing",
     "settlement",
 ];
 
 /// The roles whose conformance suite a verified plugin runs in its tests, as
-/// this release of the CLI holds them: `custody` (contract v11) and `dgm`
-/// (contract v18). A plugin holding one is verified for it only by passing
-/// every case (spec/vendor-differences-have-a-place-in-the-contract,
+/// this release of the CLI holds them: `custody` (contract v11) and `data`
+/// (contract v18, as `dgm`). A plugin holding one is verified for it only by
+/// passing every case (spec/vendor-differences-have-a-place-in-the-contract,
 /// requirement 18).
-pub const SUITES: [&str; 2] = ["custody", "dgm"];
+pub const SUITES: [&str; 2] = ["custody", "data"];
 
 /// The rules only `--verified` holds a plugin to. A plugin holding a role
 /// with a suite and not passing it is not verified, and there is nothing to
 /// declare instead (requirement 18): it is not a plugin breaking the
 /// framework's rules. So the reference plugin, given `custody` to record a
 /// statement nobody's vendor sent, keeps every rule, and a plugin checked as
-/// verified, as SnapTrade's CI checks it, is held to every case.
-pub const ONLY_VERIFIED: [&str; 1] = ["role-suite"];
+/// verified, as SnapTrade's CI checks it, is held to every case. A plugin
+/// keeps its role's common part (`role-pages`) the same way: required of a
+/// verified plugin (spec/plugin-pages-follow-their-role, Q7).
+pub const ONLY_VERIFIED: [&str; 2] = ["role-suite", "role-pages"];
+
+/// Of those, the rules whose findings are still said, as advice, to a plugin
+/// not checked as verified: where it leaves its role's common part, without
+/// failing it (the spec's Q7: "Advice, not failure, for community and local
+/// plugins").
+pub const ADVISED: [&str; 1] = ["role-pages"];
 
 // ── Which files ──────────────────────────────────────────────────────────
 
@@ -889,6 +903,88 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
+/// meridian-schema's boundaries/suites.json at de0e29d (contract v20), byte
+/// for byte: each role's suite and its cases.
+const SUITES_JSON: &str = include_str!("suites.json");
+
+/// A role's suite's cases, each with whether a plugin may name it not
+/// presented, with why: a case asserting a closed list's value its source
+/// never presents (`closed_list`), from contract v19 one about a kind of data
+/// the plugin never publishes (`about`), and from v20 one about a field its
+/// source never states (`about_field`). Every other case -- the data suite's
+/// `reads-its-datasets-licences` among them -- every plugin of the role passes.
+pub(crate) fn suite_cases(role: &str) -> Vec<(String, bool)> {
+    let published: serde_json::Value =
+        serde_json::from_str(SUITES_JSON).expect("suites.json reads");
+    published["suites"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|suite| suite["role"] == role)
+        .flat_map(|suite| suite["cases"].as_array().into_iter().flatten())
+        .filter_map(|case| {
+            let name = case["name"].as_str()?;
+            let optional = ["closed_list", "about", "about_field"]
+                .iter()
+                .any(|key| case[*key].as_str().is_some_and(|value| !value.is_empty()));
+            Some((name.to_string(), optional))
+        })
+        .collect()
+}
+
+const NOT_PRESENTED: &str = "name in `not_presented` only a case its source never presents, \
+    with why: one asserting a closed list's value, one about a kind of data the plugin never \
+    publishes (`about`, contract v19), or one about a field its source never states \
+    (`about_field`, contract v20). Every other case every plugin of the role passes -- the data \
+    suite's reads-its-datasets-licences among them -- and the SDK's runner refuses it named";
+
+/// The cases a test names in a suite's `not_presented`, as string keys of a
+/// dict written there or bound at the top of the test's module, each with
+/// its line. A dict built some other way (a comprehension over the suite's
+/// cases, as the data template's) is the SDK's runner's to hold.
+fn named_not_presented(text: &str) -> Vec<(usize, String)> {
+    static GIVEN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\bnot_presented\s*=\s*").unwrap());
+    static KEY: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"["']([a-z0-9]+(?:-[a-z0-9]+)*)["']\s*:"#).unwrap());
+    let text = python_uncommented(text);
+    let mut named = Vec::new();
+    for given in GIVEN.find_iter(&text) {
+        let rest = &text[given.end()..];
+        let at = if rest.starts_with('{') {
+            Some(given.end() + 1)
+        } else {
+            let value = rest
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .next()
+                .unwrap_or_default();
+            if is_identifier(value) {
+                Regex::new(&format!(
+                    r"(?m)^{}[ \t]*(?::[^=\n]*)?=[ \t]*\{{",
+                    regex::escape(value)
+                ))
+                .unwrap()
+                .find(&text)
+                .map(|bound| bound.end())
+            } else {
+                None
+            }
+        };
+        let Some(at) = at else {
+            continue;
+        };
+        let dict = enclosed(&text[at..]);
+        for key in KEY.captures_iter(dict) {
+            let place = at + key.get(0).expect("matched").start();
+            let entry = (line_at(&text, place), key[1].to_string());
+            if !named.contains(&entry) {
+                named.push(entry);
+            }
+        }
+    }
+    named
+}
+
 fn role_suite(plugin: &Plugin) -> Vec<Failure> {
     const ID: &str = "role-suite";
     let (roles, _) = declared(plugin);
@@ -899,14 +995,18 @@ fn role_suite(plugin: &Plugin) -> Vec<Failure> {
             regex::escape(role)
         ))
         .unwrap();
-        let tested = plugin.files.iter().any(|source| {
-            let name = file_name(&source.path);
-            name.ends_with(".py")
-                && is_test(&source.path)
-                && source.text.contains("meridian.suites")
-                && runs.is_match(&source.text)
-        });
-        if !tested {
+        let tests: Vec<&Source> = plugin
+            .files
+            .iter()
+            .filter(|source| {
+                let name = file_name(&source.path);
+                name.ends_with(".py")
+                    && is_test(&source.path)
+                    && source.text.contains("meridian.suites")
+                    && runs.is_match(&source.text)
+            })
+            .collect();
+        if tests.is_empty() {
             failures.push(failure(
                 ID,
                 "tests/",
@@ -920,6 +1020,658 @@ fn role_suite(plugin: &Plugin) -> Vec<Failure> {
                      (spec/vendor-differences-have-a-place-in-the-contract, requirement 18)"
                 ),
             ));
+            continue;
+        }
+        let cases = suite_cases(role);
+        for source in tests {
+            for (line, case) in named_not_presented(&source.text) {
+                let found = match cases.iter().find(|(name, _)| *name == case) {
+                    None => format!("it names `{case}` not presented, and the {role} suite has no such case"),
+                    Some((_, true)) => continue,
+                    Some((_, false)) => format!(
+                        "it names `{case}` not presented, a case of the {role} suite every plugin \
+                         of the role passes"
+                    ),
+                };
+                failures.push(failure(ID, &source.path, line, found, NOT_PRESENTED));
+            }
+        }
+    }
+    failures
+}
+
+// ── role-pages (spec/plugin-pages-follow-their-role) ─────────────────────
+
+/// One of a role's common pages: its title, its path where the role fixes
+/// it, the levels it serves, its read tool's name, the record that tool
+/// answers (`meridian.roles.<role>`'s `<Page>Read`) and that record's common
+/// fields, which a plugin's own record holds where it does not extend it.
+struct CommonPage {
+    title: &'static str,
+    path: Option<&'static str>,
+    levels: &'static [&'static str],
+    tool: &'static str,
+    record: &'static str,
+    fields: &'static [&'static str],
+}
+
+/// A role's common part as `role-pages` holds it: its pages in the role's
+/// order, the tools of its acts, and the settings every plugin of it
+/// declares. Only what is common: an item the SDK's template offers from the
+/// one plugin of a role there is stays a candidate until a second needs it,
+/// unless a duty of the role names it (the spec's Q4): custody's links and
+/// statements, operations' breaks, reconciliations and opening balances,
+/// reporting's valuation, in a currency.
+struct CommonPart {
+    role: &'static str,
+    pages: &'static [CommonPage],
+    /// The candidates' page titles: the role's, not yet held, and no page of
+    /// the plugin's own when the role's order is checked.
+    candidates: &'static [&'static str],
+    acts: &'static [&'static str],
+    settings: &'static [&'static str],
+}
+
+const MANAGE: &[&str] = &["admin"];
+const OPEN_AND_VIEW: &[&str] = &["write", "read"];
+
+const COMMON: [CommonPart; 4] = [
+    CommonPart {
+        role: "data",
+        pages: &[
+            CommonPage {
+                title: "Connection",
+                path: Some("/"),
+                levels: MANAGE,
+                tool: "read_connection",
+                record: "ConnectionRead",
+                fields: &[
+                    "mode",
+                    "credentials",
+                    "entitled_at_vendor",
+                    "limit",
+                    "calls",
+                    "rate_limited",
+                    "last_call_at",
+                    "last_error",
+                    "sessions",
+                ],
+            },
+            CommonPage {
+                title: "Datasets",
+                path: Some("/datasets"),
+                levels: MANAGE,
+                tool: "read_datasets",
+                record: "DatasetsRead",
+                fields: &["served", "wants", "reads_instruments"],
+            },
+        ],
+        candidates: &[],
+        acts: &[],
+        settings: &[],
+    },
+    CommonPart {
+        role: "custody",
+        pages: &[
+            CommonPage {
+                title: "Account links",
+                path: None,
+                levels: MANAGE,
+                tool: "read_account_links",
+                record: "AccountLinksRead",
+                fields: &["external_accounts", "accounts", "links"],
+            },
+            CommonPage {
+                title: "Statements",
+                path: None,
+                levels: OPEN_AND_VIEW,
+                tool: "read_statements",
+                record: "StatementsRead",
+                fields: &["statements"],
+            },
+        ],
+        candidates: &["Connections", "History", "Raw records"],
+        acts: &["link_account"],
+        settings: &[],
+    },
+    CommonPart {
+        role: "operations",
+        pages: &[
+            CommonPage {
+                title: "Breaks",
+                path: None,
+                levels: OPEN_AND_VIEW,
+                tool: "read_breaks",
+                record: "BreaksRead",
+                fields: &["open_breaks", "overdue_breaks"],
+            },
+            CommonPage {
+                title: "Reconciliations",
+                path: None,
+                levels: OPEN_AND_VIEW,
+                tool: "read_reconciliations",
+                record: "ReconciliationsRead",
+                fields: &["last_reconciliation"],
+            },
+            CommonPage {
+                title: "Opening balances",
+                path: None,
+                levels: OPEN_AND_VIEW,
+                tool: "read_opening_balances",
+                record: "OpeningBalancesRead",
+                fields: &["awaiting_an_opening_balance"],
+            },
+        ],
+        candidates: &[],
+        acts: &["confirm_opening_balance"],
+        settings: &[],
+    },
+    CommonPart {
+        role: "reporting",
+        pages: &[],
+        candidates: &["Datasets"],
+        acts: &[],
+        settings: &["reporting_currency"],
+    },
+];
+
+/// A call's arguments, split where a comma stands outside every bracket and
+/// string, each trimmed.
+fn split_arguments(arguments: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0i32, 0);
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (at, c) in arguments.char_indices() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => quote = Some(c),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(arguments[start..at].trim());
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(arguments[start..].trim());
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
+/// The `n`th positional argument of a call, from 0.
+fn positional(arguments: &str, n: usize) -> Option<&str> {
+    static KEYWORD: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*\s*=[^=]").unwrap());
+    split_arguments(arguments)
+        .into_iter()
+        .filter(|part| !KEYWORD.is_match(part) && !part.starts_with('*'))
+        .nth(n)
+}
+
+/// A page the plugin declares, as `role-pages` reads it.
+struct PageAt<'a> {
+    declaration: Declaration<'a>,
+    title: Option<String>,
+    path: Option<String>,
+    /// None where the text cannot say.
+    levels: Option<Vec<String>>,
+}
+
+impl PageAt<'_> {
+    fn manage(&self) -> Option<bool> {
+        self.levels
+            .as_ref()
+            .map(|levels| levels.iter().any(|level| level == "admin"))
+    }
+}
+
+/// A setting the plugin declares, in either form the SDK takes -- a
+/// `Setting("name", ...)` call, or a field of a class `@meridian.settings`
+/// makes (`name: kind = meridian.setting(...)`, `meridian.environment()`,
+/// `meridian.sample_data()` or a role's helper) -- in the order its module
+/// declares them.
+struct SettingAt<'a> {
+    source: &'a Source,
+    line: usize,
+    name: String,
+    label: Option<String>,
+}
+
+fn settings_in_order<'a>(plugin: &'a Plugin, constants: &HashMap<String, String>) -> Vec<SettingAt<'a>> {
+    static DECORATOR: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^\s*@\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)*settings\s*$").unwrap()
+    });
+    static CLASS: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*class\s+[A-Za-z_]").unwrap());
+    static FIELD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?s)^[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*:[^=]*=[ \t]*(.*)$").unwrap()
+    });
+    static SETTING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bSetting\s*\(").unwrap());
+    static HELPER: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?:[A-Za-z_][A-Za-z0-9_]*\.)*(setting|sample_data|environment)\s*\(").unwrap()
+    });
+    // A common setting's helper called where a list of settings is given
+    // (`settings=[reporting.reporting_currency()]`): the setting it declares
+    // is named as the helper.
+    static COMMON_HELPER: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"\b(?:meridian|data|custody|operations|reporting)\.(sample_data|environment|poll_seconds|stale_after_hours|reconcile|due_business_days|street_fresh_within_hours|reporting_currency)\s*\(",
+        )
+        .unwrap()
+    });
+    let mut found = Vec::new();
+    for source in python(plugin) {
+        let mut in_class: Option<usize> = None;
+        let mut decorated = false;
+        for (line, statement) in python_statements(&python_uncommented(&source.text)) {
+            let indent = statement.len() - statement.trim_start().len();
+            if let Some(class) = in_class {
+                if indent > class {
+                    if let Some(field) = FIELD.captures(&statement) {
+                        let value = field[2].trim();
+                        let label = HELPER.captures(value).and_then(|helper| {
+                            match &helper[1] {
+                                "sample_data" => Some("Sample data".to_string()),
+                                "environment" => Some("Environment".to_string()),
+                                _ => {
+                                    let arguments = enclosed(&value[helper.get(0)?.end()..]);
+                                    keyword(arguments, "label")
+                                        .or_else(|| positional(arguments, 0))
+                                        .and_then(|label| string_named(label, constants))
+                                }
+                            }
+                        });
+                        found.push(SettingAt {
+                            source,
+                            line,
+                            name: field[1].to_string(),
+                            label,
+                        });
+                    }
+                    continue;
+                }
+                in_class = None;
+            }
+            if DECORATOR.is_match(&statement) {
+                decorated = true;
+                continue;
+            }
+            if decorated && CLASS.is_match(&statement) {
+                in_class = Some(indent);
+                decorated = false;
+                continue;
+            }
+            decorated = decorated && statement.trim_start().starts_with('@');
+            for call in COMMON_HELPER.captures_iter(&statement) {
+                let whole = call.get(0).expect("matched");
+                found.push(SettingAt {
+                    source,
+                    line: line + statement[..whole.start()].matches('\n').count(),
+                    name: call[1].to_string(),
+                    label: match &call[1] {
+                        "sample_data" => Some("Sample data".to_string()),
+                        "environment" => Some("Environment".to_string()),
+                        _ => None,
+                    },
+                });
+            }
+            for call in SETTING.find_iter(&statement) {
+                let arguments = enclosed(&statement[call.end()..]);
+                let named = keyword(arguments, "name").unwrap_or(first_argument(arguments));
+                let Some(name) = string_named(named, constants) else {
+                    continue;
+                };
+                found.push(SettingAt {
+                    source,
+                    line: line + statement[..call.start()].matches('\n').count(),
+                    name,
+                    label: keyword(arguments, "label")
+                        .and_then(|label| string_named(label, constants)),
+                });
+            }
+        }
+    }
+    found
+}
+
+/// The record a page's `answers=` names holds a role's common fields: it is
+/// the role's record, extends it, or is the plugin's own declaring every
+/// common field. Otherwise what is missing, said.
+fn holds_fields(plugin: &Plugin, answers: &str, page: &CommonPage) -> Result<(), String> {
+    let named = answers.rsplit('.').next().unwrap_or(answers).trim();
+    let class = Regex::new(&format!(
+        r"(?m)^class[ \t]+{}\b[ \t]*(?:\(([^)]*)\))?[ \t]*:",
+        regex::escape(named)
+    ))
+    .unwrap();
+    let extends = Regex::new(&format!(r"\b{}\b", regex::escape(page.record))).unwrap();
+    for source in python(plugin) {
+        let text = python_uncommented(&source.text);
+        let Some(found) = class.captures(&text) else {
+            continue;
+        };
+        if found.get(1).is_some_and(|bases| extends.is_match(bases.as_str())) {
+            return Ok(());
+        }
+        let body = &text[found.get(0).expect("matched").end()..];
+        let declared: Vec<String> = python_statements(body)
+            .into_iter()
+            .take_while(|(_, statement)| statement.starts_with([' ', '\t']))
+            .filter_map(|(_, statement)| {
+                let name = statement.trim_start();
+                let end = name.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))?;
+                name[end..].trim_start().starts_with(':').then(|| name[..end].to_string())
+            })
+            .collect();
+        let missing: Vec<&str> = page
+            .fields
+            .iter()
+            .filter(|field| !declared.iter().any(|declared| declared == *field))
+            .copied()
+            .collect();
+        return if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "its record, {named}, does not hold the role's common fields {}",
+                missing.join(", ")
+            ))
+        };
+    }
+    if named == page.record {
+        Ok(())
+    } else {
+        Err(format!(
+            "it answers {named}, which is neither the role's {} nor a record of the plugin's own",
+            page.record
+        ))
+    }
+}
+
+fn role_pages(plugin: &Plugin) -> Vec<Failure> {
+    const ID: &str = "role-pages";
+    let (held, _) = declared(plugin);
+    let parts: Vec<&CommonPart> = COMMON
+        .iter()
+        .filter(|part| held.iter().any(|role| role == part.role))
+        .collect();
+    if parts.is_empty() {
+        return Vec::new();
+    }
+    let constants = bound_strings(plugin);
+    let declared_all = declarations(plugin);
+    let tools: Vec<String> = declared_all
+        .iter()
+        .filter(|declaration| declaration.kind != "setting")
+        .filter_map(|declaration| keyword(&declaration.arguments, "name"))
+        .filter_map(|name| string_named(name, &constants))
+        .collect();
+    let pages: Vec<PageAt> = declared_all
+        .into_iter()
+        .filter(|declaration| declaration.kind == "page")
+        .map(|declaration| {
+            let title = keyword(&declaration.arguments, "title")
+                .or_else(|| positional(&declaration.arguments, 1))
+                .and_then(|title| string_named(title, &constants));
+            let path = keyword(&declaration.arguments, "path")
+                .or_else(|| positional(&declaration.arguments, 0))
+                .and_then(|path| string_named(path, &constants));
+            let levels = keyword(&declaration.arguments, "levels")
+                .and_then(|value| roles_named(plugin, &declaration, value));
+            PageAt {
+                declaration,
+                title,
+                path,
+                levels,
+            }
+        })
+        .collect();
+    // Where a missing page or setting is said: the plugin's pages' module, or
+    // its project.
+    let pages_file = pages
+        .first()
+        .map(|page| page.declaration.source.path.clone())
+        .unwrap_or_else(|| "pyproject.toml".into());
+    let common_titles: Vec<&str> = parts
+        .iter()
+        .flat_map(|part| {
+            part.pages
+                .iter()
+                .map(|page| page.title)
+                .chain(part.candidates.iter().copied())
+        })
+        .collect();
+    let mut failures = Vec::new();
+
+    for part in &parts {
+        let role = part.role;
+        let template = format!("the role's common part, as `meridian plugin new --role {role}` writes it");
+        // Each common page, by its title: once, where the role says, its tool
+        // under the role's name answering the role's record.
+        let mut placed: Vec<(usize, &PageAt)> = Vec::new();
+        for (order, common) in part.pages.iter().enumerate() {
+            let levels = common.levels.join("\", \"");
+            let declare = format!(
+                "`@pages.page({}\"{}\", levels={}, answers={role}.{}, name=\"{}\")`: {template} \
+                 (spec/plugin-pages-follow-their-role)",
+                common.path.map(|path| format!("\"{path}\", ")).unwrap_or_else(|| "\"<path>\", ".into()),
+                common.title,
+                if common.levels.len() == 1 { format!("\"{levels}\"") } else { format!("[\"{levels}\"]") },
+                common.record,
+                common.tool,
+            );
+            let titled: Vec<&PageAt> = pages
+                .iter()
+                .filter(|page| page.title.as_deref() == Some(common.title))
+                .collect();
+            let Some(&page) = titled.first() else {
+                failures.push(failure(
+                    ID,
+                    &pages_file,
+                    0,
+                    format!("it holds `{role}`, and declares no {} page", common.title),
+                    &declare,
+                ));
+                continue;
+            };
+            for again in titled.iter().skip(1) {
+                failures.push(failure(
+                    ID,
+                    &again.declaration.source.path,
+                    again.declaration.line,
+                    format!("a second page titled {}, the {role} role's common page's title", common.title),
+                    "title a page of the plugin's own in its own words: a common page's title is \
+                     the role's, so a person finds it where every plugin of the role has it",
+                ));
+            }
+            placed.push((order, page));
+            let file = &page.declaration.source.path;
+            let line = page.declaration.line;
+            let mut wrong = Vec::new();
+            if let Some(path) = common.path.filter(|path| page.path.as_deref() != Some(*path)) {
+                wrong.push(format!("its path is not {path}"));
+            }
+            if let Some(levels) = &page.levels {
+                let mut given: Vec<&str> = levels.iter().map(String::as_str).collect();
+                let mut wanted = common.levels.to_vec();
+                given.sort_unstable();
+                wanted.sort_unstable();
+                if given != wanted {
+                    wrong.push(format!("it serves {}, not {}", levels.join(" and "), common.levels.join(" and ")));
+                }
+            }
+            if held.len() > 1 {
+                let serves = keyword(&page.declaration.arguments, "roles")
+                    .and_then(|value| roles_named(plugin, &page.declaration, value));
+                if serves.is_some_and(|serves| !serves.iter().any(|served| served == role)) {
+                    wrong.push(format!("its roles do not name `{role}`"));
+                }
+            }
+            let tool = keyword(&page.declaration.arguments, "name")
+                .and_then(|name| string_named(name, &constants));
+            if tool.as_deref() != Some(common.tool) {
+                wrong.push(format!("its tool is not named {}", common.tool));
+            }
+            match keyword(&page.declaration.arguments, "answers") {
+                None => wrong.push("it declares no record (`answers=`), so it is no read tool".into()),
+                Some(answers) => {
+                    if let Err(said) = holds_fields(plugin, answers, common) {
+                        wrong.push(said);
+                    }
+                }
+            }
+            if !wrong.is_empty() {
+                failures.push(failure(
+                    ID,
+                    file,
+                    line,
+                    format!("the {role} role's {} page: {}", common.title, wrong.join("; ")),
+                    &declare,
+                ));
+            }
+        }
+
+        // In the role's order, and ahead of the plugin's own pages in the
+        // same tab row, where one module declares them.
+        for (at, (order, page)) in placed.iter().enumerate() {
+            let file = &page.declaration.source.path;
+            if let Some((_, before)) = placed[..at].iter().find(|(earlier, other)| {
+                earlier < order
+                    && &other.declaration.source.path == file
+                    && other.declaration.line > page.declaration.line
+            }) {
+                failures.push(failure(
+                    ID,
+                    file,
+                    page.declaration.line,
+                    format!(
+                        "the {role} role's {} page comes before its {}",
+                        part.pages[*order].title,
+                        before.title.as_deref().unwrap_or_default()
+                    ),
+                    &format!(
+                        "declare the role's common pages in the role's order: {}",
+                        part.pages.iter().map(|page| page.title).collect::<Vec<_>>().join(", ")
+                    ),
+                ));
+            }
+        }
+        for own in pages.iter().filter(|own| {
+            own.manage().is_some()
+                && !own
+                    .title
+                    .as_deref()
+                    .is_some_and(|title| common_titles.contains(&title))
+        }) {
+            // The last of the role's pages in its tab row, in its module.
+            let Some((order, _)) = placed
+                .iter()
+                .filter(|(_, page)| {
+                    page.declaration.source.path == own.declaration.source.path
+                        && page.manage() == own.manage()
+                        && page.declaration.line > own.declaration.line
+                })
+                .max_by_key(|(_, page)| page.declaration.line)
+            else {
+                continue;
+            };
+            failures.push(failure(
+                ID,
+                &own.declaration.source.path,
+                own.declaration.line,
+                format!(
+                    "a page of the plugin's own, {}, comes before the {role} role's {} page",
+                    own.title.as_deref().unwrap_or("untitled"),
+                    part.pages[*order].title
+                ),
+                "declare the plugin's own pages after the role's common pages in the same \
+                 tab row: a person finds the role's pages first on every plugin of it",
+            ));
+        }
+
+        for act in part.acts.iter().filter(|act| !tools.iter().any(|tool| tool == *act)) {
+            failures.push(failure(
+                ID,
+                &pages_file,
+                0,
+                format!("it holds `{role}`, and declares no route named {act}"),
+                &format!("the route whose tool is `{act}`, by that name (`name=\"{act}\"`): {template}"),
+            ));
+        }
+    }
+
+    // The settings, in the common order: `environment` first where the
+    // vendor has more than one, sample data last, and the common words kept
+    // for the common settings.
+    let settings = settings_in_order(plugin, &constants);
+    for part in &parts {
+        for wanted in part.settings.iter().filter(|wanted| !settings.iter().any(|setting| setting.name == **wanted)) {
+            failures.push(failure(
+                ID,
+                &pages_file,
+                0,
+                format!("it holds `{}`, and declares no setting {wanted}", part.role),
+                &format!(
+                    "the role's common setting, `{wanted}: str = {}.{wanted}()`, as `meridian \
+                     plugin new --role {}` declares it",
+                    part.role, part.role
+                ),
+            ));
+        }
+    }
+    for (at, setting) in settings.iter().enumerate() {
+        let file = &setting.source.path;
+        let same_file = |other: &&SettingAt| &other.source.path == file;
+        match setting.name.as_str() {
+            "synthetic" => failures.push(failure(
+                ID,
+                file,
+                setting.line,
+                "the setting synthetic, which is sample data now".into(),
+                "`sample_data: bool = meridian.sample_data()`: one developer setting, accepted \
+                 only on development deployments (ruled 2026-10-02)",
+            )),
+            "environment" if settings[..at].iter().any(|other| same_file(&other)) => failures.push(failure(
+                ID,
+                file,
+                setting.line,
+                "the setting environment comes after another".into(),
+                "declare `environment: str = meridian.environment(...)` first, before every other \
+                 setting, the credentials that differ by it gated on it (the spec's Q12)",
+            )),
+            "sample_data" if settings[at + 1..].iter().any(|other| same_file(&other)) => {
+                failures.push(failure(
+                    ID,
+                    file,
+                    setting.line,
+                    "the setting sample_data comes before another".into(),
+                    "declare `sample_data: bool = meridian.sample_data()` last, after the \
+                     vendor's own settings",
+                ))
+            }
+            _ => {}
+        }
+        for (common, label) in [("environment", "Environment"), ("sample_data", "Sample data")] {
+            if setting.name != common && setting.label.as_deref() == Some(label) {
+                failures.push(failure(
+                    ID,
+                    file,
+                    setting.line,
+                    format!("the setting {} is labelled {label}, the common setting {common}'s label", setting.name),
+                    &format!("label it in its own words, or declare it as the common {common}"),
+                ));
+            }
         }
     }
     failures
@@ -1076,8 +1828,9 @@ fn tools_cover_routes(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at 63d8e40 (contract v18), byte
-/// for byte: its `operations` say which roles hold each command.
+/// meridian-schema's boundaries/roles.json at de0e29d (contract v20, the
+/// roles renamed), byte for byte: its `operations` say which roles hold each
+/// command.
 const ROLES_JSON: &str = include_str!("roles.json");
 
 /// Each command a plugin may send, as the SDK names its call

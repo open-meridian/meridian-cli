@@ -8,9 +8,12 @@
   `read_report`, answering the same rows to an agent the person delegated
   to, at the same levels: the view answers with `pages.answer`, the page for
   a browser and the record for an agent.
-- Datasets (/datasets), at `admin`: the datasets this plugin is entitled to
-  read, and what the lake has recorded for it since it started. Manage
-  configures a plugin and sees no account's data, so this page shows none.
+- Datasets (/datasets), at `admin`: the reporting role's common page
+  (spec/plugin-pages-follow-their-role), from `meridian.roles.reporting`:
+  each dataset it reads, whether it is entitled to it and to which fields,
+  "Not entitled yet" until a deployment admin entitles it on Data sources;
+  a read tool, `read_datasets`. Manage configures a plugin and sees no
+  account's data, so this page shows none.
 
 Replace them with your plugin's own pages; keep declaring them this way.
 """
@@ -22,6 +25,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import meridian
+from meridian.roles import reporting
 
 from .report import Report, Row
 
@@ -105,8 +109,16 @@ async def closes(request: meridian.Request) -> meridian.Response:
     return pages.answer("closes.html", said, day=day.isoformat(), columns=COLUMNS, rows=rows)
 
 
-@pages.page("/datasets", "Datasets", levels="admin")
-async def datasets(request: meridian.Request) -> str:
+@pages.page(
+    "/datasets",
+    "Datasets",
+    levels="admin",
+    answers=reporting.DatasetsRead,
+    name="read_datasets",
+)
+async def datasets(request: meridian.Request) -> meridian.Response:
+    """Each dataset this plugin reads, whether it is entitled to it and to
+    which fields."""
     report = _report(request)
-    read = await report.datasets()
-    return pages.render("datasets.html", datasets=read, report=report)
+    said = reporting.DatasetsRead(datasets=await report.entitled())
+    return pages.answer("datasets.html", said, report=report)

@@ -128,8 +128,8 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   `already_recorded`. Re-resolve an account's activities whenever what
   resolves them changes.
 - **A plugin at the edge declares the kinds of raw record it keeps, and
-  moves them past their window through the SDK.** A plugin holding `ccm`,
-  `custody`, `servicing`, `match`, `settlement`, `dgm` or `reporting` keeps
+  moves them past their window through the SDK.** A plugin holding `connectivity`,
+  `custody`, `servicing`, `confirmation`, `settlement`, `data` or `reporting` keeps
   what its vendor sent in its own storage (`meridian.edge.storage_dir()`)
   and declares each kind in its declaration: `Storage(kinds=[
   meridian.RecordKind("activity", "Reported activity", window_days=2555)])`,
@@ -168,7 +168,7 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   `activity_past_window` says, and say on the plugin's page how long they
   are kept, as set and as kept. So each activity the street holds can have
   its record read back, from storage or restored from the archive.
-- **A `dgm` plugin puts its source's prices into the lake, converted at the
+- **A data plugin puts its source's prices into the lake, converted at the
   edge, and shows none.** Declare each dataset in the declaration's
   catalogue, from code: `Declaration(catalogue=[meridian.DatasetDeclaration(
   key="daily", vendor=..., data_types=["meridian.v1.Price"], modes=["pull"],
@@ -188,9 +188,9 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   want_withdrawn=...)`, record against each (`want_id=`) or decline it per
   subject (`plugin.decline_want`). Its pages show its connection and its
   datasets, never a price: prices are the reading roles'. Hold it to the
-  suite: `meridian.suites.run("dgm", producers)` on synthetic exchanges, each
+  suite: `meridian.suites.run("data", producers)` on synthetic exchanges, each
   case mapped to the plugin's own conversion.
-- **A `dgm` streaming trades and quotes records them as its source states
+- **A data plugin streaming trades and quotes records them as its source states
   them, converted at the edge.** Declare them in a live dataset apart
   (`data_types=["meridian.v1.Trade", "meridian.v1.Quote"]`, `modes=["stream"]`)
   and record in batches of at most 500 (`plugin.record_trades`,
@@ -204,8 +204,42 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   (`cancelled=True`); a quote's empty side is left unset. Keep a standing
   want of a streamed dataset current from the stream. A case of the suite
   about a kind of data the plugin declares it never publishes (its `about`:
-  trades, quotes, bars) is named in `not_presented`, with why; every other
-  case is mapped.
+  trades, quotes, bars) is named in `not_presented`, with why; so is one
+  about a field its source never states (its `about_field`, such as a
+  trade's aggressor); every other case is mapped. On start, before resuming
+  its stream, it backfills a restart's gap
+  (`meridian.roles.data.backfill_restart`: the last trade it recorded of each
+  subject, `list_trades(..., latest_recorded=True)`, then the venue's history
+  after it), and reads which of its datasets are licensed
+  (`plugin.list_datasets()`, its `licences`).
+- **Follow the role's common part.** A person who knows a role knows any
+  plugin of it: `meridian.roles.<role>` (`data`, `custody`, `operations`,
+  `reporting`) gives each common page's record (`<Page>Read`, the page's
+  `answers=`, under the role's tool name), the role's figures in its order
+  (`figures(...)`, then the plugin's own), its common settings in their order
+  (`meridian.environment()` first where the vendor has more than one, then
+  the credentials, the role's, the vendor's, `meridian.sample_data()` last),
+  and its page templates, `meridian/roles/<role>/<page>.html`. Extend a
+  template and add the vendor's nuance only at its blocks -- `vendor_notices`,
+  `vendor_rows` (the section's title in `section`), `vendor_columns` (the row
+  in `row`, None in the head), `vendor_sections` -- never renaming,
+  reordering or dropping a common page, section, label, setting or figure.
+  Settings may be one class, `@meridian.settings`, its fields
+  `meridian.setting(...)`; the kit's patterns are macros in
+  `meridian/kit.html` (`{% import "meridian/kit.html" as kit %}`).
+- **Make every act preparable.** An agent may prepare a change for a person
+  to make rather than make it, where the deployment's admins say so: a route
+  that changes something names its check tool, a read tool taking the same
+  record and changing nothing (`checked_by="check_..."`), and the paths in
+  its record naming the accounts it touches (`accounts=["account_id"]`); the
+  SDK fills the page it is made on. A page opened from a prepared change
+  reads it (`await request.prepared()`), starts its form from its
+  `arguments_json` and says "prepared by" its preparer, with its reason as
+  text, never followed. Name no field of a record `prepare`.
+- **Keep a person's own views per person.** A setting each person sets for
+  themselves -- a watchlist -- is declared `per_person=True`; save it for
+  them (`plugin.set_own_settings({...}, for_caller=request.caller)`) and read
+  it from their request (`request.own_settings`), never from storage.
 
 This file is for any coding agent working on the plugin, and is committed with
 it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the

@@ -1,0 +1,9 @@
+{% extends "meridian/roles/operations/breaks.html" %}
+{% block vendor_sections %}
+{% if breaks %}
+<section class="panel"><h2>Open</h2>
+<table class="one-line"><thead><tr><th>Account</th><th>Instrument</th><th>First seen</th></tr></thead><tbody>
+{% for each in breaks %}<tr><td>{{ each.account_id }}</td><td><code>{{ each.instrument_id }}</code></td><td>{{ each.first_seen_date }}</td></tr>{% endfor %}
+</tbody></table></section>
+{% endif %}
+{% endblock %}
