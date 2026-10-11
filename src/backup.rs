@@ -746,7 +746,7 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
         )
         .await
         .unwrap_or_default();
-        (failed.trim() != "" && failed.trim() != "0").then(|| Err(log))
+        (!failed.trim().is_empty() && failed.trim() != "0").then_some(Err(log))
     })
     .await?
     .map_err(|log| format!("the backup failed. It said:\n{log}"))?;
