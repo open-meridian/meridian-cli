@@ -51,7 +51,7 @@
             <select name="account_id" aria-label="Link {{ row.external }} to">
               {% for account in accounts %}<option value="{{ account.id }}">{{ account.name }}</option>{% endfor %}
             </select>
-            <button{% if not accounts %} disabled{% endif %}>Link</button></form></td>
+            {% if "link_account" in caller.second_pair_of_eyes %}<input type="hidden" name="prepare" value="1"><button{% if not accounts %} disabled{% endif %} aria-label="Prepare: Link">Prepare</button>{% else %}<button{% if not accounts %} disabled{% endif %}>Link</button>{% endif %}</form></td>
         </tr>
       {% endfor %}
       </tbody>

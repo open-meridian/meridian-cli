@@ -309,3 +309,18 @@ def test_each_act_names_a_check_tool_so_it_can_be_prepared() -> None:
         "check_link_account", {"external_account_id": "reference-1", "account_id": "ACC-9"}
     )
     assert not_granted.outcome == "refused" and not_granted.paths == ["account_id"]
+
+
+def test_a_gated_act_offers_prepare_and_no_plain_button() -> None:
+    gated = PageClient(
+        pages,
+        Sidecar(),
+        read={"ACC-1", "ACC-2"},
+        write={"ACC-2"},
+        second_pair_of_eyes=["open_statement", "link_account"],
+    )
+    accounts = gated.get("/", "write").text
+    assert ">Open a statement</button>" not in accounts
+    assert 'aria-label="Prepare: Open a statement">Prepare</button>' in accounts
+    setup = gated.get("/setup", "admin").text
+    assert ">Link</button>" not in setup and 'aria-label="Prepare: Link"' in setup

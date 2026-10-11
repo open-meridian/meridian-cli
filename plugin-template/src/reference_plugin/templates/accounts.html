@@ -3,7 +3,7 @@
 {# Only a session opened by Open writes, and only for a linked external
    account; framed, the dashboard draws the button. #}
 {% if level == "write" and linked %}
-<form class="inline" method="post" action="/statement">{{ csrf_input }}<button class="primary" data-om-action="open-statement">Open a statement</button></form>
+<form class="inline" method="post" action="/statement">{{ csrf_input }}{% if "open_statement" in caller.second_pair_of_eyes %}<input type="hidden" name="prepare" value="1"><button aria-label="Prepare: Open a statement">Prepare</button>{% else %}<button class="primary" data-om-action="open-statement">Open a statement</button>{% endif %}</form>
 {% endif %}
 {% endblock %}
 {% block content %}
