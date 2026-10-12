@@ -242,6 +242,21 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   themselves -- a watchlist -- is declared `per_person=True`; save it for
   them (`plugin.set_own_settings({...}, for_caller=request.caller)`) and read
   it from their request (`request.own_settings`), never from storage.
+- **Act on its own only as its role's service account.** Work the plugin
+  does with no person's request to serve -- a scheduled sweep, a strategy,
+  an agent inside it -- changes nothing in the deployment by itself: it
+  calls one of the plugin's own acts as the service account its role runs
+  as, `async with meridian.runs_as("operations") as act: reply = await
+  act("close_cleared_breaks", {...}, reason="...")`. The admins choose the
+  account, its level and whether it makes or prepares; the plugin chooses
+  none and holds no credential. Read `reply.outcome`: `made`, its route's
+  answer in `answer_json`, or `prepared`, a person makes it
+  (`prepared_call_id`); a refusal names its field (`.fields`). The act's
+  route is reached with a caller whose `subject_kind` is a service account
+  (`owner_subject` its owner) and acts as for a person, handing
+  `request.caller.header` back as `acting_for`; test it with
+  `PageClient.call_tool(..., subject_kind=meridian.SubjectKind.SUBJECT_KIND_SERVICE_ACCOUNT,
+  owner_subject=...)`. Each act called so names its check tool.
 
 This file is for any coding agent working on the plugin, and is committed with
 it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the

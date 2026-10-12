@@ -903,7 +903,7 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at 9d1230b (contract v20), byte
+/// meridian-schema's boundaries/suites.json at 70bb61e (contract v21), byte
 /// for byte: each role's suite and its cases.
 const SUITES_JSON: &str = include_str!("suites.json");
 
@@ -2001,9 +2001,8 @@ fn tools_cover_routes(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at 9d1230b (contract v20, the
-/// roles renamed), byte for byte: its `operations` say which roles hold each
-/// command.
+/// meridian-schema's boundaries/roles.json at 70bb61e (contract v21), byte
+/// for byte: its `operations` say which roles hold each command.
 const ROLES_JSON: &str = include_str!("roles.json");
 
 /// Each command a plugin may send, as the SDK names its call

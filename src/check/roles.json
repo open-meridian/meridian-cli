@@ -1592,6 +1592,12 @@
       "stability": "preview"
     },
     {
+      "name": "CallAsServiceAccount",
+      "step": "W4.15",
+      "title": "Call its own act as its role's service account",
+      "stability": "preview"
+    },
+    {
       "name": "SetOwnSettings",
       "step": "W6.31",
       "title": "Save one's own settings for a plugin",

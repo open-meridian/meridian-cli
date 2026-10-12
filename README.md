@@ -492,7 +492,8 @@ v20) the SDK's step rewrites the renamed roles where a plugin names a role:
 its `[tool.meridian]` roles, a `roles=` argument, and the role a suite is run
 or an access is read for (`dgm` to `data`, `ccm` to `connectivity`, `match`
 to `confirmation`); anything else naming an old role is the plugin's to
-change.
+change. From 0.24.0 to 0.25.0 (contract v21) nothing a plugin calls changed
+shape, so only the pins move.
 
 ## Developing a plugin live
 
@@ -589,9 +590,11 @@ meridian-python's `template/` and `templates/` at a pinned commit (`make vendor-
 `check-vendored-template` fails when it drifts), so a release carries the SDK
 version the new plugin pins: 0.20.0 from 0.1.35, 0.21.0 from 0.1.36, 0.22.0
 (contract v18) from 0.1.37, with the `dgm` and `reporting`
-templates from `templates/`, 0.23.0 (contract v19) from 0.1.38, and 0.24.0
+templates from `templates/`, 0.23.0 (contract v19) from 0.1.38, 0.24.0
 (contract v20) from 0.1.39, with the `custody`, `data`, `operations` and
-`reporting` templates on their roles' common parts.
+`reporting` templates on their roles' common parts, and 0.25.0 (contract v21)
+from 0.1.41, each scaffold's `AGENTS.md` saying how a plugin acts on its own:
+as its role's service account, through `meridian.runs_as(role)`.
 
 ## Licence
 
