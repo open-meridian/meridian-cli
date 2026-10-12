@@ -15,7 +15,9 @@
 //! the database's URL withheld, so every component and the migration wait
 //! at it; the database restored and its row counts checked against the
 //! backup's own; and only then the URL, so nothing ever runs against a
-//! half-restored store.
+//! half-restored store. Then what first run does once it has written that
+//! URL: the conductor and the dashboard, which read it only when they start,
+//! restarted, and the first-run Job's rights given up.
 //!
 //! Nothing here prints a secret's value, a password or the identity: names,
 //! counts, sizes and hashes only. Every Secret reaches kubectl on its
@@ -581,6 +583,43 @@ pub fn job_from(
         },
         "spec": spec,
     }))
+}
+
+/// The chart's first-run Job, as restore finishes it: its name, the
+/// RoleBinding it holds its rights through, and the Deployments it restarts
+/// once it has written the database's URL -- each from the Job's own
+/// environment, where the chart names them for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirstRunJob {
+    pub name: String,
+    pub binding: String,
+    pub restart: Vec<String>,
+}
+
+/// The first-run Job among a `kubectl get jobs -o json` answer, if the
+/// release has one (the chart renders it with the dashboard).
+pub fn first_run_job(jobs: &serde_json::Value) -> Option<FirstRunJob> {
+    let job = jobs["items"].as_array()?.iter().find(|job| {
+        job["spec"]["template"]["metadata"]["labels"]["meridian.dev/component"] == "first-run"
+    })?;
+    let env = job["spec"]["template"]["spec"]["containers"][0]["env"].as_array()?;
+    let value = |name: &str| {
+        env.iter()
+            .find(|e| e["name"] == name)
+            .and_then(|e| e["value"].as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    Some(FirstRunJob {
+        name: job["metadata"]["name"].as_str()?.to_string(),
+        binding: value("MERIDIAN_FIRST_RUN_BINDING"),
+        restart: value("MERIDIAN_FIRST_RUN_RESTART")
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(String::from)
+            .collect(),
+    })
 }
 
 /// What the Job's log says it wrote: `backup: wrote <name> <bytes> bytes sha256 <hex>`.
@@ -1216,6 +1255,8 @@ pub async fn restore(asked: &Restore, step: &mut dyn FnMut(&str)) -> Result<Stri
         )
         .await?;
         step("Gave the components the database's URL");
+        finish_first_run(&release, &full, ns, asked.timeout).await?;
+        step("Restarted the conductor and the dashboard with it; first run gave up its rights");
     } else if !manifest.database.name.is_empty() {
         report.push_str(&format!(
             "  The database {} was not in the backup: it is the one your provider runs, which the \
@@ -1290,6 +1331,128 @@ pub async fn restore(asked: &Restore, step: &mut dyn FnMut(&str)) -> Result<Stri
         ));
     }
     Ok(report)
+}
+
+/// What first run does once it has written the database's URL, done for the
+/// URL restore gives last (meridian-core's first-run Job, its apply).
+///
+/// The conductor and the dashboard read the URL only when they start, and
+/// both started before it was given: the conductor kept its configuration in
+/// memory, answering for nobody whatever the restored database holds. And the
+/// first-run Job, started when the URL was not there, was waiting with its
+/// rights for a wizard nobody opens (decisions/016). So the Deployments the
+/// chart names for the Job are restarted, its pod stopped, as the Job stops
+/// once it has applied, and its RoleBinding deleted once it is done -- never
+/// before: a pod stopped while running may be counted failed and made again,
+/// and the new one finds the URL and gives up the rights itself, which it can
+/// do only while it holds them. With no first-run Job (no dashboard), the
+/// conductor alone is restarted.
+async fn finish_first_run(
+    release: &str,
+    full: &str,
+    ns: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let jobs: serde_json::Value = serde_json::from_str(
+        &text(
+            "kubectl",
+            &[
+                "get",
+                "jobs",
+                "-n",
+                ns,
+                "-l",
+                &format!("app.kubernetes.io/instance={release}"),
+                "-o",
+                "json",
+            ],
+        )
+        .await?,
+    )
+    .map_err(|failed| format!("kubectl's answer could not be read: {failed}"))?;
+    let first_run = first_run_job(&jobs);
+    let restart = match &first_run {
+        Some(job) => job.restart.clone(),
+        None => vec![format!("{full}-conductor")],
+    };
+    for name in &restart {
+        text(
+            "kubectl",
+            &[
+                "rollout",
+                "restart",
+                &format!("deployment/{name}"),
+                "-n",
+                ns,
+            ],
+        )
+        .await?;
+    }
+    if let Some(job) = &first_run {
+        text(
+            "kubectl",
+            &[
+                "delete",
+                "pod",
+                "-n",
+                ns,
+                "-l",
+                &format!("job-name={}", job.name),
+                "--wait",
+            ],
+        )
+        .await?;
+        let name = job.name.as_str();
+        until("first run to finish", timeout, move || async move {
+            text(
+                "kubectl",
+                &[
+                    "get",
+                    "job",
+                    name,
+                    "-n",
+                    ns,
+                    "-o",
+                    "jsonpath={.status.succeeded}",
+                ],
+            )
+            .await
+            .ok()
+            .filter(|succeeded| !succeeded.trim().is_empty() && succeeded.trim() != "0")
+        })
+        .await?;
+        if !job.binding.is_empty() {
+            text(
+                "kubectl",
+                &[
+                    "delete",
+                    "rolebinding",
+                    &job.binding,
+                    "-n",
+                    ns,
+                    "--ignore-not-found",
+                ],
+            )
+            .await?;
+        }
+    }
+    let seconds = format!("--timeout={}s", timeout.as_secs());
+    for name in &restart {
+        text(
+            "kubectl",
+            &[
+                "rollout",
+                "status",
+                &format!("deployment/{name}"),
+                "-n",
+                ns,
+                &seconds,
+            ],
+        )
+        .await
+        .map_err(|failed| format!("{name} did not come back with the database's URL: {failed}"))?;
+    }
+    Ok(())
 }
 
 async fn create(object: &serde_json::Value) -> Result<(), String> {

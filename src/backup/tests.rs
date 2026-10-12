@@ -278,6 +278,37 @@ fn a_job_from_the_cronjob_holds_its_file_only_when_asked() {
 }
 
 #[test]
+fn first_runs_job_is_found_with_what_the_chart_names_for_it() {
+    let jobs = serde_json::json!({ "items": [
+        { "metadata": { "name": "m-meridian-runtime-migrate-1" },
+          "spec": { "template": {
+            "metadata": { "labels": {} },
+            "spec": { "containers": [ { "name": "instrument" } ] } } } },
+        { "metadata": { "name": "m-meridian-runtime-first-run-1" },
+          "spec": { "template": {
+            "metadata": { "labels": { "meridian.dev/component": "first-run" } },
+            "spec": { "containers": [ { "name": "first-run", "env": [
+                { "name": "MERIDIAN_FIRST_RUN_BINDING", "value": "m-meridian-runtime-first-run-grant" },
+                { "name": "MERIDIAN_FIRST_RUN_RESTART",
+                  "value": "m-meridian-runtime-conductor, m-meridian-runtime-dashboard" },
+                { "name": "MERIDIAN_BROKER_URL", "valueFrom": { "secretKeyRef": { "name": "b", "key": "k" } } }
+            ] } ] } } } }
+    ] });
+    assert_eq!(
+        first_run_job(&jobs),
+        Some(FirstRunJob {
+            name: "m-meridian-runtime-first-run-1".into(),
+            binding: "m-meridian-runtime-first-run-grant".into(),
+            restart: vec![
+                "m-meridian-runtime-conductor".into(),
+                "m-meridian-runtime-dashboard".into()
+            ],
+        })
+    );
+    assert_eq!(first_run_job(&serde_json::json!({ "items": [] })), None);
+}
+
+#[test]
 fn what_the_job_wrote_is_read_from_its_log() {
     let log = "backup: secrets: a b\nbackup: wrote meridian-20261011T020000Z.meridian-backup 1234 bytes sha256 abcd\nbackup: holding\n";
     assert_eq!(
