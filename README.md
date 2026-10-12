@@ -465,6 +465,18 @@ keeps (`RecordKind`), and the SDK declares two settings for each,
 for a declared kind, at its line (`window-settings`), as the SDK refuses it
 when the declaration is built and the sidecar at registration.
 
+From contract v21 the work a plugin does on its own -- a scheduled sweep, a
+strategy, an agent inside it -- calls the plugin's acts as its role's
+service account, through `meridian.runs_as(role)`, and an account its
+role's admin set to prepare only is refused an act with no check tool at run
+time. `plugin check` fails a call through `runs_as` to one of the plugin's
+acts that names no check tool (`checked_by=`), at the call's line
+(`runs-as-checked`). It reads `async with <runs_as>(...) as act:` however
+`runs_as` is reached -- `meridian.runs_as`, imported, or a name the module
+binds to it -- and each `act("<tool>", ...)` in its block, the tool as
+written or through a constant; a tool named some other way, or not among the
+plugin's acts, it passes over.
+
 `launch` shows the roles the version asks for and runs it only once
 you approve them; `--yes` approves for a script that has already read them.
 Its pages are on its own name, `https://my-plugin.plugins.meridian.localhost/`,

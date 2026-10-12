@@ -715,7 +715,7 @@ DASHBOARD = os.environ.get("MERIDIAN_HARNESS_DASHBOARD", "http://dashboard:8080"
 #[test]
 fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
     type Breaking = fn(&Scaffolded) -> (String, usize);
-    let breakages: [(&str, Breaking, &str); 16] = [
+    let breakages: [(&str, Breaking, &str); 17] = [
         (
             "template-shape",
             |p| {
@@ -895,6 +895,16 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
             "/statement changes something and declares no typed record, so no tool is derived from it",
         ),
         (
+            "runs-as-checked",
+            |p| {
+                p.replace(&page_py(), "    checked_by=\"check_link_account\",\n", "");
+                p.write(&format!("src/{MODULE}/sweep.py"), SWEEP_LINKING);
+                (format!("src/{MODULE}/sweep.py"), 6)
+            },
+            "link_account (src/checked_plugin/page.py:218) is an act called through runs_as and \
+             names no check tool, so a service account set to prepare only is refused it",
+        ),
+        (
             "tests-exist",
             |p| {
                 std::fs::remove_dir_all(p.path("tests")).unwrap();
@@ -946,6 +956,8 @@ fn a_plugin_breaking_every_rule_is_told_each_with_its_place_and_its_fix() {
         "import nats\nTOKEN = os.environ.get(\"BROKER_TOKEN\")\nSECRET = meridian.Setting(\"api_key\", str, secret=True)\nprint(settings.values[\"api_key\"])\nKIND = meridian.RecordKind(\"fills\", \"Fills\", window_days=30)\nPAST = meridian.Setting(\"fills_past_window\", str)",
     );
     plugin.replace(&page_py(), "    params=OpenStatement,\n", "");
+    plugin.replace(&page_py(), "    checked_by=\"check_link_account\",\n", "");
+    plugin.write(&format!("src/{MODULE}/sweep.py"), SWEEP_LINKING);
 
     // As a verified plugin is checked, so the rules only --verified holds are
     // among them.
@@ -1335,6 +1347,233 @@ fn a_route_kept_from_agents_says_why_and_a_verified_plugin_keeps_none() {
         found[1].contains("a verified plugin keeps nothing"),
         "{found:?}"
     );
+}
+
+// ── runs-as-checked (contract v21) ───────────────────────────────────────
+
+/// A sweep linking an account as its role's service account, through the
+/// template's `link_account`.
+const SWEEP_LINKING: &str = "import meridian\n\n\nasync def sweep(arguments):\n    \
+    async with meridian.runs_as(\"custody\") as act:\n        \
+    await act(\"link_account\", arguments, reason=\"swept\")\n";
+
+/// The acts a sweep calls, declared as sample-operations declares closing
+/// cleared breaks: the form's route kept from agents, its check, and the
+/// tool replacing it naming that check; and an act naming none.
+const BREAK_ACTS: &str = r#"import meridian
+
+pages = meridian.Pages("Checked")
+
+CLEARED = "/breaks/close-cleared"
+
+
+@pages.route(CLEARED, levels="write", methods=["POST"], tool=False, why="its tool is close_cleared_breaks's")
+async def close_cleared(request): ...
+
+
+@pages.route(
+    CLEARED + "/check",
+    levels="write",
+    methods=["POST"],
+    params=ClearedAsked,
+    reads=True,
+    name="check_close_cleared_breaks",
+)
+async def check_close_cleared_breaks(request): ...
+
+
+@pages.tool(
+    replaces=CLEARED,
+    params=ClearedAsked,
+    name="close_cleared_breaks",
+    checked_by="check_close_cleared_breaks",
+    accounts=["account_id"],
+)
+async def close_cleared_breaks(request): ...
+
+
+@pages.route("/breaks/reopen", levels="write", methods=["POST"], params=ReopenAsked)
+async def reopen_break(request): ...
+"#;
+
+/// sample-operations' sweep (0.11.0): `meridian.runs_as` a parameter's
+/// default, entered as `self.act_as(ROLE)`, the act named by a constant.
+const SAMPLE_SWEEP: &str = r#"from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
+from typing import Any
+
+import meridian
+
+ROLE = "operations"
+CLOSE_CLEARED = "close_cleared_breaks"
+
+ActAs = Callable[[str], AbstractAsyncContextManager[Any]]
+
+
+class Follower:
+    def __init__(self, book, *, act_as: ActAs = meridian.runs_as) -> None:
+        self.book = book
+        self.act_as = act_as
+
+    async def sweep(self, arguments, why):
+        async with self.act_as(ROLE) as act:
+            reply = await act(CLOSE_CLEARED, arguments, reason=why)
+        return reply
+"#;
+
+fn runs_as_failures(report: &Report) -> Vec<(String, usize, String)> {
+    report
+        .failures
+        .iter()
+        .filter(|f| f.rule == "runs-as-checked")
+        .map(|f| (f.file.clone(), f.line, f.found.clone()))
+        .collect()
+}
+
+fn refused(tool: &str, at: usize) -> String {
+    format!(
+        "{tool} (src/{MODULE}/acts.py:{at}) is an act called through runs_as and names no check \
+         tool, so a service account set to prepare only is refused it"
+    )
+}
+
+#[test]
+fn an_act_the_sweep_calls_through_runs_as_names_its_check_tool() {
+    let plugin = Scaffolded::tested("runs-as");
+    let acts = format!("src/{MODULE}/acts.py");
+    let follow = format!("src/{MODULE}/follow.py");
+    plugin.write(&acts, BREAK_ACTS);
+    plugin.write(&follow, SAMPLE_SWEEP);
+    let report = plugin.check();
+    assert_eq!(
+        failed_rules(&report),
+        Vec::<&str>::new(),
+        "{}",
+        text(&report)
+    );
+
+    // Its check taken away, the call is refused where it is made.
+    plugin.replace(
+        &acts,
+        "    checked_by=\"check_close_cleared_breaks\",\n",
+        "",
+    );
+    let report = plugin.check();
+    assert_eq!(
+        failed_rules(&report),
+        ["runs-as-checked"],
+        "{}",
+        text(&report)
+    );
+    assert_eq!(
+        runs_as_failures(&report),
+        [(
+            follow.clone(),
+            line_in(&plugin, &follow, "reply = await act("),
+            refused(
+                "close_cleared_breaks",
+                line_in(&plugin, &acts, "@pages.tool(")
+            ),
+        )]
+    );
+    assert!(report.failures[0].instead.contains("checked_by="));
+}
+
+#[test]
+fn runs_as_is_read_however_it_is_reached_and_an_act_without_its_check_fails() {
+    let plugin = Scaffolded::tested("runs-as-forms");
+    let acts = format!("src/{MODULE}/acts.py");
+    let work = format!("src/{MODULE}/work.py");
+    plugin.write(&acts, BREAK_ACTS);
+    plugin.write(
+        &work,
+        r#"import meridian
+from meridian import runs_as
+from meridian import runs_as as as_service
+
+OPERATIONS = "operations"
+
+
+async def first(arguments):
+    async with meridian.runs_as("operations") as act:
+        await act("reopen_break", arguments, reason="first")
+
+
+async def second(arguments):
+    async with runs_as(OPERATIONS) as act:
+        await act(
+            tool_name="reopen_break",
+            arguments=arguments,
+            reason="second",
+        )
+
+
+async def third(arguments):
+    context = meridian.runs_as(OPERATIONS)
+    async with context as act: await act("reopen_break", arguments, reason="third")
+
+
+async def fourth(arguments):
+    async with as_service("operations") as made, open("x") as other:
+        await made("reopen_break", arguments, reason="fourth")
+        other.write("reopen_break")
+"#,
+    );
+    let at = |needle: &str| line_in(&plugin, &work, needle);
+    let reopen = refused(
+        "reopen_break",
+        line_in(&plugin, &acts, "\"/breaks/reopen\""),
+    );
+    assert_eq!(
+        runs_as_failures(&plugin.check()),
+        [
+            (work.clone(), at("reason=\"first\""), reopen.clone()),
+            (
+                work.clone(),
+                at("tool_name=\"reopen_break\"") - 1,
+                reopen.clone()
+            ),
+            (work.clone(), at("reason=\"third\""), reopen.clone()),
+            (work.clone(), at("reason=\"fourth\""), reopen.clone()),
+        ]
+    );
+}
+
+#[test]
+fn a_tool_the_text_cannot_read_or_not_among_the_plugins_acts_is_passed_over() {
+    let plugin = Scaffolded::tested("runs-as-unread");
+    plugin.write(&format!("src/{MODULE}/acts.py"), BREAK_ACTS);
+    plugin.write(
+        &format!("src/{MODULE}/work.py"),
+        r#"import meridian
+
+
+async def sweep(arguments, tool):
+    async with meridian.runs_as("operations") as act:
+        await act(tool, arguments, reason="chosen at run time")
+        await act(f"reopen_{tool}", arguments, reason="formatted")
+        await act("rebalance", arguments, reason="not one of the plugin's acts")
+        await act("check_close_cleared_breaks", arguments, reason="a read, not an act")
+        await act("close_cleared_breaks", arguments, reason="named with its check")
+    await act("reopen_break", arguments, reason="outside the block")
+"#,
+    );
+    let report = plugin.check();
+    assert_eq!(
+        failed_rules(&report),
+        Vec::<&str>::new(),
+        "{}",
+        text(&report)
+    );
+
+    // A test calling the act so is not the plugin's work.
+    plugin.write(
+        "tests/test_sweep.py",
+        "import meridian\n\n\nasync def test_sweep():\n    \
+         async with meridian.runs_as(\"operations\") as act:\n        \
+         await act(\"reopen_break\", {}, reason=\"tested\")\n",
+    );
+    assert!(runs_as_failures(&plugin.check()).is_empty());
 }
 
 // ── window-settings (contract v16) ───────────────────────────────────────

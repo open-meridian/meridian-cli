@@ -21,7 +21,7 @@ use super::{Failure, Plugin, Rule, Source};
 /// The rules, in the order they are reported: what the project is, what it
 /// declares, its pages, its settings, how it reaches the deployment, and its
 /// tests. Running the tests is `TESTS_PASS`, which only `--run-tests` asks.
-pub const RULES: [Rule; 15] = [
+pub const RULES: [Rule; 16] = [
     Rule {
         id: "template-shape",
         holds: "the project keeps the template's shape",
@@ -67,6 +67,11 @@ pub const RULES: [Rule; 15] = [
         id: "tools-cover-routes",
         holds: "every route that changes something is a tool for agents, or says why not",
         check: tools_cover_routes,
+    },
+    Rule {
+        id: "runs-as-checked",
+        holds: "every act the plugin's own work calls through runs_as names its check tool",
+        check: runs_as_checked,
     },
     Rule {
         id: "roles-declared",
@@ -1999,6 +2004,263 @@ fn tools_cover_routes(plugin: &Plugin) -> Vec<Failure> {
     failures
 }
 
+// ── runs-as-checked (contract v21) ───────────────────────────────────────
+
+const RUNS_AS_CHECKED: &str = "`checked_by=\"<tool>\"` on the act: a read tool (`reads=True`) \
+    taking the same record, answering what the act would do and whether the account may, so a \
+    service account set to prepare only prepares it for a person to make (contract v21)";
+
+/// The acts the plugin declares, by their tools' names: a page, route or
+/// tool deriving a tool (`params=`) for a method that changes something,
+/// neither `reads=True` nor kept from agents nor replaced by a tool, each
+/// with whether it names its check tool (`checked_by=`). One named some way
+/// the text cannot read is left out.
+fn acts_named<'d, 'a>(
+    declared: &'d [Declaration<'a>],
+    constants: &HashMap<String, String>,
+) -> Vec<(String, &'d Declaration<'a>, bool)> {
+    let changes = |method: &str| method != "GET" && method != "HEAD";
+    let replaced: Vec<String> = declared
+        .iter()
+        .filter(|declaration| declaration.kind == "tool")
+        .filter_map(|declaration| keyword(&declaration.arguments, "replaces"))
+        .filter_map(|path| string_named(path, constants))
+        .collect();
+    let mut acts = Vec::new();
+    for declaration in declared.iter().filter(|d| d.kind != "setting") {
+        let arguments = &declaration.arguments;
+        let derived = keyword(arguments, "params").is_some_and(|params| params != "None");
+        let reads = keyword(arguments, "reads") == Some("True");
+        let changing = match declaration.kind {
+            "tool" => keyword(arguments, "method")
+                .and_then(|method| string_named(method, constants))
+                .is_none_or(|method| changes(&method.to_ascii_uppercase())),
+            _ => {
+                keyword(arguments, "tool") != Some("False")
+                    && !string_named(first_argument(arguments), constants)
+                        .is_some_and(|path| replaced.contains(&path))
+                    && methods_of(arguments).iter().any(|method| changes(method))
+            }
+        };
+        if !derived || reads || !changing {
+            continue;
+        }
+        let name = match keyword(arguments, "name") {
+            Some(name) if name != "None" => string_named(name, constants),
+            _ => declaration.view.clone(),
+        };
+        let Some(name) = name else {
+            continue; // named some way the text cannot read
+        };
+        let checked = keyword(arguments, "checked_by")
+            .is_some_and(|check| !matches!(check, "\"\"" | "''" | "None"));
+        acts.push((name, declaration, checked));
+    }
+    acts
+}
+
+/// A call the plugin's own work makes as its role's service account: where,
+/// and the tool it names, None where the text cannot read it.
+struct CalledAs<'a> {
+    source: &'a Source,
+    line: usize,
+    tool: Option<String>,
+}
+
+/// Where a `with` statement's items end: its first `:` outside every
+/// bracket and string.
+fn header_end(text: &str) -> Option<usize> {
+    let (mut depth, mut quote, mut escaped) = (0i32, None::<char>, false);
+    for (at, c) in text.char_indices() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => quote = Some(c),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ':' if depth == 0 => return Some(at),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Every call through `meridian.runs_as(...)` in the plugin's Python: in
+/// the block of an `async with <runs_as>(...) as <act>:`, each `<act>(...)`,
+/// with the tool its first argument (or `tool_name=`) names, as written or
+/// through a constant bound at the top of a module. `<runs_as>` is
+/// `runs_as` however it is reached (`meridian.runs_as`, imported, imported
+/// as another name), or a name the module binds to it (`act_as =
+/// meridian.runs_as`, a parameter's default included, then `self.act_as`);
+/// `async with <ctx> as <act>:` too, for a name bound to `runs_as(...)`.
+fn called_as_service_account<'a>(
+    plugin: &'a Plugin,
+    constants: &HashMap<String, String>,
+) -> Vec<CalledAs<'a>> {
+    static BOUND: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"\b([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?::([^=\n:()]*))?=[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*\.)*runs_as\b",
+        )
+        .unwrap()
+    });
+    static IMPORTED: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\bruns_as[ \t]+as[ \t]+([A-Za-z_][A-Za-z0-9_]*)").unwrap());
+    static WITH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:async\s+)?with\b").unwrap());
+    static ITEM: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?s)^(.*?)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)$").unwrap());
+    let last = |dotted: &str| {
+        dotted
+            .rsplit('.')
+            .next()
+            .unwrap_or(dotted)
+            .trim()
+            .to_string()
+    };
+    let mut found = Vec::new();
+    for source in python(plugin) {
+        let text = python_uncommented(&source.text);
+        if !text.contains("runs_as") {
+            continue;
+        }
+        // The names standing for runs_as itself, and for a context it made.
+        let mut calls = vec!["runs_as".to_string()];
+        let mut contexts = Vec::new();
+        for bound in BOUND.captures_iter(&text) {
+            let annotated = bound.get(2).map_or("", |m| m.as_str());
+            if split_arguments(annotated).len() > 1 {
+                continue; // a comma: the name is an earlier parameter's
+            }
+            let after = text[bound.get(0).expect("matched").end()..].trim_start();
+            if after.starts_with('(') {
+                contexts.push(bound[1].to_string());
+            } else {
+                calls.push(bound[1].to_string());
+            }
+        }
+        calls.extend(
+            IMPORTED
+                .captures_iter(&text)
+                .map(|named| named[1].to_string()),
+        );
+
+        let statements = python_statements(&text);
+        for (at, (line, statement)) in statements.iter().enumerate() {
+            let trimmed = statement.trim_start();
+            let lead = statement.len() - trimmed.len();
+            let Some(with) = WITH.find(trimmed) else {
+                continue;
+            };
+            let rest = &trimmed[with.end()..];
+            let Some(colon) = header_end(rest) else {
+                continue;
+            };
+            let mut items = rest[..colon].trim();
+            if items.starts_with('(')
+                && items.ends_with(')')
+                && enclosed(&items[1..]).len() == items.len() - 2
+            {
+                items = &items[1..items.len() - 1];
+            }
+            let acts: Vec<String> = split_arguments(items)
+                .into_iter()
+                .filter_map(|item| ITEM.captures(item))
+                .filter(|item| {
+                    let made = item[1].trim();
+                    match made.find('(') {
+                        Some(open) if made.ends_with(')') => calls.contains(&last(&made[..open])),
+                        _ => contexts.contains(&last(made)),
+                    }
+                })
+                .map(|item| item[2].to_string())
+                .collect();
+            if acts.is_empty() {
+                continue;
+            }
+            // The block: what follows the colon on its line, and every
+            // statement after it indented further.
+            let start = lead + with.end() + colon + 1;
+            let mut block = vec![(
+                line + statement[..start].matches('\n').count(),
+                &statement[start..],
+            )];
+            block.extend(
+                statements[at + 1..]
+                    .iter()
+                    .take_while(|(_, next)| next.len() - next.trim_start().len() > lead)
+                    .map(|(line, next)| (*line, next.as_str())),
+            );
+            for act in &acts {
+                let call = Regex::new(&format!(
+                    r"(?:^|[^A-Za-z0-9_.])({})\s*\(",
+                    regex::escape(act)
+                ))
+                .unwrap();
+                for (first, part) in &block {
+                    for called in call.captures_iter(part) {
+                        let named = called.get(1).expect("matched");
+                        let arguments = enclosed(&part[called.get(0).expect("matched").end()..]);
+                        let tool = keyword(arguments, "tool_name")
+                            .or_else(|| positional(arguments, 0))
+                            .and_then(|tool| string_named(tool, constants));
+                        found.push(CalledAs {
+                            source,
+                            line: first + part[..named.start()].matches('\n').count(),
+                            tool,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Every act the plugin's own work calls as its role's service account
+/// (`meridian.runs_as`) names its check tool: a role's admin may set the
+/// account to prepare only, and the dashboard then refuses an act with no
+/// check at run time (contract v21; the check rule ruled 2026-10-12).
+fn runs_as_checked(plugin: &Plugin) -> Vec<Failure> {
+    const ID: &str = "runs-as-checked";
+    let constants = bound_strings(plugin);
+    let declared = declarations(plugin);
+    let acts = acts_named(&declared, &constants);
+    let mut failures = Vec::new();
+    for call in called_as_service_account(plugin, &constants) {
+        // A tool named some way the text cannot read, or none of the acts
+        // the plugin declares, is passed over: the dashboard refuses a tool
+        // that is not one of the role's acts, at run time.
+        let Some(tool) = call.tool else {
+            continue;
+        };
+        let Some((_, act, _)) = acts
+            .iter()
+            .find(|(name, _, checked)| *name == tool && !checked)
+        else {
+            continue;
+        };
+        failures.push(failure(
+            ID,
+            &call.source.path,
+            call.line,
+            format!(
+                "{tool} ({}:{}) is an act called through runs_as and names no check tool, so a \
+                 service account set to prepare only is refused it",
+                act.source.path, act.line
+            ),
+            RUNS_AS_CHECKED,
+        ));
+    }
+    failures
+}
+
 // ── roles-declared ───────────────────────────────────────────────────────
 
 /// meridian-schema's boundaries/roles.json at 70bb61e (contract v21), byte
@@ -2066,6 +2328,8 @@ struct Declaration<'a> {
     arguments: String,
     /// The view's body, and the line it starts on.
     body: Option<(usize, String)>,
+    /// The view's name, which its tool takes where it gives no `name=`.
+    view: Option<String>,
 }
 
 impl Declaration<'_> {
@@ -2085,15 +2349,18 @@ fn declarations(plugin: &Plugin) -> Vec<Declaration<'_>> {
         Regex::new(r"@\s*[A-Za-z_][A-Za-z0-9_.]*\.(page|route|tool)\s*\(").unwrap()
     });
     static SETTING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bSetting\s*\(").unwrap());
-    static DEF: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?m)^([ \t]*)(?:async[ \t]+)?def[ \t]+[A-Za-z_]").unwrap());
+    static DEF: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?m)^([ \t]*)(?:async[ \t]+)?def[ \t]+([A-Za-z_][A-Za-z0-9_]*)").unwrap()
+    });
     let mut found = Vec::new();
     for source in python(plugin) {
         let text = python_uncommented(&source.text);
         for decorator in DECORATOR.captures_iter(&text) {
             let whole = decorator.get(0).expect("matched");
             let arguments = enclosed(&text[whole.end()..]).to_string();
-            let body = DEF.captures_at(&text, whole.end()).map(|def| {
+            let def = DEF.captures_at(&text, whole.end());
+            let view = def.as_ref().map(|def| def[2].to_string());
+            let body = def.map(|def| {
                 let indent = def[1].len();
                 let start = def.get(0).expect("matched").start();
                 let first = line_at(&text, start) + 1;
@@ -2117,6 +2384,7 @@ fn declarations(plugin: &Plugin) -> Vec<Declaration<'_>> {
                 line: line_at(&text, whole.start()),
                 arguments,
                 body,
+                view,
             });
         }
         for call in SETTING.find_iter(&text) {
@@ -2126,6 +2394,7 @@ fn declarations(plugin: &Plugin) -> Vec<Declaration<'_>> {
                 line: line_at(&text, call.start()),
                 arguments: enclosed(&text[call.end()..]).to_string(),
                 body: None,
+                view: None,
             });
         }
     }
