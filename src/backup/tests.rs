@@ -510,7 +510,7 @@ fn what_a_deployment_kept_or_would_take_up_is_found_before_anything_changes() {
 fn the_counts_are_grouped_by_store_from_each_tables_prefix() {
     let counts = counts(
         "public.book_entry\t3\npublic.book_lot\t1\npublic.config_account\t2\n\
-         public.holding\t5\npublic.statement\t1\npublic.lake_price\t7\n\
+         public.holding\t5\npublic.statement\t1\npublic.schema_migration\t12\npublic.lake_price\t7\n\
          public.instrument_record\t4\npublic.dashboard_ticket\t2\npublic.mystery\t1\n",
     );
     assert_eq!(
@@ -518,7 +518,7 @@ fn the_counts_are_grouped_by_store_from_each_tables_prefix() {
         [
             ("config", 1, 2),
             ("book", 2, 4),
-            ("street", 2, 6),
+            ("street", 3, 18),
             ("lake", 1, 7),
             ("instrument", 1, 4),
             ("dashboard", 1, 2),

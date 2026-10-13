@@ -1097,7 +1097,8 @@ pub fn left_behind(
 }
 
 /// Every table's store, read from its name's prefix: `config_`, `book_`,
-/// `lake_`, the street's, the instrument store's, `dashboard_`.
+/// `lake_`, the street's (its tables' own names, and `schema_migration`, the
+/// street's record of its migrations), the instrument store's, `dashboard_`.
 pub fn store_of(table: &str) -> &'static str {
     let name = table.rsplit_once('.').map_or(table, |(_, name)| name);
     const STREET: [&str; 9] = [
@@ -1121,7 +1122,7 @@ pub fn store_of(table: &str) -> &'static str {
         "dashboard"
     } else if name.starts_with("instrument") || name.starts_with("venue_") {
         "instrument"
-    } else if STREET.iter().any(|prefix| name.starts_with(prefix)) {
+    } else if name == "schema_migration" || STREET.iter().any(|prefix| name.starts_with(prefix)) {
         "street"
     } else {
         "other"
