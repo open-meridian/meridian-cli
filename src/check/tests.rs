@@ -636,6 +636,55 @@ fn a_plugin_keeps_the_common_settings_in_their_order() {
 }
 
 #[test]
+fn settings_declared_in_one_tuple_keep_the_order_they_are_written_in() {
+    // As SnapTrade's `_VENDORS`: role helpers between `Setting(`s in one
+    // statement, each read where it is written.
+    let declaration = format!("src/{MODULE}/declaration.py");
+    let plugin = Scaffolded::of_role("settings-tuple", "custody");
+    let config = plugin.read(&declaration);
+    let start = config
+        .find("@meridian.settings")
+        .expect("the settings class");
+    plugin.write(
+        &declaration,
+        &format!(
+            "{}_VENDORS = (\n    \
+             meridian.Setting(\"api_key\", str, required=True, secret=True, label=\"API key\"),\n    \
+             custody.poll_seconds(),\n    \
+             custody.stale_after_hours(),\n    \
+             meridian.Setting(\"account_note\", str, label=\"Account note\"),\n    \
+             meridian.sample_data(),\n)\n\n\n\
+             DECLARATION = meridian.Declaration(settings=list(_VENDORS))\n",
+            &config[..start]
+        ),
+    );
+    let ordered = |plugin: &Scaffolded| -> Vec<(String, usize)> {
+        plugin
+            .check_verified()
+            .failures
+            .into_iter()
+            .filter(|failure| failure.rule == "role-pages")
+            .map(|failure| (failure.found, failure.line))
+            .collect()
+    };
+    assert_eq!(ordered(&plugin), [], "sample data is last, as written");
+
+    // An environment written after the key comes after another.
+    plugin.replace(
+        &declaration,
+        "    custody.poll_seconds(),",
+        "    meridian.environment(),\n    custody.poll_seconds(),",
+    );
+    assert_eq!(
+        ordered(&plugin),
+        [(
+            "the setting environment comes after another".into(),
+            line_of(&plugin, &declaration, "meridian.environment(),")
+        )]
+    );
+}
+
+#[test]
 fn a_reporting_plugin_values_in_its_reporting_currency() {
     let plugin = Scaffolded::of_role("reporting-currency", "reporting");
     plugin.replace(

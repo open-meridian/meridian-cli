@@ -1340,19 +1340,26 @@ fn settings_in_order<'a>(
                 continue;
             }
             decorated = decorated && statement.trim_start().starts_with('@');
+            // A statement may declare several, helpers among `Setting(`s
+            // (`_VENDORS = (Setting(...), custody.poll_seconds(), ...)`):
+            // each kept where it is written.
+            let mut here: Vec<(usize, SettingAt)> = Vec::new();
             for call in COMMON_HELPER.captures_iter(&statement) {
                 let whole = call.get(0).expect("matched");
-                found.push(SettingAt {
-                    source,
-                    line: line + statement[..whole.start()].matches('\n').count(),
-                    name: call[1].to_string(),
-                    label: match &call[1] {
-                        "sample_data" => Some("Sample data".to_string()),
-                        "environment" => Some("Environment".to_string()),
-                        _ => None,
+                here.push((
+                    whole.start(),
+                    SettingAt {
+                        source,
+                        line: line + statement[..whole.start()].matches('\n').count(),
+                        name: call[1].to_string(),
+                        label: match &call[1] {
+                            "sample_data" => Some("Sample data".to_string()),
+                            "environment" => Some("Environment".to_string()),
+                            _ => None,
+                        },
+                        secret: false,
                     },
-                    secret: false,
-                });
+                ));
             }
             for call in SETTING.find_iter(&statement) {
                 let arguments = enclosed(&statement[call.end()..]);
@@ -1360,15 +1367,20 @@ fn settings_in_order<'a>(
                 let Some(name) = string_named(named, constants) else {
                     continue;
                 };
-                found.push(SettingAt {
-                    source,
-                    line: line + statement[..call.start()].matches('\n').count(),
-                    name,
-                    label: keyword(arguments, "label")
-                        .and_then(|label| string_named(label, constants)),
-                    secret: SECRET.is_match(arguments),
-                });
+                here.push((
+                    call.start(),
+                    SettingAt {
+                        source,
+                        line: line + statement[..call.start()].matches('\n').count(),
+                        name,
+                        label: keyword(arguments, "label")
+                            .and_then(|label| string_named(label, constants)),
+                        secret: SECRET.is_match(arguments),
+                    },
+                ));
             }
+            here.sort_by_key(|(at, _)| *at);
+            found.extend(here.into_iter().map(|(_, setting)| setting));
         }
     }
     found
