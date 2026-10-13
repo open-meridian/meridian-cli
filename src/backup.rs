@@ -23,7 +23,7 @@
 //! counts, sizes and hashes only. Every Secret reaches kubectl on its
 //! standard input, never as an argument.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -870,9 +870,429 @@ pub struct Restore {
     pub timeout: Duration,
 }
 
-/// Restore a backup into an empty namespace, saying each step on `step` and
-/// returning what was restored.
-pub async fn restore(asked: &Restore, step: &mut dyn FnMut(&str)) -> Result<String, String> {
+/// `<host>:<port>/<database>` of a database URL, never its role or password:
+/// what a person is told when restore is to reconnect to, or load into, a
+/// database somebody else runs.
+pub fn place(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map(|(_, rest)| rest)?;
+    let after = rest.rsplit_once('@').map_or(rest, |(_, after)| after);
+    let place = after.split('?').next().unwrap_or_default();
+    (!place.is_empty()).then(|| place.to_string())
+}
+
+/// What restore does with the deployment's database, decided from the
+/// manifest before anything is changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DatabasePlan {
+    /// The database the chart brings, started and loaded from the dump.
+    Brought { database: String },
+    /// A database somebody else runs, loaded from the dump by restore
+    /// itself, in `backup.image`, as the migrating role (gap 4): it must be
+    /// empty.
+    Load {
+        place: String,
+        database: String,
+        image: String,
+    },
+    /// A database somebody else runs, not in the backup: the deployment
+    /// reaches it again with the restored URL, so nothing else may run
+    /// against it (gap 3).
+    Reconnect { place: String },
+    /// The chart brings one, and the backup holds no dump of it
+    /// (`backup.database: false`): it starts empty.
+    BroughtEmpty,
+    /// The backup was taken before first run made one.
+    None,
+}
+
+/// The database plan, or why restore cannot carry it out, said before any
+/// change. `secret` is the backup's copy of the database's Secret.
+pub fn database_plan(
+    manifest: &Manifest,
+    secret: &BTreeMap<String, Vec<u8>>,
+    values: &serde_yaml::Value,
+) -> Result<DatabasePlan, String> {
+    let db = &manifest.database;
+    let url = |key: &str| {
+        secret
+            .get(key)
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+            .filter(|url| !url.trim().is_empty())
+    };
+    let where_ = || {
+        url("url")
+            .as_deref()
+            .and_then(place)
+            .unwrap_or_else(|| db.name.clone())
+    };
+    match (db.included, db.brought) {
+        (true, true) => Ok(DatabasePlan::Brought {
+            database: db.name.clone(),
+        }),
+        (true, false) => {
+            let migrating = url("migrate-url").or_else(|| url("url")).ok_or_else(|| {
+                format!(
+                    "the backup holds a dump of a database this chart does not bring, and its \
+                     Secret {} holds no URL to load it with: nothing was changed",
+                    db.secret
+                )
+            })?;
+            let database = login(&migrating)?.database;
+            let image = values
+                .get("backup")
+                .and_then(|backup| backup.get("image"))
+                .and_then(|image| image.as_str())
+                .filter(|image| !image.is_empty())
+                .ok_or(
+                    "the backup's values name no backup.image, the image restore loads a \
+                     database somebody else runs in: nothing was changed",
+                )?
+                .to_string();
+            Ok(DatabasePlan::Load {
+                place: where_(),
+                database,
+                image,
+            })
+        }
+        (false, false) if !db.name.is_empty() => Ok(DatabasePlan::Reconnect { place: where_() }),
+        (false, true) if !db.name.is_empty() => Ok(DatabasePlan::BroughtEmpty),
+        _ => Ok(DatabasePlan::None),
+    }
+}
+
+/// The chart version restore installs, against the one the backup was taken
+/// on (gap 6): never older, since a database a newer chart migrated is not
+/// served by an older runtime; newer is an upgrade, and said. What to say,
+/// or why not.
+pub fn chart_version_said(recorded: &str, installs: &str) -> Result<Option<String>, String> {
+    use std::cmp::Ordering;
+    if recorded.is_empty() {
+        return Ok(Some(
+            "the backup records no chart version, so whether this one is older is not known".into(),
+        ));
+    }
+    match crate::release::compare(installs, recorded) {
+        Ordering::Less => Err(format!(
+            "the chart restore would install is {installs}, older than {recorded}, the version \
+             the backup was taken on: its database may hold what only a newer runtime serves. \
+             Name {recorded} or newer with --chart-version; nothing was changed"
+        )),
+        Ordering::Greater => Ok(Some(format!(
+            "{installs} is newer than {recorded}, the version the backup was taken on: restoring \
+             is then an upgrade, the migration moving the restored database to it"
+        ))),
+        Ordering::Equal => Ok(None),
+    }
+}
+
+/// What is in the namespace, and on the cluster, before restore changes
+/// anything: the names kubectl lists.
+#[derive(Debug, Clone)]
+pub struct Present {
+    pub secrets: Vec<String>,
+    pub config_maps: Vec<String>,
+    pub claims: Vec<String>,
+    /// The backup volume a `backup.path` makes, where one is there; `Err`
+    /// when whether it is could not be read.
+    pub volume: Result<Option<String>, String>,
+}
+
+impl Default for Present {
+    fn default() -> Self {
+        Present {
+            secrets: Vec::new(),
+            config_maps: Vec::new(),
+            claims: Vec::new(),
+            volume: Ok(None),
+        }
+    }
+}
+
+/// The backup volume the chart makes from `backup.path`, by name: the
+/// node's directory as a volume, kept when a namespace is deleted.
+pub fn backup_volume(ns: &str, full: &str, values: &serde_yaml::Value) -> Option<String> {
+    let backup = values.get("backup")?;
+    let said = |key: &str| {
+        backup
+            .get(key)
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+    };
+    said("path")?;
+    said("recipient")?;
+    let claim = said("existingClaim")
+        .map(String::from)
+        .unwrap_or_else(|| format!("{full}-backup"));
+    Some(format!("{ns}-{claim}"))
+}
+
+/// The claims the release's StatefulSets take up when installed: the
+/// brought database's and the registry's, each where the values enable it.
+pub fn claims_taken(full: &str, values: &serde_yaml::Value) -> Vec<String> {
+    let enabled = |path: &[&str]| {
+        let mut at = values;
+        for key in path {
+            match at.get(*key) {
+                Some(next) => at = next,
+                // Not said: the chart's default, which brings both.
+                None => return true,
+            }
+        }
+        at.as_bool().unwrap_or(true)
+    };
+    let mut claims = Vec::new();
+    if enabled(&["database", "brought", "enabled"]) {
+        claims.push(format!("data-{full}-database-0"));
+    }
+    if enabled(&["registry", "enabled"]) {
+        claims.push(format!("images-{full}-registry-0"));
+    }
+    claims
+}
+
+/// Every kept object of a deployment restore would make or take up, found
+/// already there (gap 7), each with what to do: checked before any change.
+pub fn left_behind(
+    manifest: &Manifest,
+    full: &str,
+    values: &serde_yaml::Value,
+    present: &Present,
+) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut secrets: Vec<String> = manifest
+        .chart_secrets
+        .iter()
+        .chain(&manifest.operator_secrets)
+        .cloned()
+        .collect();
+    if manifest.key == "generated" {
+        secrets.push(format!("{full}-key"));
+    }
+    for name in secrets.iter().filter(|name| present.secrets.contains(name)) {
+        found.push(format!("the Secret {name}"));
+    }
+    let maps = manifest
+        .config_maps
+        .iter()
+        .cloned()
+        .chain(std::iter::once(format!("{full}-backup-values")));
+    for name in maps.filter(|name| present.config_maps.contains(name)) {
+        found.push(format!("the ConfigMap {name}"));
+    }
+    for name in claims_taken(full, values)
+        .into_iter()
+        .filter(|name| present.claims.contains(name))
+    {
+        found.push(format!(
+            "the claim {name}, which the release would mount and find full"
+        ));
+    }
+    if let Ok(Some(volume)) = &present.volume {
+        found.push(format!(
+            "the backup volume {volume}, left by a deleted namespace: `kubectl delete pv \
+             {volume}` removes it, and the node's directory, with its backups, is kept"
+        ));
+    }
+    found
+}
+
+/// Every table's store, read from its name's prefix: `config_`, `book_`,
+/// `lake_`, the street's, the instrument store's, `dashboard_`.
+pub fn store_of(table: &str) -> &'static str {
+    let name = table.rsplit_once('.').map_or(table, |(_, name)| name);
+    const STREET: [&str; 9] = [
+        "street_",
+        "holding",
+        "statement",
+        "custodial_",
+        "account_",
+        "activity",
+        "partition_",
+        "sync_",
+        "position",
+    ];
+    if name.starts_with("config_") {
+        "config"
+    } else if name.starts_with("book_") {
+        "book"
+    } else if name.starts_with("lake_") {
+        "lake"
+    } else if name.starts_with("dashboard_") {
+        "dashboard"
+    } else if name.starts_with("instrument") || name.starts_with("venue_") {
+        "instrument"
+    } else if STREET.iter().any(|prefix| name.starts_with(prefix)) {
+        "street"
+    } else {
+        "other"
+    }
+}
+
+/// The counts grouped by store (gap 5): each store with its tables and rows,
+/// in a fixed order, a store with no table left out.
+pub fn by_store(counts: &BTreeMap<String, u64>) -> Vec<(&'static str, usize, u64)> {
+    const ORDER: [&str; 7] = [
+        "config",
+        "book",
+        "street",
+        "lake",
+        "instrument",
+        "dashboard",
+        "other",
+    ];
+    ORDER
+        .iter()
+        .filter_map(|store| {
+            let held: Vec<u64> = counts
+                .iter()
+                .filter(|(table, _)| store_of(table) == *store)
+                .map(|(_, rows)| *rows)
+                .collect();
+            (!held.is_empty()).then(|| (*store, held.len(), held.iter().sum()))
+        })
+        .collect()
+}
+
+fn stores_text(counts: &BTreeMap<String, u64>) -> String {
+    by_store(counts)
+        .iter()
+        .map(|(store, tables, rows)| format!("    {store}: {tables} tables, {rows} rows\n"))
+        .collect()
+}
+
+/// Why a launched plugin's pod cannot start for its image, as Kubernetes
+/// says it while waiting.
+const UNPULLED: [&str; 4] = [
+    "ErrImagePull",
+    "ImagePullBackOff",
+    "InvalidImageName",
+    "ErrImageNeverPull",
+];
+
+/// The launched plugins' pods: each instance whose image could not be
+/// pulled, with that image; and whether every pod has settled, ready or
+/// so refused (gap 5). A registry's claim can outlive a namespace, so some
+/// images may be there; only the missing are named.
+pub fn unpulled(pods: &[crate::upgrade_deployment::Pod]) -> (bool, Vec<(String, String)>) {
+    let mut missing = Vec::new();
+    let mut settled = true;
+    for pod in pods.iter().filter(|pod| !pod.terminating) {
+        let instance = pod
+            .labels
+            .get("meridian.dev/instance")
+            .cloned()
+            .unwrap_or_else(|| pod.name.clone());
+        let refused = pod.init.iter().chain(&pod.containers).find(|container| {
+            container
+                .waiting
+                .as_deref()
+                .is_some_and(|why| UNPULLED.contains(&why))
+        });
+        match refused {
+            Some(container) => {
+                let image = pod.images.get(&container.name).cloned().unwrap_or_default();
+                if !missing.iter().any(|(held, _)| *held == instance) {
+                    missing.push((instance, image));
+                }
+            }
+            None if pod.ready_since.is_some() => {}
+            None => settled = false,
+        }
+    }
+    (settled, missing)
+}
+
+/// What restore will do, shown before it does any of it (gap 2).
+#[derive(Debug, Clone)]
+pub struct Plan {
+    pub file: String,
+    pub release: String,
+    pub deployment_id: String,
+    pub taken_at: String,
+    pub cluster: String,
+    pub namespace: String,
+    pub namespace_exists: bool,
+    pub chart: String,
+    pub version: String,
+    /// What is said of the version: newer than the backup's, or unknown.
+    pub version_said: Option<String>,
+    pub secrets: usize,
+    pub config_maps: usize,
+    pub key_generated: bool,
+    pub database: DatabasePlan,
+    /// Whether the backup volume could be checked for, where it could not.
+    pub unchecked: Option<String>,
+}
+
+pub fn plan_text(plan: &Plan) -> String {
+    let mut out = format!(
+        "Restoring {file}:\n\
+         \x20 the backup  {release} ({id}), taken {taken}\n\
+         \x20 into        the cluster {cluster}, namespace {ns}{made}\n\
+         \x20 from        {chart} {version}\n",
+        file = plan.file,
+        release = plan.release,
+        id = plan.deployment_id,
+        taken = plan.taken_at,
+        cluster = plan.cluster,
+        ns = plan.namespace,
+        made = if plan.namespace_exists { "" } else { " (made)" },
+        chart = plan.chart,
+        version = plan.version,
+    );
+    if let Some(said) = &plan.version_said {
+        out.push_str(&format!("  {said}.\n"));
+    }
+    out.push_str(&format!(
+        "\n  It will make {} Secrets{}, {} ConfigMaps, and install {} with the backup's values; ",
+        plan.secrets,
+        if plan.key_generated {
+            " and the deployment's key"
+        } else {
+            ""
+        },
+        plan.config_maps,
+        plan.release,
+    ));
+    out.push_str(&match &plan.database {
+        DatabasePlan::Brought { database } => format!(
+            "then start the database the chart brings, make {database} and its roles, and load the \
+             dump, every table's count checked before the components are given its URL.\n"
+        ),
+        DatabasePlan::Load {
+            place, database, ..
+        } => format!(
+            "then load the dump into {place}, a database somebody else runs, which must be \
+             empty, as the migrating role, in backup.image, every table's count checked before \
+             the components are given its URL. The restored deployment writes to {database} \
+             there: stop anything else running against it first.\n"
+        ),
+        DatabasePlan::Reconnect { place } => format!(
+            "the database is not in the backup: it is {place}, which somebody else runs, and the \
+             restored deployment will write to it again. Stop any other deployment running \
+             against it first: two writing one book is the worst outcome.\n"
+        ),
+        DatabasePlan::BroughtEmpty => "the backup holds no dump of the database the chart \
+             brings (backup.database is false), so it starts empty.\n"
+            .to_string(),
+        DatabasePlan::None => {
+            "the backup holds no database: it was taken before first run.\n".to_string()
+        }
+    });
+    if let Some(unchecked) = &plan.unchecked {
+        out.push_str(&format!("  Not checked: {unchecked}.\n"));
+    }
+    out
+}
+
+/// Restore a backup into an empty namespace, saying each step on `step`,
+/// asking `approve` with the plan once every check has passed and before
+/// anything is changed, and returning what was restored.
+pub async fn restore(
+    asked: &Restore,
+    step: &mut dyn FnMut(&str),
+    approve: &mut dyn FnMut(&str) -> bool,
+) -> Result<String, String> {
     let sealed = std::fs::read(&asked.file)
         .map_err(|failed| format!("{} could not be read: {failed}", asked.file.display()))?;
     let identity = std::fs::read_to_string(&asked.identity)
@@ -917,83 +1337,176 @@ pub async fn restore(asked: &Restore, step: &mut dyn FnMut(&str)) -> Result<Stri
     let values: serde_yaml::Value = serde_yaml::from_slice(opened.member("values/values.yaml")?)
         .map_err(|failed| format!("the backup's values could not be read: {failed}"))?;
     let full = fullname(&release, &values);
+    let db_secret = opened.object("secrets", &manifest.database.secret);
+    let database = database_plan(&manifest, &db_secret, &values)?;
 
     // Where, said before anything is changed.
     let context = text("kubectl", &["config", "current-context"]).await?;
+    let cluster = context.trim().to_string();
     step(&format!(
-        "Restoring into the cluster {}, namespace {ns}",
-        context.trim()
+        "Restoring into the cluster {cluster}, namespace {ns}"
     ));
 
-    // An empty namespace, or none.
+    // An empty namespace, or none: no release, and nothing a deployment
+    // keeps or would take up.
     if text("helm", &["status", &release, "-n", ns]).await.is_ok() {
         return Err(format!(
             "{ns} holds a release {release} already. Restore goes only into a namespace without \
              one: nothing was changed"
         ));
     }
-    let present: Vec<String> = text("kubectl", &["get", "secrets", "-n", ns, "-o", "name"])
-        .await
-        .unwrap_or_default()
-        .lines()
-        .map(|line| line.trim_start_matches("secret/").to_string())
-        .collect();
-    let clash: Vec<&String> = manifest
-        .chart_secrets
-        .iter()
-        .chain(&manifest.operator_secrets)
-        .filter(|name| present.contains(name))
-        .collect();
-    if !clash.is_empty() {
+    let names = |kind: &'static str| async move {
+        text("kubectl", &["get", kind, "-n", ns, "-o", "name"])
+            .await
+            .unwrap_or_default()
+            .lines()
+            .map(|line| {
+                line.split_once('/')
+                    .map_or(line, |(_, name)| name)
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+    };
+    let volume = match backup_volume(ns, &full, &values) {
+        None => Ok(None),
+        Some(name) => match text("kubectl", &["get", "pv", &name, "-o", "name"]).await {
+            Ok(_) => Ok(Some(name)),
+            Err(failed) if failed.contains("NotFound") || failed.contains("not found") => Ok(None),
+            Err(failed) => Err(format!(
+                "whether the backup volume {name} is left from a deleted namespace ({failed})"
+            )),
+        },
+    };
+    let present = Present {
+        secrets: names("secrets").await,
+        config_maps: names("configmaps").await,
+        claims: names("persistentvolumeclaims").await,
+        volume,
+    };
+    let left = left_behind(&manifest, &full, &values, &present);
+    if !left.is_empty() {
         return Err(format!(
-            "{ns} holds Secrets the backup would restore, so it was a deployment once: {}. \
-             Restore into a namespace without them; nothing was changed",
-            clash
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "{ns} holds what a deployment keeps, so it was one once, and restore would make or \
+             take up each:\n  {}\nRestore into a namespace without them; nothing was changed",
+            left.join("\n  ")
         ));
     }
-    if text("kubectl", &["get", "namespace", ns]).await.is_err() {
+
+    // Restore's own rights, where it loads a database somebody else runs:
+    // a container of backup.image in the conductor's pod, which reaches the
+    // database by the cluster's own path, and kubectl exec into it.
+    if matches!(database, DatabasePlan::Load { .. }) {
+        for (verb, resource) in [
+            ("patch", "pods/ephemeralcontainers"),
+            ("create", "pods/exec"),
+        ] {
+            let allowed = text("kubectl", &["auth", "can-i", verb, resource, "-n", ns])
+                .await
+                .unwrap_or_default();
+            if allowed.trim() != "yes" {
+                return Err(format!(
+                    "loading the backup's database into the one somebody else runs needs the \
+                     right to {verb} {resource} in {ns}, which this account does not hold: \
+                     nothing was changed"
+                ));
+            }
+        }
+    }
+
+    // The chart restore installs, at the version the backup was taken on
+    // unless told, from whatever reference: read as installed, and never
+    // older than the backup's.
+    let version = asked
+        .chart_version
+        .clone()
+        .or_else(|| (!manifest.chart_version.is_empty()).then(|| manifest.chart_version.clone()));
+    let with_version = |command: &[&'static str]| {
+        let mut said: Vec<String> = command.iter().map(|word| word.to_string()).collect();
+        said.push(asked.chart.clone());
+        if let Some(version) = &version {
+            said.extend(["--version".to_string(), version.clone()]);
+        }
+        said
+    };
+    let shown = with_version(&["show", "chart"]);
+    let shown: Vec<&str> = shown.iter().map(String::as_str).collect();
+    let chart =
+        crate::upgrade_deployment::chart_of(&text("helm", &shown).await.map_err(|failed| {
+            format!(
+                "{} could not be read{}: {failed}. Nothing was changed",
+                asked.chart,
+                version
+                    .as_deref()
+                    .map(|v| format!(" at {v}"))
+                    .unwrap_or_default()
+            )
+        })?)
+        .ok_or_else(|| {
+            format!(
+                "{} states no name and version: nothing was changed",
+                asked.chart
+            )
+        })?;
+    let version_said = chart_version_said(&manifest.chart_version, &chart.version)?;
+
+    // What was chosen, against the chart restore installs.
+    let show = with_version(&["show", "values"]);
+    let show: Vec<&str> = show.iter().map(String::as_str).collect();
+    let defaults: serde_yaml::Value = serde_yaml::from_str(&crate::upgrade_deployment::document(
+        &text("helm", &show).await?,
+    ))
+    .map_err(|failed| format!("the chart's defaults could not be read: {failed}"))?;
+    let mut given = chosen(&values, &defaults);
+
+    let namespace_exists = text("kubectl", &["get", "namespace", ns]).await.is_ok();
+    let plan = Plan {
+        file: asked.file.display().to_string(),
+        release: release.clone(),
+        deployment_id: manifest.deployment_id.clone(),
+        taken_at: manifest.taken_at.clone(),
+        cluster: cluster.clone(),
+        namespace: namespace.clone(),
+        namespace_exists,
+        chart: asked.chart.clone(),
+        version: chart.version.clone(),
+        version_said,
+        secrets: manifest.chart_secrets.len() + manifest.operator_secrets.len(),
+        config_maps: manifest.config_maps.len(),
+        key_generated: manifest.key == "generated",
+        database: database.clone(),
+        unchecked: present.volume.clone().err(),
+    };
+    if !approve(&plan_text(&plan)) {
+        return Err(
+            "not approved, so nothing was changed. Where there is no terminal to ask at, --yes \
+             approves"
+                .into(),
+        );
+    }
+
+    if !namespace_exists {
         text("kubectl", &["create", "namespace", ns]).await?;
     }
 
-    // What was chosen, against the chart restore installs.
-    let mut show = vec!["show", "values", asked.chart.as_str()];
-    let version = asked.chart_version.clone().or_else(|| {
-        (asked.chart == PUBLISHED_CHART && !manifest.chart_version.is_empty())
-            .then(|| manifest.chart_version.clone())
-    });
-    if let Some(version) = &version {
-        show.extend(["--version", version.as_str()]);
-    }
-    let defaults: serde_yaml::Value = serde_yaml::from_str(&text("helm", &show).await?)
-        .map_err(|failed| format!("the chart's defaults could not be read: {failed}"))?;
-    let mut given = chosen(&values, &defaults);
-
-    // The kept objects, before the chart, so it renders with them.
+    // The kept objects, before the chart, so it renders with them; the
+    // database's URL withheld while a dump is to be loaded, so nothing runs
+    // against a half-restored store.
     let withheld = manifest
         .database
         .included
         .then(|| manifest.database.secret.clone());
     let mut made = 0;
-    for name in &manifest.chart_secrets {
+    for (name, adopt) in manifest
+        .chart_secrets
+        .iter()
+        .map(|name| (name, Some(release.as_str())))
+        .chain(manifest.operator_secrets.iter().map(|name| (name, None)))
+    {
         let mut data = opened.object("secrets", name);
         if withheld.as_deref() == Some(name.as_str()) {
             data.clear();
         }
-        create(&secret_object(name, ns, &data, Some(&release))).await?;
-        made += 1;
-    }
-    for name in &manifest.operator_secrets {
-        create(&secret_object(
-            name,
-            ns,
-            &opened.object("secrets", name),
-            None,
-        ))
-        .await?;
+        create(&secret_object(name, ns, &data, adopt)).await?;
         made += 1;
     }
     for name in &manifest.config_maps {
@@ -1078,153 +1591,25 @@ pub async fn restore(asked: &Restore, step: &mut dyn FnMut(&str)) -> Result<Stri
     let _ = std::fs::remove_file(&values_file);
     installed?;
     step(&format!(
-        "Installed {release} from {}{}",
-        asked.chart,
-        version
-            .as_deref()
-            .map(|v| format!(" {v}"))
-            .unwrap_or_default()
+        "Installed {release} from {} {}",
+        asked.chart, chart.version
     ));
 
     let mut report = format!(
         "Restored {release} into {ns} from {}.\n",
         asked.file.display()
     );
-    if manifest.database.included {
-        if !manifest.database.brought {
-            return Err(
-                "the backup holds a dump of a database this chart does not bring, which restore \
-                 does not load yet: restore it with your database provider's tools, then fill the \
-                 database's Secret"
-                    .into(),
-            );
-        }
-        let secret = opened.object("secrets", &manifest.database.secret);
-        let utf8 = |key: &str| {
-            secret
-                .get(key)
-                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
-                .ok_or_else(|| format!("the backup's database Secret holds no {key}"))
-        };
-        let serving = login(&utf8("url")?)?;
-        let migrating = login(&utf8("migrate-url")?)?;
-        let database = serving.database.clone();
-
-        // The database this chart brings: started, as first run starts it.
-        let workload_name = format!("{full}-database");
-        let pod_name = format!("{workload_name}-0");
-        let (workload, pod) = (workload_name.as_str(), pod_name.as_str());
-        until(
-            "the database's StatefulSet to exist",
-            asked.timeout,
-            move || async move {
-                text("kubectl", &["get", "statefulset", workload, "-n", ns])
-                    .await
-                    .ok()
-            },
-        )
-        .await?;
-        text(
-            "kubectl",
-            &["scale", "statefulset", workload, "-n", ns, "--replicas=1"],
-        )
-        .await?;
-        until(
-            "the database to answer",
-            asked.timeout,
-            move || async move {
-                // Over TCP: the image answers on its socket during its first,
-                // initialising start, and restarts after.
-                text(
-                    "kubectl",
-                    &[
-                        "exec",
-                        "-n",
-                        ns,
-                        pod,
-                        "--",
-                        "pg_isready",
-                        "-h",
-                        "127.0.0.1",
-                        "-U",
-                        "postgres",
-                    ],
-                )
-                .await
-                .ok()
-            },
-        )
-        .await?;
-        let psql = [
-            "exec", "-i", "-n", ns, pod, "--", "psql", "-X", "-q", "-U", "postgres", "-d",
-            "postgres",
-        ];
-        run(
-            "kubectl",
-            &psql,
-            Some(provision_sql(&serving, &migrating)?.as_bytes()),
-        )
-        .await
-        .map_err(|_| {
-            "the database's roles could not be made. psql's output is not shown, since it can \
-                 quote a password; the database's URL is withheld"
-                .to_string()
-        })?;
-        let tables = text(
-            "kubectl",
-            &["exec", "-n", ns, pod, "--", "psql", "-X", "-At", "-U", "postgres", "-d", &database,
-              "-c", "select count(*) from pg_tables where schemaname not in ('pg_catalog', 'information_schema')"],
-        )
-        .await?;
-        if tables.trim() != "0" {
-            return Err(format!(
-                "the database {database} holds tables already, so it is not restored over. The \
-                 database's URL is withheld, and nothing is running against it"
-            ));
-        }
-        step(&format!(
-            "Started the database, and made {database} and its two roles"
-        ));
-
-        let dump = opened.member("database/database.dump")?;
-        run(
-            "kubectl",
-            &[
-                "exec",
-                "-i",
-                "-n",
-                ns,
-                pod,
-                "--",
-                "pg_restore",
-                "-U",
-                "postgres",
-                "-d",
-                &database,
-                "--exit-on-error",
-                "--single-transaction",
-            ],
-            Some(dump),
-        )
-        .await
-        .map_err(|failed| {
-            format!("the dump did not restore: {failed}. The database's URL is withheld")
-        })?;
-
-        let backed_up = counts(&String::from_utf8_lossy(
+    let backed_up = || -> Result<BTreeMap<String, u64>, String> {
+        Ok(counts(&String::from_utf8_lossy(
             opened.member("database/counts.tsv")?,
-        ));
-        let restored = counts(
-            &text(
-                "kubectl",
-                &[
-                    "exec", "-n", ns, pod, "--", "psql", "-X", "-At", "-U", "postgres", "-d",
-                    &database, "-c", COUNTS,
-                ],
-            )
-            .await?,
-        );
-        let differ = differences(&backed_up, &restored);
+        )))
+    };
+    let checked = |database: &str,
+                   restored: BTreeMap<String, u64>,
+                   step: &mut dyn FnMut(&str),
+                   report: &mut String|
+     -> Result<(), String> {
+        let differ = differences(&backed_up()?, &restored);
         if !differ.is_empty() {
             return Err(format!(
                 "the restored database does not hold what the backup counted, so its URL is \
@@ -1238,17 +1623,222 @@ pub async fn restore(asked: &Restore, step: &mut dyn FnMut(&str)) -> Result<Stri
             restored.len()
         ));
         report.push_str(&format!(
-            "  The database {database}: {} tables, {rows} rows, every count as backed up.\n",
-            restored.len()
+            "  The database {database}: {} tables, {rows} rows, every count as backed up:\n{}",
+            restored.len(),
+            stores_text(&restored)
         ));
+        Ok(())
+    };
+    match &database {
+        DatabasePlan::Brought { .. } => {
+            let serving = login(&utf8(&db_secret, "url")?)?;
+            let migrating = login(&utf8(&db_secret, "migrate-url")?)?;
+            let database = serving.database.clone();
 
+            // The database this chart brings: started, as first run starts it.
+            let workload_name = format!("{full}-database");
+            let pod_name = format!("{workload_name}-0");
+            let (workload, pod) = (workload_name.as_str(), pod_name.as_str());
+            until(
+                "the database's StatefulSet to exist",
+                asked.timeout,
+                move || async move {
+                    text("kubectl", &["get", "statefulset", workload, "-n", ns])
+                        .await
+                        .ok()
+                },
+            )
+            .await?;
+            text(
+                "kubectl",
+                &["scale", "statefulset", workload, "-n", ns, "--replicas=1"],
+            )
+            .await?;
+            until(
+                "the database to answer",
+                asked.timeout,
+                move || async move {
+                    // Over TCP: the image answers on its socket during its first,
+                    // initialising start, and restarts after.
+                    text(
+                        "kubectl",
+                        &[
+                            "exec",
+                            "-n",
+                            ns,
+                            pod,
+                            "--",
+                            "pg_isready",
+                            "-h",
+                            "127.0.0.1",
+                            "-U",
+                            "postgres",
+                        ],
+                    )
+                    .await
+                    .ok()
+                },
+            )
+            .await?;
+            let psql = [
+                "exec", "-i", "-n", ns, pod, "--", "psql", "-X", "-q", "-U", "postgres", "-d",
+                "postgres",
+            ];
+            run(
+                "kubectl",
+                &psql,
+                Some(provision_sql(&serving, &migrating)?.as_bytes()),
+            )
+            .await
+            .map_err(|_| {
+                "the database's roles could not be made. psql's output is not shown, since it can \
+                     quote a password; the database's URL is withheld"
+                    .to_string()
+            })?;
+            let tables = text(
+                "kubectl",
+                &[
+                    "exec", "-n", ns, pod, "--", "psql", "-X", "-At", "-U", "postgres", "-d",
+                    &database, "-c", TABLES,
+                ],
+            )
+            .await?;
+            if tables.trim() != "0" {
+                return Err(format!(
+                    "the database {database} holds tables already, so it is not restored over. The \
+                     database's URL is withheld, and nothing is running against it"
+                ));
+            }
+            step(&format!(
+                "Started the database, and made {database} and its two roles"
+            ));
+
+            let dump = opened.member("database/database.dump")?;
+            run(
+                "kubectl",
+                &[
+                    "exec",
+                    "-i",
+                    "-n",
+                    ns,
+                    pod,
+                    "--",
+                    "pg_restore",
+                    "-U",
+                    "postgres",
+                    "-d",
+                    &database,
+                    "--exit-on-error",
+                    "--single-transaction",
+                ],
+                Some(dump),
+            )
+            .await
+            .map_err(|failed| {
+                format!("the dump did not restore: {failed}. The database's URL is withheld")
+            })?;
+            let restored = counts(
+                &text(
+                    "kubectl",
+                    &[
+                        "exec", "-n", ns, pod, "--", "psql", "-X", "-At", "-U", "postgres", "-d",
+                        &database, "-c", COUNTS,
+                    ],
+                )
+                .await?,
+            );
+            checked(&database, restored, step, &mut report)?;
+        }
+        DatabasePlan::Load {
+            place,
+            database,
+            image,
+        } => {
+            let migrating = utf8(&db_secret, "migrate-url").or_else(|_| utf8(&db_secret, "url"))?;
+            let (pod, container) = loader(&release, ns, image, asked.timeout).await?;
+            step(&format!(
+                "Started {image} beside the conductor, to reach {place} as the conductor does"
+            ));
+            let tables = in_loader(
+                &pod,
+                &container,
+                ns,
+                &migrating,
+                format!("{TABLES};\n").as_bytes(),
+                true,
+            )
+            .await
+            .map_err(|_| {
+                format!(
+                    "{place} could not be asked whether it is empty, as the migrating role. \
+                         psql's output is not shown, since it can quote the URL; the database's \
+                         URL is withheld, and nothing is running against it"
+                )
+            })?;
+            if String::from_utf8_lossy(&tables).trim() != "0" {
+                return Err(format!(
+                    "{place} holds tables already, so the dump is not loaded over it. The \
+                     database's URL is withheld, and nothing is running against it"
+                ));
+            }
+            in_loader(
+                &pod,
+                &container,
+                ns,
+                &migrating,
+                opened.member("database/database.dump")?,
+                false,
+            )
+            .await
+            .map_err(|failed| {
+                format!(
+                    "the dump did not load into {place}: {failed}. The database's URL is withheld"
+                )
+            })?;
+            let restored = in_loader(
+                &pod,
+                &container,
+                ns,
+                &migrating,
+                format!("{COUNTS};\n").as_bytes(),
+                true,
+            )
+            .await
+            .map_err(|_| {
+                format!("{place}'s tables could not be counted. The database's URL is withheld")
+            })?;
+            checked(
+                database,
+                counts(&String::from_utf8_lossy(&restored)),
+                step,
+                &mut report,
+            )?;
+        }
+        DatabasePlan::Reconnect { place } => report.push_str(&format!(
+            "  The database {place} was not in the backup: it is the one your provider runs, which \
+             the deployment reaches again with the restored URL.\n"
+        )),
+        DatabasePlan::BroughtEmpty => report.push_str(
+            "  The database the chart brings was not in the backup (backup.database is false), \
+             and starts empty.\n",
+        ),
+        DatabasePlan::None => {}
+    }
+    if matches!(
+        database,
+        DatabasePlan::Brought { .. } | DatabasePlan::Load { .. }
+    ) {
         // Only now the URL: the migration and every component start.
         let name = manifest.database.secret.as_str();
+        let adopt = manifest
+            .chart_secrets
+            .contains(&manifest.database.secret)
+            .then_some(release.as_str());
         run(
             "kubectl",
             &["replace", "-n", ns, "-f", "-"],
             Some(
-                secret_object(name, ns, &secret, Some(&release))
+                secret_object(name, ns, &db_secret, adopt)
                     .to_string()
                     .as_bytes(),
             ),
@@ -1257,12 +1847,6 @@ pub async fn restore(asked: &Restore, step: &mut dyn FnMut(&str)) -> Result<Stri
         step("Gave the components the database's URL");
         finish_first_run(&release, &full, ns, asked.timeout).await?;
         step("Restarted the conductor and the dashboard with it; first run gave up its rights");
-    } else if !manifest.database.name.is_empty() {
-        report.push_str(&format!(
-            "  The database {} was not in the backup: it is the one your provider runs, which the \
-             deployment reaches again with the restored URL.\n",
-            manifest.database.name
-        ));
     }
 
     // Every component of the release, ready; never the plugins the launcher
@@ -1306,31 +1890,206 @@ pub async fn restore(asked: &Restore, step: &mut dyn FnMut(&str)) -> Result<Stri
          settings key they were sealed with, and every sidecar trusts the dashboard's key.\n",
         manifest.chart_secrets.len() + manifest.operator_secrets.len()
     ));
-    let launched = text(
+
+    // The launched plugins, each pod read for an image it could not pull,
+    // for at most two minutes: only those to upload again are named.
+    let launched_text = format!("app.kubernetes.io/instance={release},meridian.dev/launched=true");
+    let launched = launched_text.as_str();
+    let read = || async move {
+        crate::upgrade_deployment::pods(
+            &text(
+                "kubectl",
+                &["get", "pods", "-n", ns, "-l", launched, "-o", "json"],
+            )
+            .await
+            .unwrap_or_default(),
+        )
+    };
+    let wait = asked.timeout.min(Duration::from_secs(120));
+    let started = Instant::now();
+    let (pods, settled, missing) = loop {
+        let pods = read().await;
+        let (settled, missing) = unpulled(&pods);
+        if settled || started.elapsed() >= wait {
+            break (pods, settled, missing);
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    };
+    if !missing.is_empty() {
+        report.push_str(&format!(
+            "  Launched plugins whose images are not in the deployment's registry, which a backup \
+             does not hold: {}. Upload each again with `meridian plugin upload` from its \
+             directory; an edge plugin's own storage starts empty, and it gathers again what \
+             its vendor still serves.\n",
+            missing
+                .iter()
+                .map(|(instance, image)| format!("{instance} ({image})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !settled {
+        let named: BTreeSet<String> = pods
+            .iter()
+            .filter(|pod| !pod.terminating && pod.ready_since.is_none())
+            .filter_map(|pod| pod.labels.get("meridian.dev/instance").cloned())
+            .filter(|instance| !missing.iter().any(|(held, _)| held == instance))
+            .collect();
+        if !named.is_empty() {
+            report.push_str(&format!(
+                "  Launched plugins not running within {}s, for a reason other than their image: \
+                 {}. `kubectl get pods -n {ns} -l {launched}` says why.\n",
+                wait.as_secs(),
+                named.into_iter().collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
+    Ok(report)
+}
+
+/// Whether a database holds a table of its own.
+const TABLES: &str =
+    "select count(*) from pg_tables where schemaname not in ('pg_catalog', 'information_schema')";
+
+fn utf8(secret: &BTreeMap<String, Vec<u8>>, key: &str) -> Result<String, String> {
+    secret
+        .get(key)
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        .ok_or_else(|| format!("the backup's database Secret holds no {key}"))
+}
+
+/// A container of `image` in the conductor's running pod, as `kubectl debug`
+/// adds one: no object of its own in the cluster, gone when the conductor
+/// is restarted with the database's URL. It reaches the database by the
+/// conductor's own path. Its pod and its name, once it runs.
+async fn loader(
+    release: &str,
+    ns: &str,
+    image: &str,
+    timeout: Duration,
+) -> Result<(String, String), String> {
+    let selector_text =
+        format!("app.kubernetes.io/instance={release},meridian.dev/component=conductor");
+    let selector = selector_text.as_str();
+    let pod = until("the conductor to run", timeout, move || async move {
+        text(
+            "kubectl",
+            &[
+                "get",
+                "pods",
+                "-n",
+                ns,
+                "-l",
+                selector,
+                "--field-selector=status.phase=Running",
+                "-o",
+                "jsonpath={.items[0].metadata.name}",
+            ],
+        )
+        .await
+        .ok()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+    })
+    .await?;
+    let ephemeral = |pod: String| async move {
+        text(
+            "kubectl",
+            &[
+                "get",
+                "pod",
+                &pod,
+                "-n",
+                ns,
+                "-o",
+                "jsonpath={range .spec.ephemeralContainers[*]}{.name}{\"\\n\"}{end}",
+            ],
+        )
+        .await
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect::<BTreeSet<String>>()
+    };
+    let before = ephemeral(pod.clone()).await;
+    // Long enough for the load; the pod it is in is replaced at the end.
+    let sleep = (timeout.as_secs() * 4 + 600).to_string();
+    text(
         "kubectl",
         &[
-            "get",
-            "deployments",
+            "debug",
+            &pod,
             "-n",
             ns,
-            "-l",
-            &format!("app.kubernetes.io/instance={release},meridian.dev/launched=true"),
-            "-o",
-            "jsonpath={range .items[*]}{.metadata.labels.meridian\\.dev/instance}{\"\\n\"}{end}",
+            &format!("--image={image}"),
+            "--profile=baseline",
+            "--",
+            "sleep",
+            &sleep,
         ],
     )
     .await
-    .unwrap_or_default();
-    let launched: Vec<&str> = launched.lines().filter(|l| !l.is_empty()).collect();
-    if !launched.is_empty() {
-        report.push_str(&format!(
-            "  Launched plugins, whose images were in the deployment's registry and are not in a \
-             backup: {}. Upload each again with `meridian plugin upload`; an edge plugin's own \
-             storage starts empty, and it gathers again what its vendor still serves.\n",
-            launched.join(", ")
-        ));
-    }
-    Ok(report)
+    .map_err(|failed| {
+        format!("a container of {image} could not be added beside the conductor: {failed}")
+    })?;
+    let after = ephemeral(pod.clone()).await;
+    let container = after
+        .difference(&before)
+        .next()
+        .cloned()
+        .ok_or("the container kubectl debug added could not be found")?;
+    let (pod_ref, name_ref) = (pod.as_str(), container.as_str());
+    until("the loading container to run", timeout, move || async move {
+        text(
+            "kubectl",
+            &[
+                "get",
+                "pod",
+                pod_ref,
+                "-n",
+                ns,
+                "-o",
+                &format!(
+                    "jsonpath={{.status.ephemeralContainerStatuses[?(@.name==\"{name_ref}\")].state.running.startedAt}}"
+                ),
+            ],
+        )
+        .await
+        .ok()
+        .filter(|started| !started.trim().is_empty())
+    })
+    .await?;
+    Ok((pod, container))
+}
+
+/// psql (`query`) or pg_restore in the loading container, against `url`,
+/// which reaches it on its standard input's first line, never as an
+/// argument kubectl sees; `input` follows it.
+async fn in_loader(
+    pod: &str,
+    container: &str,
+    ns: &str,
+    url: &str,
+    input: &[u8],
+    query: bool,
+) -> Result<Vec<u8>, String> {
+    let script = if query {
+        "IFS= read -r url && exec psql \"$url\" -X -q -At -v ON_ERROR_STOP=1"
+    } else {
+        "IFS= read -r url && exec pg_restore --dbname=\"$url\" --no-password --exit-on-error --single-transaction"
+    };
+    let mut stdin = Vec::with_capacity(url.len() + 1 + input.len());
+    stdin.extend_from_slice(url.trim().as_bytes());
+    stdin.push(b'\n');
+    stdin.extend_from_slice(input);
+    run(
+        "kubectl",
+        &[
+            "exec", "-i", "-n", ns, pod, "-c", container, "--", "sh", "-c", script,
+        ],
+        Some(&stdin),
+    )
+    .await
 }
 
 /// What first run does once it has written the database's URL, done for the

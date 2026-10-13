@@ -342,6 +342,56 @@ the archive is kept and the plan says so: `Its archive, /mnt/nas/meridian-archiv
 on the cluster's node, is kept`. The same steps from a firm's own pipeline
 -- plain Helm, Flux or Argo CD -- are in the docs' *Upgrade a deployment*.
 
+## backup and restore
+
+```
+meridian backup key                       # the identity backups are sealed to; prints backup.recipient
+meridian backup --to ~/meridian-backups   # back up now, and copy the file here
+meridian restore meridian-20261011T020000Z.meridian-backup --identity meridian-backup-identity.txt
+```
+
+`backup` runs the deployment's backup CronJob once, now: its keys and
+credentials, its values and the database the chart brings, sealed to
+`backup.recipient`. A deployment with no backup configured is told the
+`meridian upgrade-deployment -f <file>` that sets one.
+
+`restore` is a person's act with their own cluster rights, into a namespace
+holding no deployment. It checks first and changes nothing if a check fails:
+the backup opens with the identity and every member's hash holds; the
+namespace holds no release of that name and nothing a deployment keeps or
+would take up -- the backup's Secrets and ConfigMaps (the dashboard's public
+keys, `-backup-values`), the key's Secret (`<release>-meridian-runtime-key`),
+the claims the brought database and the registry would mount and find full,
+and a backup volume a deleted namespace left (named with the `kubectl delete
+pv` that removes it; the node's directory and its backups are kept). The
+chart is read at the version the backup was taken on, or `--chart-version`,
+from whatever `--chart` names: one older than the backup's is refused, since
+its database may hold what only a newer runtime serves, and a newer one is
+said, restoring then being an upgrade. Where a dump of a database somebody
+else runs is to be loaded, restore needs the right to add a container to a
+pod and exec into it, and checks for it.
+
+Then it shows the backup, the cluster and namespace, the chart and version,
+what it will make and what it will do with the database, and asks "Restore
+it here?"; `--yes` answers for a script, and without a terminal and without
+`--yes` nothing is changed. A database somebody else runs is named, its host
+and database and never its credentials, with what it means: one not in the
+backup is reconnected to, so anything else running against it must be
+stopped first; one whose dump the backup holds (`backup.database: true`) is
+loaded by restore itself into that database, which must be empty, as the
+migrating role, from a container of `backup.image` added beside the
+conductor (the cluster's own path to the database, no object of its own,
+gone when the conductor restarts), the URL reaching it on its standard input.
+
+The database's URL is withheld until the database is loaded and every
+table's row count matches the backup's; then the components are given it,
+the conductor and the dashboard restarted, and first run gives up its rights.
+The report gives the counts by store (config, book, street, lake, instrument,
+dashboard), each with its tables and rows, and reads each launched plugin's
+pod, for at most two minutes, for an image it could not pull: only those are
+named, with `meridian plugin upload` to run, since the registry's claim can
+outlive a namespace.
+
 ## connect and plugins
 
 ```

@@ -159,7 +159,7 @@ pub struct Chart {
 
 /// What Helm prints about an OCI pull before the document itself. Helm 4 puts
 /// it on stdout, where a YAML reader would take it for two more keys.
-fn document(said: &str) -> String {
+pub fn document(said: &str) -> String {
     said.lines()
         .filter(|line| !line.starts_with("Pulled: ") && !line.starts_with("Digest: "))
         .collect::<Vec<_>>()

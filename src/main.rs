@@ -234,15 +234,23 @@ backup key: needs no deployment
                             Never over a file already there. Keep it off the cluster:
                             a backup opens with it alone
 
-restore: only into a namespace without the release and without the backup's Secrets.
-The database's URL is withheld until the database is restored and every table's row
-count matches the backup's; then the components start
+restore: only into a namespace without the release and without anything a deployment
+keeps: the backup's Secrets and ConfigMaps, the key's Secret, the database's and the
+registry's claims, and a backup volume a deleted namespace left. Checks first and
+changes nothing if one fails; then shows the backup, the cluster, the namespace, the
+chart and what it will make, and asks. The database's URL is withheld until the
+database is loaded, the brought one or (from a dump of one somebody else runs) an
+empty external one, and every table's row count matches the backup's; then the
+components start
       --identity <file>     the identity the backup was sealed to (required)
   -n, --namespace <name>    where to restore it (default: where it was taken)
       --release <name>      must be the backup's own release, which it defaults to
       --chart <ref>         the chart to install (default: the published one)
-      --chart-version <v>   which version (default: the one the backup was taken on)
+      --chart-version <v>   which version (default: the one the backup was taken on,
+                            from whatever --chart names). Never older than that one
       --timeout <d>         how long to wait for each step (default: 15m)
+      --yes                 restore without being asked. For a script that has read
+                            what it will do
 
 connect:
   <address> is the dashboard's: https://<host>, or http://127.0.0.1:<port> for a
@@ -1244,7 +1252,15 @@ async fn restore_command(arguments: &Arguments) -> i32 {
         timeout,
     };
     let mut step = |said: &str| eprintln!("  {said}");
-    match backup::restore(&asked, &mut step).await {
+    // Shown, then asked, once every check has passed and before anything is
+    // changed; --yes answers for a script, and without a terminal and
+    // without it nothing is changed.
+    let yes = arguments.set("--yes");
+    let mut approve = |plan: &str| {
+        eprintln!("\n{plan}");
+        yes || approved("Restore it here?")
+    };
+    match backup::restore(&asked, &mut step, &mut approve).await {
         Ok(report) => {
             print!("{report}");
             0

@@ -347,3 +347,299 @@ fn an_identity_is_never_written_over() {
         .contains("never written over"));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// ── Restore's checks and plan (the gaps found 2026-10-12) ─────────────────
+
+fn manifest_with(database: &str) -> Manifest {
+    let text = MANIFEST.replace(
+        r#""database": { "included": true, "brought": true, "name": "meridian", "secret": "meridian-meridian-runtime-database" }"#,
+        database,
+    );
+    serde_json::from_str(&text).unwrap()
+}
+
+fn db_secret(url: Option<&str>, migrate: Option<&str>) -> BTreeMap<String, Vec<u8>> {
+    let mut secret = BTreeMap::new();
+    if let Some(url) = url {
+        secret.insert("url".to_string(), url.as_bytes().to_vec());
+    }
+    if let Some(migrate) = migrate {
+        secret.insert("migrate-url".to_string(), migrate.as_bytes().to_vec());
+    }
+    secret
+}
+
+const EXTERNAL: &str =
+    "postgres://meridian_app:s3cr%40t@db.firm.example:5432/meridian?sslmode=require";
+const EXTERNAL_MIGRATE: &str =
+    "postgres://meridian_migrate:m1gr%40te@db.firm.example:5432/meridian?sslmode=require";
+
+#[test]
+fn a_databases_place_is_its_host_and_name_never_its_role_or_password() {
+    assert_eq!(
+        place(EXTERNAL).as_deref(),
+        Some("db.firm.example:5432/meridian")
+    );
+    assert_eq!(place("not a url"), None);
+}
+
+#[test]
+fn what_restore_does_with_the_database_is_decided_before_anything_changes() {
+    let values: serde_yaml::Value =
+        serde_yaml::from_str("backup:\n  image: ghcr.io/open-meridian/meridian-backup:abc\n")
+            .unwrap();
+    let brought = manifest_with(
+        r#""database": { "included": true, "brought": true, "name": "meridian", "secret": "d" }"#,
+    );
+    assert_eq!(
+        database_plan(&brought, &db_secret(None, None), &values).unwrap(),
+        DatabasePlan::Brought {
+            database: "meridian".into()
+        }
+    );
+
+    // A dump of a database somebody else runs: loaded by restore itself.
+    let external = manifest_with(
+        r#""database": { "included": true, "brought": false, "name": "meridian", "secret": "d" }"#,
+    );
+    let secret = db_secret(Some(EXTERNAL), Some(EXTERNAL_MIGRATE));
+    assert_eq!(
+        database_plan(&external, &secret, &values).unwrap(),
+        DatabasePlan::Load {
+            place: "db.firm.example:5432/meridian".into(),
+            database: "meridian".into(),
+            image: "ghcr.io/open-meridian/meridian-backup:abc".into(),
+        }
+    );
+    // Without backup.image, or without a URL to load with: refused first.
+    let none: serde_yaml::Value = serde_yaml::from_str("deployment:\n  id: DEP-X\n").unwrap();
+    assert!(database_plan(&external, &secret, &none)
+        .unwrap_err()
+        .contains("backup.image"));
+    assert!(database_plan(&external, &db_secret(None, None), &values)
+        .unwrap_err()
+        .contains("holds no URL"));
+
+    // Not in the backup, somebody else's: reconnected, and named.
+    let reconnect = manifest_with(
+        r#""database": { "included": false, "brought": false, "name": "meridian", "secret": "d" }"#,
+    );
+    assert_eq!(
+        database_plan(&reconnect, &db_secret(Some(EXTERNAL), None), &values).unwrap(),
+        DatabasePlan::Reconnect {
+            place: "db.firm.example:5432/meridian".into()
+        }
+    );
+    let empty = manifest_with(
+        r#""database": { "included": false, "brought": true, "name": "meridian", "secret": "d" }"#,
+    );
+    assert_eq!(
+        database_plan(&empty, &db_secret(None, None), &values).unwrap(),
+        DatabasePlan::BroughtEmpty
+    );
+    let before = manifest_with(
+        r#""database": { "included": false, "brought": false, "name": "", "secret": "d" }"#,
+    );
+    assert_eq!(
+        database_plan(&before, &db_secret(None, None), &values).unwrap(),
+        DatabasePlan::None
+    );
+}
+
+#[test]
+fn the_chart_installed_is_never_older_than_the_backups_and_newer_is_said() {
+    let older = chart_version_said("0.1.300", "0.1.299").unwrap_err();
+    assert!(older.contains("older than 0.1.300") && older.contains("nothing was changed"));
+    let newer = chart_version_said("0.1.300", "0.1.302").unwrap().unwrap();
+    assert!(newer.contains("an upgrade"), "{newer}");
+    assert_eq!(chart_version_said("0.1.300", "0.1.300").unwrap(), None);
+    assert!(chart_version_said("", "0.1.300")
+        .unwrap()
+        .unwrap()
+        .contains("records no chart version"));
+}
+
+#[test]
+fn what_a_deployment_kept_or_would_take_up_is_found_before_anything_changes() {
+    let manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+    let full = "meridian-meridian-runtime";
+    let values: serde_yaml::Value = serde_yaml::from_str(
+        "backup:\n  recipient: age1x\n  path: /Users/me/backups\nregistry:\n  enabled: false\n",
+    )
+    .unwrap();
+    assert_eq!(
+        backup_volume("firm", full, &values).as_deref(),
+        Some("firm-meridian-meridian-runtime-backup")
+    );
+    assert_eq!(
+        claims_taken(full, &values),
+        ["data-meridian-meridian-runtime-database-0"]
+    );
+    assert!(left_behind(&manifest, full, &values, &Present::default()).is_empty());
+
+    let present = Present {
+        secrets: vec![format!("{full}-key"), "unrelated".into()],
+        config_maps: vec![
+            format!("{full}-backup-values"),
+            format!("{full}-dashboard-keys"),
+        ],
+        claims: vec![
+            format!("data-{full}-database-0"),
+            format!("images-{full}-registry-0"),
+        ],
+        volume: Ok(Some("firm-meridian-meridian-runtime-backup".into())),
+    };
+    let found = left_behind(&manifest, full, &values, &present);
+    assert_eq!(found.len(), 5, "{found:?}");
+    assert_eq!(found[0], format!("the Secret {full}-key"));
+    assert_eq!(found[1], format!("the ConfigMap {full}-dashboard-keys"));
+    assert_eq!(found[2], format!("the ConfigMap {full}-backup-values"));
+    assert!(found[3].starts_with(&format!("the claim data-{full}-database-0")));
+    assert!(found[4].contains("kubectl delete pv firm-meridian-meridian-runtime-backup"));
+
+    // No path, no volume to look for; a claim of the operator's names none.
+    let claimed: serde_yaml::Value =
+        serde_yaml::from_str("backup:\n  recipient: age1x\n  existingClaim: mine\n").unwrap();
+    assert_eq!(backup_volume("firm", full, &claimed), None);
+    // Unsaid, the chart's defaults bring both claims.
+    let unsaid: serde_yaml::Value = serde_yaml::from_str("{}").unwrap();
+    assert_eq!(claims_taken(full, &unsaid).len(), 2);
+}
+
+#[test]
+fn the_counts_are_grouped_by_store_from_each_tables_prefix() {
+    let counts = counts(
+        "public.book_entry\t3\npublic.book_lot\t1\npublic.config_account\t2\n\
+         public.holding\t5\npublic.statement\t1\npublic.lake_price\t7\n\
+         public.instrument_record\t4\npublic.dashboard_ticket\t2\npublic.mystery\t1\n",
+    );
+    assert_eq!(
+        by_store(&counts),
+        [
+            ("config", 1, 2),
+            ("book", 2, 4),
+            ("street", 2, 6),
+            ("lake", 1, 7),
+            ("instrument", 1, 4),
+            ("dashboard", 1, 2),
+            ("other", 1, 1),
+        ]
+    );
+}
+
+fn launched_pod(instance: &str, waiting: Option<&str>, ready: bool) -> serde_json::Value {
+    let mut state = serde_json::json!({ "running": {} });
+    if let Some(reason) = waiting {
+        state = serde_json::json!({ "waiting": { "reason": reason } });
+    }
+    serde_json::json!({
+        "metadata": { "name": format!("meridian-plugin-{instance}-abc"),
+                      "labels": { "meridian.dev/instance": instance, "meridian.dev/launched": "true" } },
+        "spec": { "containers": [
+            { "name": "sidecar", "image": "ghcr.io/open-meridian/meridian-runtime:abc" },
+            { "name": "plugin", "image": format!("registry.local/plugins/{instance}@sha256:1") } ] },
+        "status": {
+            "phase": if ready { "Running" } else { "Pending" },
+            "containerStatuses": [
+                { "name": "sidecar", "restartCount": 0, "state": { "running": {} } },
+                { "name": "plugin", "restartCount": 0, "state": state } ],
+            "conditions": if ready {
+                serde_json::json!([{ "type": "Ready", "status": "True", "lastTransitionTime": "2026-10-12T00:00:00Z" }])
+            } else { serde_json::json!([]) }
+        }
+    })
+}
+
+#[test]
+fn only_launched_plugins_whose_image_could_not_be_pulled_are_named() {
+    let listed = serde_json::json!({ "items": [
+        launched_pod("snaptrade-1", Some("ImagePullBackOff"), false),
+        launched_pod("ops-1", None, true),
+        launched_pod("tiingo-1", Some("ErrImagePull"), false),
+    ]});
+    let pods = crate::upgrade_deployment::pods(&listed.to_string());
+    let (settled, missing) = unpulled(&pods);
+    assert!(settled);
+    assert_eq!(
+        missing,
+        [
+            (
+                "snaptrade-1".to_string(),
+                "registry.local/plugins/snaptrade-1@sha256:1".to_string()
+            ),
+            (
+                "tiingo-1".to_string(),
+                "registry.local/plugins/tiingo-1@sha256:1".to_string()
+            ),
+        ]
+    );
+    // One still starting is waited for; one crashing is no image's fault.
+    let listed = serde_json::json!({ "items": [
+        launched_pod("ops-1", Some("ContainerCreating"), false),
+    ]});
+    let (settled, missing) = unpulled(&crate::upgrade_deployment::pods(&listed.to_string()));
+    assert!(!settled && missing.is_empty());
+}
+
+fn a_plan(database: DatabasePlan) -> Plan {
+    Plan {
+        file: "meridian-20261011T020000Z.meridian-backup".into(),
+        release: "meridian".into(),
+        deployment_id: "DEP-X".into(),
+        taken_at: "20261011T020000Z".into(),
+        cluster: "k3d-scratch".into(),
+        namespace: "firm".into(),
+        namespace_exists: false,
+        chart: PUBLISHED_CHART.into(),
+        version: "0.1.302".into(),
+        version_said: chart_version_said("0.1.300", "0.1.302").unwrap(),
+        secrets: 3,
+        config_maps: 1,
+        key_generated: true,
+        database,
+        unchecked: None,
+    }
+}
+
+#[test]
+fn the_plan_names_the_backup_the_cluster_the_chart_and_what_it_will_make() {
+    let text = plan_text(&a_plan(DatabasePlan::Brought {
+        database: "meridian".into(),
+    }));
+    for said in [
+        "the backup  meridian (DEP-X), taken 20261011T020000Z",
+        "into        the cluster k3d-scratch, namespace firm (made)",
+        &format!("from        {PUBLISHED_CHART} 0.1.302"),
+        "restoring is then an upgrade",
+        "It will make 3 Secrets and the deployment's key, 1 ConfigMaps",
+        "start the database the chart brings",
+    ] {
+        assert!(text.contains(said), "{said}: {text}");
+    }
+}
+
+#[test]
+fn an_external_database_is_named_and_whoever_else_runs_against_it_told_to_stop() {
+    let secret = db_secret(Some(EXTERNAL), Some(EXTERNAL_MIGRATE));
+    let reconnect = manifest_with(
+        r#""database": { "included": false, "brought": false, "name": "meridian", "secret": "d" }"#,
+    );
+    let values: serde_yaml::Value = serde_yaml::from_str("{}").unwrap();
+    let plan = a_plan(database_plan(&reconnect, &secret, &values).unwrap());
+    let text = plan_text(&plan);
+    assert!(
+        text.contains("it is db.firm.example:5432/meridian, which somebody else runs")
+            && text.contains("Stop any other deployment running against it first"),
+        "{text}"
+    );
+    let load = a_plan(DatabasePlan::Load {
+        place: "db.firm.example:5432/meridian".into(),
+        database: "meridian".into(),
+        image: "ghcr.io/open-meridian/meridian-backup:abc".into(),
+    });
+    let text = format!("{}\n{}", text, plan_text(&load));
+    assert!(text.contains("which must be empty"), "{text}");
+    for secret in ["s3cr", "m1gr", "meridian_app", "meridian_migrate"] {
+        assert!(!text.contains(secret), "{secret}: {text}");
+    }
+}
