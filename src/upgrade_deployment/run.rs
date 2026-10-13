@@ -12,9 +12,9 @@ use super::certificate_host;
 use super::watch::{Step, Watch};
 use super::{
     archive_in, chart_of, direction, image_in, installed, jobs, left_by_a_restart, leftovers,
-    migration, plugin_floors, pods, progress, reached_in, release_finding, restarted, restarts,
-    running_images, skip_policy, target_image, to_relaunch, workloads, Asked, CertificateStep,
-    Chart, Direction, Installed, JobState, Plan, Report, HELM_MINIMUM,
+    merged, migration, plugin_floors, pods, progress, reached_in, release_finding, restarted,
+    restarts, running_images, skip_policy, target_image, to_relaunch, values_files, workloads,
+    Asked, CertificateStep, Chart, Direction, Installed, JobState, Plan, Report, HELM_MINIMUM,
 };
 use crate::doctor::{checks, Failure, Finding, Machine};
 
@@ -263,7 +263,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     // The deployment's own values, of which only `image`, where it is
     // reached and where its archive is are read; the rest of them, its enrolment code among them, is
     // never kept or printed.
-    let own_values = machine
+    let own_read = machine
         .run(
             "helm",
             &[
@@ -276,8 +276,60 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
                 "json",
             ],
         )
-        .await
-        .unwrap_or_default();
+        .await;
+
+    // The person's -f files, read before anything is changed, and what they
+    // change in the deployment's own values: paths only, never values.
+    let mut changes = Vec::new();
+    if !asked.values.is_empty() {
+        let files = match values_files(&asked.values) {
+            Ok(files) => files,
+            Err(unread) => {
+                findings.push(Finding::Stops {
+                    what: unread,
+                    fix: "-f and --values name a YAML file of chart values, as Helm's do.".into(),
+                });
+                return refuse(&findings, say);
+            }
+        };
+        let own: Option<serde_json::Value> = own_read
+            .as_ref()
+            .ok()
+            .and_then(|said| serde_json::from_str(said.trim()).ok())
+            .map(|own: serde_json::Value| {
+                if own.is_null() {
+                    serde_json::Value::Object(Default::default())
+                } else {
+                    own
+                }
+            });
+        let Some(own) = own.filter(serde_json::Value::is_object) else {
+            findings.push(Finding::Stops {
+                what: "the deployment's own values could not be read, so what the values files \
+                       change cannot be shown"
+                    .into(),
+                fix: format!(
+                    "`helm get values {} -n {}` should answer; then run this again.",
+                    asked.release, asked.namespace
+                ),
+            });
+            return refuse(&findings, say);
+        };
+        let after = files
+            .iter()
+            .fold(own.clone(), |held, file| merged(&held, file));
+        changes = super::changes(&own, &after);
+        findings.push(Finding::Fine(format!(
+            "{} read: {} the deployment's own values",
+            asked.values.join(", "),
+            match changes.len() {
+                0 => "it changes nothing in".to_string(),
+                1 => "1 change to".to_string(),
+                n => format!("{n} changes to"),
+            }
+        )));
+    }
+    let own_values = own_read.unwrap_or_default();
     let certificate = match certificate(machine, asked, &own_values).await {
         Ok((step, found)) => {
             findings.extend(found);
@@ -297,16 +349,20 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         }
         // Already there, and an upgrade at the same version is what moves
         // the address or renews the certificate: one approved change.
-        Direction::Current if asked.https || renewing => findings.push(Finding::Fine(format!(
-            "{} is at {} already; this upgrade keeps it there and {}",
-            asked.release,
-            to.version,
-            if asked.https {
-                "moves its address to https"
-            } else {
-                "renews its certificate"
-            }
-        ))),
+        Direction::Current if asked.https || renewing || !changes.is_empty() => {
+            findings.push(Finding::Fine(format!(
+                "{} is at {} already; this upgrade keeps it there and {}",
+                asked.release,
+                to.version,
+                if asked.https {
+                    "moves its address to https"
+                } else if renewing {
+                    "renews its certificate"
+                } else {
+                    "changes its values"
+                }
+            )))
+        }
         Direction::Current => {
             for finding in &findings {
                 say.say(&format!("{finding}"));
@@ -365,6 +421,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         certificate,
         https,
         archive: archive_in(&own_values),
+        changes,
     }))
 }
 

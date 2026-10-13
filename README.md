@@ -256,6 +256,7 @@ Not to be confused with `meridian uninstall`, which removes this CLI.
 ```
 meridian upgrade-deployment
 meridian upgrade-deployment --chart-version 0.1.182 --yes
+meridian upgrade-deployment -f backup.yaml
 ```
 
 Moves a running deployment to a newer version of its chart, in place, with
@@ -293,6 +294,19 @@ reason Kubernetes gives. Last, it names each launched plugin left on a sidecar
 the deployment no longer runs, or launched while the rollout was under way,
 with the `plugin stop` and `plugin launch` (or `plugin dev`) that move it. It
 relaunches nothing itself.
+
+`-f <file>` and `--values <file>`, Helm's own names and `up`'s, repeatable,
+change the deployment's values in the same approved upgrade: each file is
+given to Helm after `--reset-then-reuse-values`, so it is merged over the
+deployment's own values as Helm merges them (mappings key by key, a key set to
+null removed), each file over the last. The files are read before anything
+changes, and one that cannot be read, or that is not a mapping, stops it; so
+does a deployment whose own values cannot be read, since what the files change
+could not be shown. The plan lists each path they set, change or remove,
+never a value (`backup.recipient: set`), and the `helm upgrade` with its `-f`
+files, before "Upgrade it?". At the version it is on already, files that
+change something are an upgrade at that version; files that change nothing
+leave nothing to do.
 
 `--https` moves a local deployment, reached at a name under `.localhost`, to
 HTTPS in the same approved upgrade: the certificate first, from this machine's

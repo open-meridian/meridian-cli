@@ -53,6 +53,12 @@ pub struct Asked {
     /// This machine's authority, where it has one: made for `--https`, and
     /// otherwise what renews a certificate it issued.
     pub authority: Option<std::sync::Arc<crate::authority::Authority>>,
+    /// `-f`/`--values`, each file as given and in order: merged over the
+    /// deployment's own values as `--reset-then-reuse-values` merges them
+    /// (ruled 2026-10-12, meridian-design's tasks/design/an-operations-
+    /// hardening-track, "Backup and restore's gaps", 8), what they change
+    /// shown before it asks.
+    pub values: Vec<String>,
 }
 
 impl Asked {
@@ -231,6 +237,113 @@ pub fn archive_in(values: &str) -> Option<String> {
         .map(|path| format!("{path} on the cluster's node"))
         .or_else(|| held("existingClaim").map(|claim| format!("the claim {claim}")))
         .or_else(|| held("bucket"))
+}
+
+// ── Values files ────────────────────────────────────────────────────────────
+
+/// Each `-f` file, read as Helm reads one: YAML, a mapping or nothing. Read
+/// before anything is changed, so a file that cannot be read stops it.
+pub fn values_files(paths: &[String]) -> Result<Vec<serde_json::Value>, String> {
+    paths
+        .iter()
+        .map(|path| {
+            let text = std::fs::read_to_string(path)
+                .map_err(|failed| format!("the values file {path} could not be read: {failed}"))?;
+            let read: serde_json::Value = serde_yaml::from_str(&text).map_err(|failed| {
+                format!("the values file {path} is not YAML Helm can read: {failed}")
+            })?;
+            match read {
+                serde_json::Value::Null => Ok(serde_json::Value::Object(Default::default())),
+                serde_json::Value::Object(_) => Ok(read),
+                _ => Err(format!(
+                    "the values file {path} is not a mapping of values: Helm takes keys and \
+                     their values"
+                )),
+            }
+        })
+        .collect()
+}
+
+/// `over` merged onto `base` as Helm merges a values file over the values
+/// before it: mappings key by key, anything else replaced, and a key set to
+/// null removed.
+pub fn merged(base: &serde_json::Value, over: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match (base, over) {
+        (Value::Object(held), Value::Object(given)) => {
+            let mut out = held.clone();
+            for (key, value) in given {
+                if value.is_null() {
+                    out.remove(key);
+                    continue;
+                }
+                let next = match out.get(key) {
+                    Some(was @ Value::Object(_)) if value.is_object() => merged(was, value),
+                    _ => value.clone(),
+                };
+                out.insert(key.clone(), next);
+            }
+            Value::Object(out)
+        }
+        _ => over.clone(),
+    }
+}
+
+/// What a value at a path does in an upgrade's values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Change {
+    Set(String),
+    Changed(String),
+    Removed(String),
+}
+
+impl std::fmt::Display for Change {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Change::Set(path) => write!(f, "{path}: set"),
+            Change::Changed(path) => write!(f, "{path}: changed"),
+            Change::Removed(path) => write!(f, "{path}: removed"),
+        }
+    }
+}
+
+/// Every path whose value differs from `before` to `after`, by its keys
+/// joined with dots: a mapping is followed into, anything else is one value.
+/// Paths only, never values: the deployment's own hold its enrolment code.
+pub fn changes(before: &serde_json::Value, after: &serde_json::Value) -> Vec<Change> {
+    fn walk(
+        path: &str,
+        before: &serde_json::Value,
+        after: &serde_json::Value,
+        out: &mut Vec<Change>,
+    ) {
+        use serde_json::Value;
+        let at = |key: &str| {
+            if path.is_empty() {
+                key.to_string()
+            } else {
+                format!("{path}.{key}")
+            }
+        };
+        match (before, after) {
+            (Value::Object(was), Value::Object(now)) => {
+                let keys: BTreeSet<&String> = was.keys().chain(now.keys()).collect();
+                for key in keys {
+                    match (was.get(key), now.get(key)) {
+                        (Some(a), Some(b)) => walk(&at(key), a, b, out),
+                        (None, Some(_)) => out.push(Change::Set(at(key))),
+                        (Some(_), None) => out.push(Change::Removed(at(key))),
+                        (None, None) => {}
+                    }
+                }
+            }
+            (a, b) if a == b => {}
+            _ => out.push(Change::Changed(path.to_string())),
+        }
+    }
+    let mut out = Vec::new();
+    walk("", before, after, &mut out);
+    out
 }
 
 /// The name whose certificate this upgrade looks after: with `--https`, the
@@ -727,6 +840,8 @@ pub struct Plan {
     /// Where the deployment's own values put edge plugins' archive, which
     /// the upgrade keeps as they keep everything else.
     pub archive: Option<String>,
+    /// What the `-f` files change in the deployment's own values, by path.
+    pub changes: Vec<Change>,
 }
 
 /// The same command, as somebody would type it.
@@ -749,6 +864,14 @@ pub fn helm_arguments(asked: &Asked, plan: &Plan) -> Vec<String> {
     ]
     .iter()
     .map(|each| each.to_string())
+    // The person's files, merged over the deployment's own values in the
+    // order given, as Helm merges every -f after --reset-then-reuse-values.
+    .chain(
+        asked
+            .values
+            .iter()
+            .flat_map(|path| ["-f".to_string(), path.clone()]),
+    )
     .chain(plan.https.iter().flat_map(|host| {
         // Kept by every later upgrade: --set values are the deployment's own.
         [
@@ -819,6 +942,22 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
         certificate.push_str(&format!(
             "\x20 Its archive, {archive}, is kept: the deployment's own values carry it.\n"
         ));
+    }
+    if !asked.values.is_empty() {
+        let files = asked.values.join(", ");
+        certificate.push_str(&match plan.changes.as_slice() {
+            [] => format!(
+                "\x20 Its values, with {files} merged over them, are what they were: the files \
+                 change nothing.\n"
+            ),
+            changes => format!(
+                "\x20 Its values, with {files} merged over them (values not shown):\n{}",
+                changes
+                    .iter()
+                    .map(|change| format!("    {change}\n"))
+                    .collect::<String>()
+            ),
+        });
     }
     if !certificate.is_empty() {
         certificate.push('\n');

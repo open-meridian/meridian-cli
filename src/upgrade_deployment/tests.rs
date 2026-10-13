@@ -132,6 +132,7 @@ fn asked() -> Asked {
         timeout: "10m".into(),
         https: false,
         authority: None,
+        values: Vec::new(),
     }
 }
 
@@ -670,6 +671,216 @@ async fn the_archive_the_deployment_was_given_is_kept_and_said_and_never_set_aga
     .await;
     assert_eq!(plan.archive, None);
     assert!(!plan_text(&asked(), &plan).contains("archive"));
+}
+
+// ── -f/--values (ruled 2026-10-12) ───────────────────────────────────────
+
+/// A values file of a test's own, removed when it is dropped.
+struct ValuesFile(std::path::PathBuf);
+
+impl ValuesFile {
+    fn new(label: &str, text: &str) -> Self {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("after 1970")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("meridian-values-{label}-{unique}.yaml"));
+        std::fs::write(&path, text).expect("written");
+        ValuesFile(path)
+    }
+
+    fn path(&self) -> String {
+        self.0.to_string_lossy().into_owned()
+    }
+}
+
+impl Drop for ValuesFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn with_values(paths: &[String]) -> Asked {
+    Asked {
+        values: paths.to_vec(),
+        ..asked()
+    }
+}
+
+#[test]
+fn a_values_file_merges_as_helm_merges_one_and_its_changes_are_paths() {
+    let own = json!({ "deployment": { "id": "DEP-X", "enrolmentCode": "ENROL-DO-NOT-PRINT" },
+                      "backup": { "keep": 14 }, "ingress": { "enabled": true } });
+    let file = json!({ "backup": { "recipient": "age1xyz", "path": "/backups", "keep": 14 },
+                       "ingress": null, "deployment": { "id": "DEP-Y" } });
+    let after = merged(&own, &file);
+    assert_eq!(
+        after,
+        json!({ "deployment": { "id": "DEP-Y", "enrolmentCode": "ENROL-DO-NOT-PRINT" },
+                "backup": { "keep": 14, "recipient": "age1xyz", "path": "/backups" } })
+    );
+    let found: Vec<String> = changes(&own, &after)
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
+    assert_eq!(
+        found,
+        [
+            "backup.path: set",
+            "backup.recipient: set",
+            "deployment.id: changed",
+            "ingress: removed",
+        ]
+    );
+    assert!(changes(&own, &own).is_empty());
+    // A mapping replaced by a value is that path changed.
+    assert_eq!(
+        changes(&json!({ "a": { "b": 1 } }), &json!({ "a": 2 })),
+        [Change::Changed("a".into())]
+    );
+}
+
+#[test]
+fn a_values_file_is_yaml_a_mapping_or_nothing() {
+    let empty = ValuesFile::new("empty", "# nothing yet\n");
+    let list = ValuesFile::new("list", "- a\n- b\n");
+    let broken = ValuesFile::new("broken", "backup: [\n");
+    assert_eq!(values_files(&[empty.path()]).unwrap(), [json!({})]);
+    assert!(values_files(&[list.path()])
+        .unwrap_err()
+        .contains("not a mapping"));
+    assert!(values_files(&[broken.path()])
+        .unwrap_err()
+        .contains("not YAML"));
+    let missing = "/nowhere/meridian-values.yaml".to_string();
+    assert!(values_files(&[missing])
+        .unwrap_err()
+        .contains("could not be read"));
+}
+
+#[tokio::test]
+async fn values_files_are_merged_their_changes_shown_by_path_and_given_to_helm() {
+    let first = ValuesFile::new(
+        "backup",
+        "backup:\n  recipient: age1recipient\n  path: /Users/me/meridian-backups\n",
+    );
+    let second = ValuesFile::new(
+        "code",
+        "deployment:\n  enrolmentCode: ENROL-NEW-DO-NOT-PRINT\nbackup:\n  path: /Volumes/disk/backups\n",
+    );
+    let paths = [first.path(), second.path()];
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(WORKLOADS, items(vec![]));
+    let asked = with_values(&paths);
+    let mut said = Vec::new();
+    let Checked::Upgrade(plan) = check(&stand, &asked, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    else {
+        panic!("refused: {said:?}");
+    };
+    let found: Vec<String> = plan.changes.iter().map(|c| c.to_string()).collect();
+    assert_eq!(found, ["backup: set", "deployment.enrolmentCode: changed"]);
+    let text = plan_text(&asked, &plan);
+    assert!(
+        text.contains(&format!(
+            "Its values, with {}, {} merged over them (values not shown):\n    backup: set\n    \
+             deployment.enrolmentCode: changed\n",
+            paths[0], paths[1]
+        )),
+        "{text}"
+    );
+    let arguments = helm_arguments(&asked, &plan);
+    let at = arguments
+        .iter()
+        .position(|each| each == "--reset-then-reuse-values")
+        .expect("reset then reuse");
+    let files: Vec<&str> = arguments[at..].iter().map(String::as_str).collect();
+    assert!(
+        files
+            .windows(4)
+            .any(|w| w == ["-f", &paths[0], "-f", &paths[1]]),
+        "{arguments:?}"
+    );
+    let everything = format!("{}\n{text}", said.join("\n"));
+    for secret in [
+        "ENROL-DO-NOT-PRINT",
+        "ENROL-NEW-DO-NOT-PRINT",
+        "age1recipient",
+        "/Volumes/disk",
+    ] {
+        assert!(!everything.contains(secret), "{secret}: {everything}");
+    }
+    assert!(said
+        .join("\n")
+        .contains("2 changes to the deployment's own values"));
+    assert!(!stand.changed_anything());
+}
+
+#[tokio::test]
+async fn at_the_version_it_is_at_a_values_file_that_changes_something_is_an_upgrade() {
+    let file = ValuesFile::new("keep", "backup:\n  keep: 30\n");
+    let stand = healthy()
+        .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
+        .json(WORKLOADS, items(vec![]));
+    let asked = with_values(&[file.path()]);
+    let mut said = Vec::new();
+    let Checked::Upgrade(plan) = check(&stand, &asked, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    else {
+        panic!("not an upgrade: {said:?}");
+    };
+    assert_eq!(plan.changes, [Change::Set("backup".into())]);
+    assert!(said.join("\n").contains(
+        "meridian is at 0.1.182 already; this upgrade keeps it there and changes its values"
+    ));
+
+    // One saying what the deployment says already changes nothing: nothing
+    // to do.
+    let same = ValuesFile::new("same", "deployment:\n  id: DEP-X\n");
+    let checked = check(&stand, &with_values(&[same.path()]), &mut |_: &str| {}).await;
+    assert!(matches!(checked, Checked::Current(_)));
+}
+
+#[tokio::test]
+async fn a_values_file_that_cannot_be_read_stops_it_with_nothing_changed() {
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(WORKLOADS, items(vec![]));
+    let mut said = Vec::new();
+    let checked = check(
+        &stand,
+        &with_values(&["/nowhere/values.yaml".to_string()]),
+        &mut |line: &str| said.push(line.to_string()),
+    )
+    .await;
+    assert!(matches!(checked, Checked::Refused));
+    let said = said.join("\n");
+    assert!(
+        said.contains("the values file /nowhere/values.yaml could not be read"),
+        "{said}"
+    );
+    assert!(said.contains("Nothing was changed."), "{said}");
+    assert!(!stand.changed_anything());
+
+    // Nor are the files shown against values it could not read.
+    let file = ValuesFile::new("unread", "backup:\n  keep: 30\n");
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .instead(OWN_VALUES, Err("Error: release: not found"));
+    let mut said = Vec::new();
+    let checked = check(&stand, &with_values(&[file.path()]), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await;
+    assert!(matches!(checked, Checked::Refused), "{said:?}");
+    assert!(said
+        .join("\n")
+        .contains("the deployment's own values could not be read"));
 }
 
 #[test]

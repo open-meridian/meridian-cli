@@ -197,6 +197,10 @@ what it will do and asks
                             Never an older one
       --timeout <d>         how long to wait for the migration and for every
                             component on the new image (default: 10m)
+  -f, --values <file>       chart values to change, merged over the deployment's own
+                            as --reset-then-reuse-values merges them; repeatable,
+                            each over the last. What they change is shown, by path
+                            and never by value, before it asks
       --https               move a local deployment, at a name under .localhost, to
                             HTTPS: a certificate from this machine's authority, then
                             the upgrade setting its address to https://<name>. A
@@ -1280,6 +1284,7 @@ async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i
         timeout: timeout.into(),
         https: arguments.set("--https"),
         authority: None,
+        values: arguments.every("--values", "-f"),
     };
     // This machine's authority: made and trusted for --https, the certificate
     // step coming before the upgrade; otherwise only read, to renew a

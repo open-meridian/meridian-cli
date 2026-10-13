@@ -748,10 +748,8 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
         return Err(format!(
             "{} in {ns} has no backup configured. Make a key with `meridian backup key`, then set \
              backup.recipient to its public half and backup.path (a directory on the node) or \
-             backup.existingClaim in a values file, and apply it with `helm upgrade {} \
-             oci://ghcr.io/open-meridian/charts/meridian-runtime --version <the version it \
-             runs> -n {ns} --reset-then-reuse-values -f <file>` (`meridian upgrade-deployment` \
-             takes no values file)",
+             backup.existingClaim in a values file, and apply it with `meridian \
+             upgrade-deployment --release {} -n {ns} -f <file>`",
             asked.release, asked.release
         ));
     };
