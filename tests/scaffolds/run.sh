@@ -17,6 +17,11 @@
 #     custody, data and reporting templates' tests run their role's suite.
 #   - The `data` template with a float in its price path fails: its suite's
 #     cases, run by its own tests, catch the price recorded through a float.
+#   - A connectivity plugin that sends on a pause fails (build row 18 of
+#     plans/an-order-reaches-a-venue-through-the-book): the reference plugin
+#     given `connectivity`, its test running the connectivity suite with a
+#     placement acknowledged at the venue after a pause on it was heard. As
+#     verified it fails its tests, and the suite names the pause's case.
 #
 # Runs inside the scaffolds stage of Dockerfile.rust.
 set -eu
@@ -110,6 +115,62 @@ if grep -q "'an-exact-price': 'raised" data-suite.out; then
 else
     say "FAIL  data-plugin: its suite did not fail an-exact-price:"
     cat data-suite.out
+    failed=1
+fi
+
+# The fixture: a connectivity plugin that hears a pause on itself, then a
+# placement naming it, and acknowledges the placement at its venue anyway.
+meridian plugin new pausing --into pausing >/dev/null
+install pausing
+sed -i 's/^roles = \[\]$/roles = ["connectivity"]/' pausing/pyproject.toml
+cat >pausing/tests/test_suite.py <<'PY'
+from meridian.plugin.v1 import operations_pb2 as ops
+from meridian.suites import Recorder, run
+
+PLACEMENT = "PLC-01JAE00000000000000000001"
+INSTANCE = "pausing-1"
+
+
+async def sends_on_a_pause(recorder: Recorder) -> None:
+    pause = ops.TradingInstructionChangedEvent(
+        instruction=ops.TradingInstruction(
+            target=ops.TradingInstructionTarget(instance_id=INSTANCE),
+            value=ops.TRADING_INSTRUCTION_VALUE_PAUSE,
+        )
+    )
+    placement = ops.PlacementUpdatedEvent(
+        placement=ops.Placement(placement_id=PLACEMENT, connectivity_instance_id=INSTANCE)
+    )
+    recorder.answer("TradingInstructionChanged", lambda _: pause)
+    recorder.answer("PlacementUpdated", lambda _: placement)
+
+    async def heard(_: object) -> None:
+        return None
+
+    await recorder.receive(trading_instruction_changed=heard, placement_updated=heard)
+    await recorder.report_placement(
+        placement_id=PLACEMENT,
+        event="acknowledged",
+        venue_order_id="VENUE-1",
+        raw_record=ops.RawRecordRef(instance_id=INSTANCE, key="venue:report:1"),
+    )
+
+
+def test_the_connectivity_suite() -> None:
+    report = run(
+        "connectivity",
+        {"sends-nothing-new-on-a-pause": sends_on_a_pause},
+        instance_id=INSTANCE,
+    )
+    assert report.passed, report.failures
+PY
+fails_saying pausing "FAIL  tests-pass" --verified --run-tests
+(cd pausing && python3 -m pytest -vv -p no:cacheprovider tests/test_suite.py) >pausing-suite.out 2>&1 || true
+if grep -q "'sends-nothing-new-on-a-pause': 'expect\[2\]: sent 1 on ReportPlacement, and the case sends none'" pausing-suite.out; then
+    say "ok    pausing: its suite fails sends-nothing-new-on-a-pause"
+else
+    say "FAIL  pausing: its suite did not fail sends-nothing-new-on-a-pause:"
+    cat pausing-suite.out
     failed=1
 fi
 

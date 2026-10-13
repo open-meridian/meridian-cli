@@ -148,7 +148,7 @@ fn a_freshly_scaffolded_plugin_with_a_test_keeps_every_rule() {
     );
 }
 
-// ── role-suite (contract v11, and the data suite from v18) ───────────────
+// ── role-suite (contract v11, the data suite from v18, connectivity's from v22)
 
 #[test]
 fn a_custody_plugin_from_the_template_keeps_every_rule_and_a_verified_one_runs_its_suite() {
@@ -302,6 +302,119 @@ fn the_suites_are_suites_jsons() {
         Some(true),
         "about trades"
     );
+}
+
+/// A connectivity plugin's test running its suite: `not_presented` as given.
+fn connectivity_suite_test(not_presented: &str) -> String {
+    format!(
+        "from meridian.suites import run\n\nPRODUCERS = {{}}\n\n\ndef test_the_connectivity_suite():\n    \
+         report = run(\n        \"connectivity\",\n        PRODUCERS,\n{not_presented}    )\n    \
+         assert report.passed, report.failures\n"
+    )
+}
+
+#[test]
+fn a_verified_connectivity_plugin_runs_its_suite_and_names_no_pause_or_stop_not_presented() {
+    // Build row 18 (plans/an-order-reaches-a-venue-through-the-book):
+    // `check` runs the `connectivity` suite. Its cases are every connectivity
+    // plugin's, sending nothing new on a pause and cancelling at the venue on
+    // a stop among them, so none may be named not presented.
+    let plugin = Scaffolded::tested("connectivity-suite");
+    plugin.replace("pyproject.toml", "roles = []", "roles = [\"connectivity\"]");
+    let unverified = plugin.check();
+    assert!(
+        unverified.passed(),
+        "not verified, it keeps every rule: {}",
+        text(&unverified)
+    );
+
+    let verified = plugin.check_verified();
+    assert_eq!(
+        failed_rules(&verified),
+        ["role-suite"],
+        "{}",
+        text(&verified)
+    );
+    assert_eq!(
+        (
+            verified.failures[0].found.as_str(),
+            verified.failures[0].file.as_str()
+        ),
+        (
+            "it holds `connectivity`, and no test runs the connectivity suite",
+            "tests/"
+        )
+    );
+    assert!(verified.failures[0]
+        .instead
+        .contains("meridian.suites.run(\"connectivity\", producers)"));
+
+    plugin.write(
+        "tests/test_suite.py",
+        &connectivity_suite_test(
+            "        not_presented={\n            \"sends-nothing-new-on-a-pause\": \"it never pauses\",\n            \
+             \"cancels-at-the-venue-on-a-stop\": \"its venue cancels nothing\",\n        },\n",
+        ),
+    );
+    let verified = plugin.check_verified();
+    assert_eq!(
+        failed_rules(&verified),
+        ["role-suite"],
+        "{}",
+        text(&verified)
+    );
+    let line = plugin
+        .read("tests/test_suite.py")
+        .lines()
+        .position(|line| line.contains("sends-nothing-new-on-a-pause"))
+        .unwrap()
+        + 1;
+    let found: Vec<(&str, &str, usize)> = verified
+        .failures
+        .iter()
+        .map(|failure| (failure.found.as_str(), failure.file.as_str(), failure.line))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (
+                "it names `sends-nothing-new-on-a-pause` not presented, a case of the \
+                 connectivity suite every plugin of the role passes",
+                "tests/test_suite.py",
+                line
+            ),
+            (
+                "it names `cancels-at-the-venue-on-a-stop` not presented, a case of the \
+                 connectivity suite every plugin of the role passes",
+                "tests/test_suite.py",
+                line + 1
+            ),
+        ]
+    );
+
+    plugin.write("tests/test_suite.py", &connectivity_suite_test(""));
+    let verified = plugin.check_verified();
+    assert!(verified.passed(), "{}", text(&verified));
+}
+
+#[test]
+fn no_case_of_the_connectivity_suite_may_be_named_not_presented() {
+    let cases = super::rules::suite_cases("connectivity");
+    for name in [
+        "sends-nothing-new-on-a-pause",
+        "cancels-at-the-venue-on-a-stop",
+        "reads-the-instructions-in-force-on-start",
+    ] {
+        assert_eq!(
+            cases
+                .iter()
+                .find(|(case, _)| case == name)
+                .map(|(_, may)| *may),
+            Some(false),
+            "{name}"
+        );
+    }
+    assert!(cases.iter().all(|(_, may)| !may), "{cases:?}");
 }
 
 // ── role-pages (spec/plugin-pages-follow-their-role) ─────────────────────

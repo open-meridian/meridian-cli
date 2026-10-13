@@ -401,21 +401,25 @@ settings' names, what the plugin receives and does not carry, and the storage
 it asks for, refused here when a plugin holding no edge role asks for
 storage. `plugin check` holds the same declaration to that (`edge-storage`).
 `plugin check --verified` holds a plugin holding a role with a conformance
-suite (`custody`, and `data` from contract v18) to a test that runs the suite
-(`role-suite`), which `--run-tests` then runs: a plugin holding the role is
+suite (`custody`, `data` from contract v18, and `connectivity` from contract
+v22) to a test that runs the suite (`role-suite`), which `--run-tests` then
+runs: a plugin holding the role is
 verified for it only by passing every case, though from contract v19 the
 SDK's runner lets a case about a kind of data the plugin declares it never
 publishes be named not presented, with why, and from contract v20 a case
 about a field its source never states (`about_field`). `role-suite` reads
 the cases a test names in `not_presented` against meridian-schema's
 `suites.json`: one no case of the suite has, or one every plugin of the role
-passes -- the data suite's `reads-its-datasets-licences` among them -- fails
-it. Without `--verified` the rule is not checked, since a plugin not passing
+passes -- the data suite's `reads-its-datasets-licences` among them, and
+every case of the connectivity suite, sending nothing new on a pause and
+cancelling at the venue on a stop with them -- fails it. Without `--verified` the rule is not checked, since a plugin not passing
 its role's suite is not verified and breaks no rule: the reference plugin
 given `custody`, recording a statement no vendor sent, keeps every rule.
 `make check-scaffolds` makes each scaffold with the release binary and runs
 its tests for real: the data template with a float in its price path fails
-its suite.
+its suite, and so does a connectivity plugin that acknowledges a placement at
+its venue after hearing a pause on itself, the suite naming
+`sends-nothing-new-on-a-pause`.
 
 `--verified` also holds a plugin holding `data`, `custody`, `operations` or
 `reporting` to its role's common part (`role-pages`,

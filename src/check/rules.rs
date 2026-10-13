@@ -144,11 +144,15 @@ pub const EDGE_ROLES: [&str; 7] = [
 ];
 
 /// The roles whose conformance suite a verified plugin runs in its tests, as
-/// this release of the CLI holds them: `custody` (contract v11) and `data`
-/// (contract v18, as `dgm`). A plugin holding one is verified for it only by
+/// this release of the CLI holds them: `custody` (contract v11), `data`
+/// (contract v18, as `dgm`) and `connectivity` (contract v22: plans/an-order-
+/// reaches-a-venue-through-the-book, build row 18, "`check` runs the
+/// `connectivity` suite"). A plugin holding one is verified for it only by
 /// passing every case (spec/vendor-differences-have-a-place-in-the-contract,
-/// requirement 18).
-pub const SUITES: [&str; 2] = ["custody", "data"];
+/// requirement 18): a connectivity plugin among them sending nothing new on a
+/// pause and cancelling at its venue on a stop, cases no plugin of the role
+/// may name not presented.
+pub const SUITES: [&str; 3] = ["custody", "data", "connectivity"];
 
 /// The rules only `--verified` holds a plugin to. A plugin holding a role
 /// with a suite and not passing it is not verified, and there is nothing to

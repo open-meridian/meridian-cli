@@ -141,10 +141,10 @@ not, each failure with its file, line and what to write instead
       --run-tests           run its tests too, with pytest
       --verified            hold it as a verified plugin is: every changing route
                             a tool for agents, none kept from them, each role it
-                            holds with a suite (custody, data) run in its tests,
-                            each role's common pages, tools and settings kept,
-                            and every act naming its check tool (role-pages;
-                            without --verified, said as advice)
+                            holds with a suite (custody, data, connectivity) run
+                            in its tests, each role's common pages, tools and
+                            settings kept, and every act naming its check tool
+                            (role-pages; without --verified, said as advice)
       --json                one JSON object on stdout
 
 plugin migrate: needs no deployment, and docker. Exits 0 when migrated with nothing

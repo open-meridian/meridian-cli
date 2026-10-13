@@ -21,7 +21,7 @@ help:
 	@echo "  make lint       rustfmt --check and clippy with warnings denied"
 	@echo "  make check-c-deps  aws-lc-sys is the only crate that compiles C (spec/the-cli, req. 2)"
 	@echo "  make check-install  the install script, upgrade and uninstall, against stand-in releases"
-	@echo "  make check-scaffolds  each scaffold plugin new writes, its tests and suite run, and a float caught"
+	@echo "  make check-scaffolds  each scaffold plugin new writes, its tests and suite run, a float and a send on a pause caught"
 	@echo "  make fmt        apply rustfmt"
 	@echo "  make lock       regenerate Cargo.lock"
 	@echo "  make e2e-up     install into a throwaway namespace and answer the wizard"
@@ -117,13 +117,14 @@ check-install:
 # the reference plugin, it given custody (every rule, the role's common part as
 # advice; role-suite and role-pages failing only when verified), the custody,
 # data, operations and reporting templates verified, the custody, data and
-# reporting ones with their suites, and the data template with a float in its
-# price path failing. The check's own tests have no Python.
+# reporting ones with their suites, the data template with a float in its
+# price path failing, and a connectivity plugin acknowledging a placement after
+# a pause on it failing its suite. The check's own tests have no Python.
 check-scaffolds:
 	@$(DOCKER) build -f Dockerfile.rust --target scaffolds --build-arg SDK_REV=$(SDK_REV) . >/dev/null 2>&1 \
 		|| { echo "check-scaffolds FAILED; see the output with:" >&2; \
 		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target scaffolds --build-arg SDK_REV=$(SDK_REV) --progress=plain --no-cache-filter scaffolds ." >&2; exit 1; }
-	@echo "check-scaffolds OK: each scaffold keeps the rules, its suite run; a data plugin pricing through a float fails"
+	@echo "check-scaffolds OK: each scaffold keeps the rules, its suite run; a data plugin pricing through a float and a connectivity plugin sending on a pause fail"
 
 # Applied in a container and written back, because the host has no toolchain.
 fmt:
