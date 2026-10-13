@@ -6,7 +6,7 @@
     {
       "role": "compliance",
       "since": "v18",
-      "says": "A compliance plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake.\n",
+      "says": "A compliance plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -211,6 +211,7 @@
         },
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "since": "v22",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
@@ -226,6 +227,7 @@
         },
         {
           "name": "asks-for-a-settlement-date",
+          "about": "settlement dates",
           "since": "v22",
           "given": "the plugin needs an instrument's settlement date from a trade date, by its market's rule",
           "expect": [
@@ -245,10 +247,11 @@
     {
       "role": "confirmation",
       "since": "v22",
-      "says": "A confirmation plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may.\n",
+      "says": "A confirmation plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
       "cases": [
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
             {
@@ -263,6 +266,7 @@
         },
         {
           "name": "asks-for-a-settlement-date",
+          "about": "settlement dates",
           "given": "the plugin needs an instrument's settlement date from a trade date, by its market's rule",
           "expect": [
             {
@@ -281,7 +285,7 @@
     {
       "role": "connectivity",
       "since": "v22",
-      "says": "A connectivity plugin passing every case sends the placements naming its instance and no other, with what its ems set in the venue's account field; reports every acknowledgement, rejection, restatement, fill, bust and charge in the contract's meanings, each with the raw record it was converted from and the venue's text only where no contract reason maps; marks an unconverted status outcome unknown and resolves it by asking, never by sending again; derives an execution ID the same way twice; states every fill's settlement date, the venue's or the date read's; sends nothing new on a pause and cancels at its venue on a stop, reporting each cancel as a fact; and publishes its venue's catalogue.\n",
+      "says": "A connectivity plugin passing every case sends the placements naming its instance and no other, with what its ems set in the venue's account field; reports every acknowledgement, rejection, restatement, fill, bust and charge in the contract's meanings, each with the raw record it was converted from and the venue's text only where no contract reason maps; marks an unconverted status outcome unknown and resolves it by asking, never by sending again; derives an execution ID the same way twice; states every fill's settlement date, the venue's or the date read's; sends nothing new on a pause and cancels at its venue on a stop, reporting each cancel as a fact; and publishes its venue's catalogue. A case about calendars, settlement dates, locates or compliance waits (`about`, contract v22) a plugin whose work never uses them marks not presented, with why, and a case about a fill's place of execution (`about_field`) one whose venue never states it.\n",
       "cases": [
         {
           "name": "acknowledges-a-placement-naming-it",
@@ -559,6 +563,7 @@
         },
         {
           "name": "reads-whether-releases-wait-for-compliance",
+          "about": "compliance waits",
           "given": "the plugin starts with accounts its ems mapped on it",
           "expect": [
             {
@@ -568,6 +573,7 @@
         },
         {
           "name": "hears-an-accounts-attributes-change",
+          "about": "compliance waits",
           "given": "an account its ems mapped on it changes whether its releases wait for compliance",
           "expect": [
             {
@@ -603,6 +609,7 @@
         },
         {
           "name": "records-a-locate",
+          "about": "locates",
           "given": "the fund asks its prime for a locate on an account its ems mapped",
           "expect": [
             {
@@ -649,6 +656,7 @@
         },
         {
           "name": "resolves-an-executions-venue",
+          "about_field": "meridian.v1.ReportExecutionRequest.venue_id",
           "given": "the venue names a fill's place of execution by its MIC",
           "expect": [
             {
@@ -664,6 +672,7 @@
         },
         {
           "name": "reports-a-venue-not-held",
+          "about_field": "meridian.v1.ReportExecutionRequest.venue_id",
           "given": "the venue names a place of execution the deployment does not hold",
           "expect": [
             {
@@ -676,6 +685,7 @@
         },
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
             {
@@ -693,7 +703,7 @@
     {
       "role": "custody",
       "since": "v11",
-      "says": "A custody plugin passing every case reports its source's accounts with their kinds, its sync state in the contract's own values, and each account's holdings counted once, every row referencing the raw record it was converted from, the settled and pending quantities stated, the custodian named, and every value it closed rather than read carrying its provenance; it sends a value it cannot convert as not known beside the value as reported, and withholds a statement it cannot serve clean.\n",
+      "says": "A custody plugin passing every case reports its source's accounts with their kinds, its sync state in the contract's own values, and each account's holdings counted once, every row referencing the raw record it was converted from, the settled and pending quantities stated, the custodian named, and every value it closed rather than read carrying its provenance; it sends a value it cannot convert as not known beside the value as reported, and withholds a statement it cannot serve clean. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
       "cases": [
         {
           "name": "sync-current",
@@ -1557,6 +1567,7 @@
         },
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "since": "v22",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
@@ -1572,6 +1583,7 @@
         },
         {
           "name": "asks-for-a-settlement-date",
+          "about": "settlement dates",
           "since": "v22",
           "given": "the plugin needs an instrument's settlement date from a trade date, by its market's rule",
           "expect": [
@@ -1591,7 +1603,7 @@
     {
       "role": "data",
       "since": "v18",
-      "says": "A data plugin passing every case records each source's prices and bars exactly, under its dataset, its business date, its source's times and its raw record; restates a forming day under the same row key and sends an identical repeat unchanged; resolves every subject and venue before it records, reporting what does not resolve, and reads the record of a subject another source resolved to name it in its own; names a price in a token by the token's own cash instrument, never a fiat code; and records what a want asks, or declines it per subject. From v19 it records each trade it publishes with the platform's trade attributes, converted at the edge, and the side that took liquidity where its source says it, a withdrawal as a new version; and each quote it publishes with the sides its source states; and keeps a standing want of a streamed dataset current. A case about a kind of data the plugin declares it never publishes is not presented, with why.\n",
+      "says": "A data plugin passing every case records each source's prices and bars exactly, under its dataset, its business date, its source's times and its raw record; restates a forming day under the same row key and sends an identical repeat unchanged; resolves every subject and venue before it records, reporting what does not resolve, and reads the record of a subject another source resolved to name it in its own; names a price in a token by the token's own cash instrument, never a fiat code; and records what a want asks, or declines it per subject. From v19 it records each trade it publishes with the platform's trade attributes, converted at the edge, and the side that took liquidity where its source says it, a withdrawal as a new version; and each quote it publishes with the sides its source states; and keeps a standing want of a streamed dataset current. A case about a kind of data the plugin declares it never publishes is not presented, with why. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
       "cases": [
         {
           "name": "a-daily-close",
@@ -2102,6 +2114,7 @@
         },
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "since": "v22",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
@@ -2117,6 +2130,7 @@
         },
         {
           "name": "asks-for-a-settlement-date",
+          "about": "settlement dates",
           "since": "v22",
           "given": "the plugin needs an instrument's settlement date from a trade date, by its market's rule",
           "expect": [
@@ -2136,7 +2150,7 @@
     {
       "role": "ems",
       "since": "v19",
-      "says": "An ems plugin passing every case learns the datasets it may read, reads trades over a range and the latest quotes from the deployment's default sources unless it names others, hears every trade and the latest quotes the lake records after, narrowed to the subjects it asked for, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake.\n",
+      "says": "An ems plugin passing every case learns the datasets it may read, reads trades over a range and the latest quotes from the deployment's default sources unless it names others, hears every trade and the latest quotes the lake records after, narrowed to the subjects it asked for, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -2398,6 +2412,7 @@
         },
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "since": "v22",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
@@ -2413,6 +2428,7 @@
         },
         {
           "name": "asks-for-a-settlement-date",
+          "about": "settlement dates",
           "since": "v22",
           "given": "the plugin needs an instrument's settlement date from a trade date, by its market's rule",
           "expect": [
@@ -2432,7 +2448,7 @@
     {
       "role": "oms",
       "since": "v22",
-      "says": "An oms plugin passing every case releases a proposed order through the gate for a person or its service account, asks for changes, claims, holds and pauses, decides an approval its policy asks of it, records a telephoned order and a manual execution for a person, acknowledges a late fact, records a locate's use, reads the venue's catalogue, and seeds by a read and hears what follows of orders, placements, executions, locates and the trading instructions.\n",
+      "says": "An oms plugin passing every case releases a proposed order through the gate for a person or its service account, asks for changes, claims, holds and pauses, decides an approval its policy asks of it, records a telephoned order and a manual execution for a person, acknowledges a late fact, records a locate's use, reads the venue's catalogue, and seeds by a read and hears what follows of orders, placements, executions, locates and the trading instructions. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
       "cases": [
         {
           "name": "proposes-an-order",
@@ -2665,6 +2681,7 @@
         },
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
             {
@@ -2679,6 +2696,7 @@
         },
         {
           "name": "asks-for-a-settlement-date",
+          "about": "settlement dates",
           "given": "the plugin needs an instrument's settlement date from a trade date, by its market's rule",
           "expect": [
             {
@@ -2697,7 +2715,7 @@
     {
       "role": "operations",
       "since": "v14",
-      "says": "An operations plugin passing every case reads the account's activity when it reconciles, hears each activity recorded, and offers the activity that explains a break as its candidate cause, linked by value, under the category that fits; it books nothing from activity and confirms nothing without a person.\n",
+      "says": "An operations plugin passing every case reads the account's activity when it reconciles, hears each activity recorded, and offers the activity that explains a break as its candidate cause, linked by value, under the category that fits; it books nothing from activity and confirms nothing without a person. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
       "cases": [
         {
           "name": "income-reinvested-explains-a-quantity-gained",
@@ -2892,6 +2910,7 @@
         },
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "since": "v22",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
@@ -2910,7 +2929,7 @@
     {
       "role": "portfolio",
       "since": "v18",
-      "says": "A portfolio plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake.\n",
+      "says": "A portfolio plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -3076,6 +3095,7 @@
         },
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "since": "v22",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
@@ -3091,6 +3111,7 @@
         },
         {
           "name": "asks-for-a-settlement-date",
+          "about": "settlement dates",
           "since": "v22",
           "given": "the plugin needs an instrument's settlement date from a trade date, by its market's rule",
           "expect": [
@@ -3110,7 +3131,7 @@
     {
       "role": "reporting",
       "since": "v18",
-      "says": "A reporting plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. From v19 it names an instrument by an identifier, such as its reporting currency by its ISO 4217 code, and has it resolved to the deployment's record, which mints nothing.\n",
+      "says": "A reporting plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. From v19 it names an instrument by an identifier, such as its reporting currency by its ISO 4217 code, and has it resolved to the deployment's record, which mints nothing. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -3232,6 +3253,7 @@
         },
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "since": "v22",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
@@ -3247,6 +3269,7 @@
         },
         {
           "name": "asks-for-a-settlement-date",
+          "about": "settlement dates",
           "since": "v22",
           "given": "the plugin needs an instrument's settlement date from a trade date, by its market's rule",
           "expect": [
@@ -3266,10 +3289,11 @@
     {
       "role": "servicing",
       "since": "v22",
-      "says": "A servicing plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may.\n",
+      "says": "A servicing plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
       "cases": [
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
             {
@@ -3284,6 +3308,7 @@
         },
         {
           "name": "asks-for-a-settlement-date",
+          "about": "settlement dates",
           "given": "the plugin needs an instrument's settlement date from a trade date, by its market's rule",
           "expect": [
             {
@@ -3302,10 +3327,11 @@
     {
       "role": "settlement",
       "since": "v22",
-      "says": "A settlement plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may.\n",
+      "says": "A settlement plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
       "cases": [
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
             {
@@ -3320,6 +3346,7 @@
         },
         {
           "name": "asks-for-a-settlement-date",
+          "about": "settlement dates",
           "given": "the plugin needs an instrument's settlement date from a trade date, by its market's rule",
           "expect": [
             {
@@ -3338,7 +3365,7 @@
     {
       "role": "signal",
       "since": "v18",
-      "says": "A signal plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; from v19 it reads trades over a range and the latest quotes, hears every trade and the latest quotes recorded after, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake.\n",
+      "says": "A signal plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; from v19 it reads trades over a range and the latest quotes, hears every trade and the latest quotes recorded after, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -3461,6 +3488,7 @@
         },
         {
           "name": "reads-a-calendar",
+          "about": "calendars",
           "since": "v22",
           "given": "the plugin needs a settlement calendar's days over a date range",
           "expect": [
@@ -3476,6 +3504,7 @@
         },
         {
           "name": "asks-for-a-settlement-date",
+          "about": "settlement dates",
           "since": "v22",
           "given": "the plugin needs an instrument's settlement date from a trade date, by its market's rule",
           "expect": [

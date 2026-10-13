@@ -912,15 +912,17 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at 411a04e (contract v22), byte
+/// meridian-schema's boundaries/suites.json at 62b7e33 (contract v22), byte
 /// for byte: each role's suite and its cases.
 const SUITES_JSON: &str = include_str!("suites.json");
 
 /// A role's suite's cases, each with whether a plugin may name it not
 /// presented, with why: a case asserting a closed list's value its source
 /// never presents (`closed_list`), from contract v19 one about a kind of data
-/// the plugin never publishes (`about`), and from v20 one about a field its
-/// source never states (`about_field`). Every other case -- the data suite's
+/// the plugin never publishes (`about`; from v22 also a kind of work it never
+/// does: calendars, settlement dates, locates, compliance waits), and from v20
+/// one about a field its source never states (`about_field`; from v22 a fill's
+/// place of execution). Every other case -- the data suite's
 /// `reads-its-datasets-licences` among them -- every plugin of the role passes.
 pub(crate) fn suite_cases(role: &str) -> Vec<(String, bool)> {
     let published: serde_json::Value =
@@ -943,7 +945,7 @@ pub(crate) fn suite_cases(role: &str) -> Vec<(String, bool)> {
 
 const NOT_PRESENTED: &str = "name in `not_presented` only a case its source never presents, \
     with why: one asserting a closed list's value, one about a kind of data the plugin never \
-    publishes (`about`, contract v19), or one about a field its source never states \
+    publishes or a kind of work it never does (`about`, contract v19 and v22), or one about a field its source never states \
     (`about_field`, contract v20). Every other case every plugin of the role passes -- the data \
     suite's reads-its-datasets-licences among them -- and the SDK's runner refuses it named";
 

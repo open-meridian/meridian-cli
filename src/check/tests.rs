@@ -302,6 +302,19 @@ fn the_suites_are_suites_jsons() {
         Some(true),
         "about trades"
     );
+    // Ruled 2026-10-13: the calendar cases and records-a-locate carry `about`.
+    for role in ["custody", "connectivity", "oms"] {
+        let cases = super::rules::suite_cases(role);
+        assert!(
+            cases.contains(&("reads-a-calendar".to_string(), true)),
+            "{role}: about calendars"
+        );
+    }
+    let custody = super::rules::suite_cases("custody");
+    assert!(custody.contains(&("asks-for-a-settlement-date".to_string(), true)));
+    let connectivity = super::rules::suite_cases("connectivity");
+    assert!(connectivity.contains(&("records-a-locate".to_string(), true)));
+    assert!(connectivity.contains(&("acknowledges-a-placement-naming-it".to_string(), false)));
 }
 
 /// A connectivity plugin's test running its suite: `not_presented` as given.
@@ -398,7 +411,10 @@ fn a_verified_connectivity_plugin_runs_its_suite_and_names_no_pause_or_stop_not_
 }
 
 #[test]
-fn no_case_of_the_connectivity_suite_may_be_named_not_presented() {
+fn only_the_connectivity_suites_marked_cases_may_be_named_not_presented() {
+    // Ruled 2026-10-13: the calendar, locate and compliance-wait cases are
+    // `about` a kind of work, the execution-venue cases `about_field` a fill's
+    // place of execution; every other case every connectivity plugin passes.
     let cases = super::rules::suite_cases("connectivity");
     for name in [
         "sends-nothing-new-on-a-pause",
@@ -414,7 +430,17 @@ fn no_case_of_the_connectivity_suite_may_be_named_not_presented() {
             "{name}"
         );
     }
-    assert!(cases.iter().all(|(_, may)| !may), "{cases:?}");
+    let marked = [
+        "reads-a-calendar",
+        "records-a-locate",
+        "reads-whether-releases-wait-for-compliance",
+        "hears-an-accounts-attributes-change",
+        "resolves-an-executions-venue",
+        "reports-a-venue-not-held",
+    ];
+    for (case, may) in &cases {
+        assert_eq!(*may, marked.contains(&case.as_str()), "{case}");
+    }
 }
 
 // ── role-pages (spec/plugin-pages-follow-their-role) ─────────────────────
