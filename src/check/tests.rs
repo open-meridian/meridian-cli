@@ -875,6 +875,84 @@ fn every_act_names_its_check_tool_whatever_roles_the_plugin_holds() {
     );
 }
 
+/// A link's form replaced by a tool naming its check, as SnapTrade and
+/// sample-operations declare linking: the route by a constant, and one by
+/// its path as written.
+const REPLACED_ACTS: &str = r#"import meridian
+
+pages = meridian.Pages("Checked")
+
+LINK = "/accounts/link"
+
+
+@pages.route(LINK, levels="write", methods=["POST"], params=LinkAsked)
+async def link_form(request): ...
+
+
+@pages.route("/accounts/unlink", levels="write", methods=["POST"], params=LinkAsked)
+async def unlink_form(request): ...
+
+
+@pages.route(
+    LINK + "/check",
+    levels="write",
+    methods=["POST"],
+    params=LinkAsked,
+    reads=True,
+    name="check_link",
+)
+async def check_link(request): ...
+
+
+@pages.tool(replaces=LINK, params=LinkAsked, name="link", checked_by="check_link")
+async def link(request): ...
+
+
+@pages.tool(replaces="/accounts/unlink", params=LinkAsked, name="unlink", checked_by="check_link")
+async def unlink(request): ...
+"#;
+
+#[test]
+fn a_route_a_tool_replaces_is_not_an_act_of_its_own() {
+    let acts = |plugin: &Scaffolded| -> Vec<(String, usize)> {
+        plugin
+            .check_verified()
+            .failures
+            .into_iter()
+            .filter(|failure| failure.rule == "role-pages")
+            .map(|failure| (failure.found, failure.line))
+            .collect()
+    };
+    let more = format!("src/{MODULE}/more.py");
+    let plugin = Scaffolded::tested("acts-replaced");
+    plugin.write(&more, REPLACED_ACTS);
+    assert_eq!(
+        acts(&plugin),
+        [],
+        "the tools are the acts, and name their check"
+    );
+
+    // Neither replaced, each route is an act naming no check tool.
+    plugin.replace(&more, "replaces=LINK, ", "");
+    plugin.replace(&more, "replaces=\"/accounts/unlink\", ", "");
+    let at = |needle: &str| line_of(&plugin, &more, needle);
+    assert_eq!(
+        acts(&plugin),
+        [
+            (
+                "LINK is an act and names no check tool, so an agent cannot prepare it".into(),
+                at("@pages.route(LINK,")
+            ),
+            (
+                "/accounts/unlink is an act and names no check tool, so an agent cannot \
+                 prepare it"
+                    .into(),
+                at("@pages.route(\"/accounts/unlink\",")
+            ),
+        ]
+    );
+}
+
 #[test]
 fn the_runtimes_harness_copied_for_e2e_is_not_the_plugin() {
     let plugin = Scaffolded::new("e2e-harness");

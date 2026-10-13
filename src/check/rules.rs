@@ -1449,12 +1449,15 @@ fn holds_fields(plugin: &Plugin, answers: &str, page: &CommonPage) -> Result<(),
 /// Every act a plugin declares -- a route that changes something, offered to
 /// agents as a tool -- names its check tool (`checked_by=`), a read tool
 /// taking the same record, so an agent may prepare it for a person to make
-/// (contract v20, W6.26; the plan's Q5: required of a verified plugin).
-fn acts_checked(declared: &[Declaration]) -> Vec<Failure> {
+/// (contract v20, W6.26; the plan's Q5: required of a verified plugin). A
+/// route a tool replaces (`@pages.tool(replaces=...)`) is not held to it:
+/// the tool replacing it is what agents are offered.
+fn acts_checked(declared: &[Declaration], constants: &HashMap<String, String>) -> Vec<Failure> {
     let named = |declaration: &Declaration| {
         keyword(&declaration.arguments, "name")
             .map(|name| name.trim_matches(['"', '\'']).to_string())
     };
+    let replaced = replaced_paths(declared, constants);
     let mut failures = Vec::new();
     for route in declared.iter().filter(|route| route.kind == "route") {
         let changing = methods_of(&route.arguments)
@@ -1462,7 +1465,9 @@ fn acts_checked(declared: &[Declaration]) -> Vec<Failure> {
             .any(|method| method != "GET" && method != "HEAD");
         let reads = keyword(&route.arguments, "reads") == Some("True");
         let kept = keyword(&route.arguments, "tool") == Some("False");
-        if !changing || reads || kept {
+        let replaced_by_tool = string_named(first_argument(&route.arguments), constants)
+            .is_some_and(|path| replaced.contains(&path));
+        if !changing || reads || kept || replaced_by_tool {
             continue;
         }
         let path = first_argument(&route.arguments)
@@ -1506,7 +1511,8 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
     const ID: &str = "role-pages";
     let (held, _) = declared(plugin);
     let declared_all = declarations(plugin);
-    let mut failures = acts_checked(&declared_all);
+    let constants = bound_strings(plugin);
+    let mut failures = acts_checked(&declared_all, &constants);
     let parts: Vec<&CommonPart> = COMMON
         .iter()
         .filter(|part| held.iter().any(|role| role == part.role))
@@ -1514,7 +1520,6 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
     if parts.is_empty() {
         return failures;
     }
-    let constants = bound_strings(plugin);
     let tools: Vec<String> = declared_all
         .iter()
         .filter(|declaration| declaration.kind != "setting")
@@ -2028,6 +2033,17 @@ const RUNS_AS_CHECKED: &str = "`checked_by=\"<tool>\"` on the act: a read tool (
     taking the same record, answering what the act would do and whether the account may, so a \
     service account set to prepare only prepares it for a person to make (contract v21)";
 
+/// The paths of the routes a tool replaces (`@pages.tool(replaces=...)`), as
+/// written or through a constant bound at the top of a module.
+fn replaced_paths(declared: &[Declaration], constants: &HashMap<String, String>) -> Vec<String> {
+    declared
+        .iter()
+        .filter(|declaration| declaration.kind == "tool")
+        .filter_map(|declaration| keyword(&declaration.arguments, "replaces"))
+        .filter_map(|path| string_named(path, constants))
+        .collect()
+}
+
 /// The acts the plugin declares, by their tools' names: a page, route or
 /// tool deriving a tool (`params=`) for a method that changes something,
 /// neither `reads=True` nor kept from agents nor replaced by a tool, each
@@ -2038,12 +2054,7 @@ fn acts_named<'d, 'a>(
     constants: &HashMap<String, String>,
 ) -> Vec<(String, &'d Declaration<'a>, bool)> {
     let changes = |method: &str| method != "GET" && method != "HEAD";
-    let replaced: Vec<String> = declared
-        .iter()
-        .filter(|declaration| declaration.kind == "tool")
-        .filter_map(|declaration| keyword(&declaration.arguments, "replaces"))
-        .filter_map(|path| string_named(path, constants))
-        .collect();
+    let replaced = replaced_paths(declared, constants);
     let mut acts = Vec::new();
     for declaration in declared.iter().filter(|d| d.kind != "setting") {
         let arguments = &declaration.arguments;

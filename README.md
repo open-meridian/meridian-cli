@@ -509,8 +509,10 @@ a candidate until a second plugin of the role needs it. Whatever roles it
 holds, every act -- a route that changes something, offered to agents --
 names its check tool (`checked_by=`), a read route (`reads=True`) the plugin
 declares, so an agent may prepare the act for a person to make (contract
-v20). Without `--verified` the same findings are printed as advice, and fail
-nothing. `secrets-kept` reads a secret declared as a field of a class
+v20); a route a tool replaces (`@pages.tool(replaces=...)`) is not held to
+it, the tool replacing it being what agents are offered. Without
+`--verified` the same findings are printed as advice, and fail nothing.
+`secrets-kept` reads a secret declared as a field of a class
 `@meridian.settings` makes, as it reads one declared by `Setting(...)`.
 
 From contract v12 a deployment serves one MCP surface, where an agent a
