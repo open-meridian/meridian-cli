@@ -1449,60 +1449,105 @@ fn holds_fields(plugin: &Plugin, answers: &str, page: &CommonPage) -> Result<(),
 /// Every act a plugin declares -- a route that changes something, offered to
 /// agents as a tool -- names its check tool (`checked_by=`), a read tool
 /// taking the same record, so an agent may prepare it for a person to make
-/// (contract v20, W6.26; the plan's Q5: required of a verified plugin). A
-/// route a tool replaces (`@pages.tool(replaces=...)`) is not held to it:
-/// the tool replacing it is what agents are offered.
+/// (contract v20, W6.26; the plan's Q5: required of a verified plugin). Where
+/// a tool replaces the route (`@pages.tool(replaces=...)`), the tool is what
+/// agents are offered, and it is held to it instead: unless it reads
+/// (`reads=True`, or a method that changes nothing), or the route it
+/// replaces does.
 fn acts_checked(declared: &[Declaration], constants: &HashMap<String, String>) -> Vec<Failure> {
-    let named = |declaration: &Declaration| {
-        keyword(&declaration.arguments, "name")
-            .map(|name| name.trim_matches(['"', '\'']).to_string())
-    };
+    let changes = |method: &str| method != "GET" && method != "HEAD";
+    let reads =
+        |declaration: &Declaration| keyword(&declaration.arguments, "reads") == Some("True");
+    let path_of =
+        |declaration: &Declaration| string_named(first_argument(&declaration.arguments), constants);
     let replaced = replaced_paths(declared, constants);
     let mut failures = Vec::new();
-    for route in declared.iter().filter(|route| route.kind == "route") {
-        let changing = methods_of(&route.arguments)
-            .iter()
-            .any(|method| method != "GET" && method != "HEAD");
-        let reads = keyword(&route.arguments, "reads") == Some("True");
-        let kept = keyword(&route.arguments, "tool") == Some("False");
-        let replaced_by_tool = string_named(first_argument(&route.arguments), constants)
-            .is_some_and(|path| replaced.contains(&path));
-        if !changing || reads || kept || replaced_by_tool {
-            continue;
+    let mut hold = |declaration: &Declaration, act: String| {
+        let Some(check) = keyword(&declaration.arguments, "checked_by") else {
+            failures.push(failure(
+                "role-pages",
+                &declaration.source.path,
+                declaration.line,
+                format!("{act} is an act and names no check tool, so an agent cannot prepare it"),
+                "`checked_by=\"<tool>\"`: a read tool (`reads=True`) taking the same record, \
+                 answering what the act would do and whether this person may, and `accounts=` \
+                 naming the record's paths that hold the accounts it touches, so an agent may \
+                 prepare the act for a person to make (contract v20)",
+            ));
+            return;
+        };
+        let check = check.trim_matches(['"', '\'']);
+        let declared_reading = declared.iter().any(|other| {
+            other.kind != "setting"
+                && keyword(&other.arguments, "name")
+                    .is_some_and(|name| name.trim_matches(['"', '\'']) == check)
+                && reads(other)
+        });
+        if !declared_reading {
+            failures.push(failure(
+                "role-pages",
+                &declaration.source.path,
+                declaration.line,
+                format!("{act} names the check tool {check}, which no read route declares"),
+                "declare the check: a route with `reads=True`, `name=` the tool `checked_by=` \
+                 names, taking the same record and answering what the act would do and \
+                 whether this person may (contract v20)",
+            ));
         }
-        let path = first_argument(&route.arguments)
-            .trim()
-            .trim_matches(['"', '\'']);
-        if let Some(check) = keyword(&route.arguments, "checked_by") {
-            let check = check.trim_matches(['"', '\'']);
-            let declared_reading = declared.iter().any(|other| {
-                other.kind != "setting"
-                    && named(other).as_deref() == Some(check)
-                    && keyword(&other.arguments, "reads") == Some("True")
-            });
-            if !declared_reading {
-                failures.push(failure(
-                    "role-pages",
-                    &route.source.path,
-                    route.line,
-                    format!("{path} names the check tool {check}, which no read route declares"),
-                    "declare the check: a route with `reads=True`, `name=` the tool `checked_by=` \
-                     names, taking the same record and answering what the act would do and \
-                     whether this person may (contract v20)",
-                ));
+    };
+    for declaration in declared {
+        match declaration.kind {
+            "route" => {
+                let changing = methods_of(&declaration.arguments)
+                    .iter()
+                    .any(|method| changes(method));
+                let kept = keyword(&declaration.arguments, "tool") == Some("False");
+                let replaced_by_tool =
+                    path_of(declaration).is_some_and(|path| replaced.contains(&path));
+                if !changing || reads(declaration) || kept || replaced_by_tool {
+                    continue;
+                }
+                let path = first_argument(&declaration.arguments)
+                    .trim()
+                    .trim_matches(['"', '\'']);
+                hold(declaration, path.to_string());
             }
-            continue;
+            "tool" => {
+                let Some(replaces) = keyword(&declaration.arguments, "replaces") else {
+                    continue;
+                };
+                let method = keyword(&declaration.arguments, "method")
+                    .and_then(|method| string_named(method, constants))
+                    .map_or_else(|| "POST".to_string(), |method| method.to_ascii_uppercase());
+                let tool_reads = match keyword(&declaration.arguments, "reads") {
+                    Some("True") => true,
+                    Some("False") => false,
+                    _ => !changes(&method),
+                };
+                let route_reads = string_named(replaces, constants).is_some_and(|path| {
+                    declared.iter().any(|route| {
+                        route.kind == "route"
+                            && path_of(route).as_deref() == Some(path.as_str())
+                            && methods_of(&route.arguments).contains(&method)
+                            && reads(route)
+                    })
+                });
+                if tool_reads || route_reads {
+                    continue;
+                }
+                let name = match keyword(&declaration.arguments, "name") {
+                    Some(name) if name != "None" => string_named(name, constants),
+                    _ => declaration.view.clone(),
+                };
+                let replaces = replaces.trim().trim_matches(['"', '\'']);
+                let act = match name {
+                    Some(name) => format!("the tool {name} replacing {replaces}"),
+                    None => format!("the tool replacing {replaces}"),
+                };
+                hold(declaration, act);
+            }
+            _ => {}
         }
-        failures.push(failure(
-            "role-pages",
-            &route.source.path,
-            route.line,
-            format!("{path} is an act and names no check tool, so an agent cannot prepare it"),
-            "`checked_by=\"<tool>\"`: a read tool (`reads=True`) taking the same record, \
-             answering what the act would do and whether this person may, and `accounts=` \
-             naming the record's paths that hold the accounts it touches, so an agent may \
-             prepare the act for a person to make (contract v20)",
-        ));
     }
     failures
 }

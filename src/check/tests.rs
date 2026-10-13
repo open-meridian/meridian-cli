@@ -954,6 +954,49 @@ fn a_route_a_tool_replaces_is_not_an_act_of_its_own() {
 }
 
 #[test]
+fn a_tool_replacing_an_act_names_its_check_tool() {
+    let acts = |plugin: &Scaffolded| -> Vec<(String, usize)> {
+        plugin
+            .check_verified()
+            .failures
+            .into_iter()
+            .filter(|failure| failure.rule == "role-pages")
+            .map(|failure| (failure.found, failure.line))
+            .collect()
+    };
+    let more = format!("src/{MODULE}/more.py");
+    let plugin = Scaffolded::tested("acts-replacing");
+    plugin.write(&more, REPLACED_ACTS);
+    assert_eq!(acts(&plugin), [], "each tool names its check");
+
+    // The tool replacing the link's form, its check taken away, is the act
+    // naming none, at its line; the other still names its own.
+    plugin.replace(
+        &more,
+        ", checked_by=\"check_link\")\nasync def link(",
+        ")\nasync def link(",
+    );
+    assert_eq!(
+        acts(&plugin),
+        [(
+            "the tool link replacing LINK is an act and names no check tool, so an agent \
+             cannot prepare it"
+                .into(),
+            line_of(&plugin, &more, "@pages.tool(replaces=LINK,")
+        )]
+    );
+
+    // Where the route it replaces reads, neither the route nor the tool is
+    // an act.
+    plugin.replace(
+        &more,
+        "@pages.route(LINK, levels=\"write\", methods=[\"POST\"], params=LinkAsked)",
+        "@pages.route(LINK, levels=\"write\", methods=[\"POST\"], params=LinkAsked, reads=True)",
+    );
+    assert_eq!(acts(&plugin), []);
+}
+
+#[test]
 fn the_runtimes_harness_copied_for_e2e_is_not_the_plugin() {
     let plugin = Scaffolded::new("e2e-harness");
     // What core's plugin harness reads, copied where its README and the docs
