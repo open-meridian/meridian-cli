@@ -449,6 +449,264 @@ fn only_the_connectivity_suites_marked_cases_may_be_named_not_presented() {
     }
 }
 
+/// A connectivity plugin whose one test module is `module`, after the
+/// imports and producers every one of them shares.
+fn suite_module(label: &str, module: &str) -> Scaffolded {
+    let plugin = Scaffolded::tested(label);
+    plugin.replace("pyproject.toml", "roles = []", "roles = [\"connectivity\"]");
+    plugin.write(
+        "tests/test_suite.py",
+        &format!(
+            "import unittest\n\nimport pytest\nfrom meridian.suites import run, run_async\n\n\
+             PRODUCERS = {{}}\n\n\n{module}"
+        ),
+    );
+    plugin
+}
+
+/// What role-suite found, each with its file and line.
+fn suite_failures(report: &Report) -> Vec<(String, String, usize)> {
+    report
+        .failures
+        .iter()
+        .filter(|failure| failure.rule == "role-suite")
+        .map(|failure| (failure.found.clone(), failure.file.clone(), failure.line))
+        .collect()
+}
+
+const PASSES: &str = "def test_the_connectivity_suite():\n    \
+    report = run(\"connectivity\", PRODUCERS)\n    assert report.passed, report.failures\n";
+
+#[test]
+fn a_suite_test_skipped_or_expected_to_fail_fails_role_suite_at_its_line() {
+    // 2026-10-13: a plugin marked its connectivity suite's test
+    // xfail(strict=True) for a required case, and --run-tests passed it. Only
+    // the contract's markers (`closed_list`, `about`, `about_field`) excuse a
+    // case, so any skip or expected failure where a suite runs fails the rule,
+    // at its line, whichever way pytest or unittest is told it.
+    let excused = |word: &str| {
+        format!(
+            "`{word}` in a module that runs the connectivity suite: a test skipped or \
+             expected to fail there passes whatever the suite's cases do"
+        )
+    };
+    let decorated = |decorator: &str| format!("{decorator}\n{PASSES}");
+    let inside = |call: &str| {
+        PASSES.replace(
+            "    report = run(",
+            &format!("    {call}\n    report = run("),
+        )
+    };
+    for (module, holding, word) in [
+        (
+            decorated("@pytest.mark.xfail(strict=True, reason=\"a required case fails\")"),
+            "@pytest.mark.xfail",
+            "xfail",
+        ),
+        (
+            decorated("@pytest.mark.skip(reason=\"not yet\")"),
+            "@pytest.mark.skip",
+            "skip",
+        ),
+        (
+            decorated("@pytest.mark.skipif(True, reason=\"not yet\")"),
+            "@pytest.mark.skipif",
+            "skipif",
+        ),
+        (
+            decorated("@unittest.skip(\"not yet\")"),
+            "@unittest.skip",
+            "skip",
+        ),
+        (
+            decorated("@unittest.expectedFailure"),
+            "@unittest.expectedFailure",
+            "expectedFailure",
+        ),
+        (
+            inside("pytest.xfail(\"a required case fails\")"),
+            "pytest.xfail(",
+            "xfail",
+        ),
+        (inside("pytest.skip(\"not yet\")"), "pytest.skip(", "skip"),
+        (
+            format!("pytestmark = pytest.mark.xfail(strict=True)\n\n\n{PASSES}"),
+            "pytestmark",
+            "xfail",
+        ),
+        (
+            format!(
+                "@pytest.mark.parametrize(\"n\", [pytest.param(1, marks=pytest.mark.skip)])\n\
+                 {}",
+                PASSES.replace("suite():", "suite(n):")
+            ),
+            "pytest.param",
+            "skip",
+        ),
+    ] {
+        let plugin = suite_module("suite-excused", &module);
+        let verified = plugin.check_verified();
+        assert_eq!(
+            suite_failures(&verified),
+            [(
+                excused(word),
+                "tests/test_suite.py".to_string(),
+                line_of(&plugin, "tests/test_suite.py", holding)
+            )],
+            "{module}"
+        );
+        assert!(
+            verified.failures[0].instead.contains("`about_field`"),
+            "{}",
+            verified.failures[0].instead
+        );
+        assert!(plugin.check().passed(), "not verified, it keeps every rule");
+    }
+
+    // A conftest.py over the module reaches its tests: a marker its hook adds
+    // fails there. One beside another directory's tests does not.
+    let plugin = suite_module("suite-conftest", PASSES);
+    let hook = "def pytest_collection_modifyitems(items):\n    for item in items:\n        \
+                item.add_marker(pytest.mark.xfail(strict=True))\n";
+    plugin.write("tests/conftest.py", &format!("import pytest\n\n\n{hook}"));
+    plugin.write(
+        "tests/other/conftest.py",
+        &format!("import pytest\n\n\n{hook}"),
+    );
+    assert_eq!(
+        suite_failures(&plugin.check_verified()),
+        [(
+            "`xfail` in a conftest.py over tests/test_suite.py, which runs the connectivity \
+             suite: a test skipped or expected to fail there passes whatever the suite's cases do"
+                .to_string(),
+            "tests/conftest.py".to_string(),
+            6
+        )]
+    );
+
+    // Said in a comment or a string, it marks nothing.
+    let plugin = suite_module(
+        "suite-said",
+        &format!(
+            "# Never pytest.mark.xfail here: a case is excused only in not_presented.\n\
+             {}",
+            PASSES.replace(
+                "    report = run(",
+                "    \"\"\"No skip(), no xfail.\"\"\"\n    report = run("
+            )
+        ),
+    );
+    let verified = plugin.check_verified();
+    assert!(verified.passed(), "{}", text(&verified));
+}
+
+#[test]
+fn a_suite_test_asserts_its_report_passed_in_the_statement_after_the_run() {
+    // The SDK's runner reports rather than raises: a test asserting less than
+    // `report.passed`, right after the run, passes --run-tests with a required
+    // case failing. The templates' idiom is held; anything else fails at the
+    // first run of the suite.
+    let missing = "it runs the connectivity suite, and no test asserts the report passed";
+    for module in [
+        // Run, and nothing asserted.
+        "def test_the_connectivity_suite():\n    run(\"connectivity\", PRODUCERS)\n".to_string(),
+        // A count, or one case.
+        PASSES.replace(
+            "assert report.passed, report.failures",
+            "assert len(report.passed_cases) == 20",
+        ),
+        PASSES.replace(
+            "assert report.passed, report.failures",
+            "assert \"sends-nothing-new-on-a-pause\" not in report.failures",
+        ),
+        PASSES.replace("assert report.passed", "assert not report.passed"),
+        // Its failure caught.
+        PASSES.replace(
+            "    assert report.passed, report.failures\n",
+            "    try:\n        assert report.passed, report.failures\n    except AssertionError:\n        pass\n",
+        ),
+        PASSES.replace(
+            "    assert report.passed, report.failures\n",
+            "    with pytest.raises(AssertionError):\n        assert report.passed\n",
+        ),
+        // The report changed before it is asserted.
+        PASSES.replace(
+            "    assert report.passed",
+            "    report.failures.clear()\n    assert report.passed",
+        ),
+        // Under a condition.
+        PASSES.replace(
+            "    report = run(\"connectivity\", PRODUCERS)\n    assert report.passed, report.failures\n",
+            "    if PRODUCERS:\n        report = run(\"connectivity\", PRODUCERS)\n        assert report.passed\n",
+        ),
+        // In a function pytest does not collect, or one nested in a test.
+        PASSES.replace("def test_the_connectivity_suite", "def the_connectivity_suite"),
+        format!(
+            "def test_the_connectivity_suite():\n    {}\n    inner()\n",
+            PASSES
+                .replace("def test_the_connectivity_suite", "def inner")
+                .replace('\n', "\n    ")
+                .trim_end()
+        ),
+        format!("class Suite:\n    {}", PASSES.replace('\n', "\n    ").trim_end()),
+    ] {
+        let plugin = suite_module("suite-unasserted", &module);
+        assert_eq!(
+            suite_failures(&plugin.check_verified()),
+            [(
+                missing.to_string(),
+                "tests/test_suite.py".to_string(),
+                line_of(&plugin, "tests/test_suite.py", "run(\"connectivity\"")
+            )],
+            "{module}"
+        );
+    }
+
+    // In a module pytest does not collect.
+    let plugin = suite_module("suite-helper", "");
+    std::fs::remove_file(plugin.path("tests/test_suite.py")).unwrap();
+    plugin.write(
+        "tests/suite_cases.py",
+        &format!("from meridian.suites import run\n\nPRODUCERS = {{}}\n\n\n{PASSES}"),
+    );
+    let verified = plugin.check_verified();
+    assert_eq!(
+        suite_failures(&verified),
+        [(missing.to_string(), "tests/suite_cases.py".to_string(), 7)]
+    );
+    let instead = &verified.failures[0].instead;
+    assert!(
+        instead.contains("`report = run(\"connectivity\", producers, ...)` then `assert report.passed, report.failures`"),
+        "{instead}"
+    );
+
+    // The idiom holds however it is written: annotated, awaited, in a test
+    // class, without a message, beside tests that expect the suite to fail.
+    for module in [
+        PASSES.to_string(),
+        PASSES.replace("report = run(", "report: object = run("),
+        PASSES.replace(", report.failures", ""),
+        "async def test_the_connectivity_suite():\n    report = await run_async(\n        \
+         \"connectivity\",\n        PRODUCERS,\n    )\n    assert report.passed, report.failures\n"
+            .to_string(),
+        format!(
+            "class TestSuite:\n    {}",
+            PASSES
+                .replace("():", "(self):")
+                .replace('\n', "\n    ")
+                .trim_end()
+        ),
+        format!(
+            "def test_a_send_on_a_pause_fails():\n    report = run(\"connectivity\", {{}})\n    \
+             assert \"sends-nothing-new-on-a-pause\" in report.failures\n\n\n{PASSES}"
+        ),
+    ] {
+        let plugin = suite_module("suite-asserted", &module);
+        let verified = plugin.check_verified();
+        assert!(verified.passed(), "{module}\n{}", text(&verified));
+    }
+}
+
 // ── role-pages (spec/plugin-pages-follow-their-role) ─────────────────────
 
 /// The data template, changed one way, fails role-pages alone as verified,

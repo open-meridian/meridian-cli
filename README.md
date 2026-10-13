@@ -479,7 +479,21 @@ the cases a test names in `not_presented` against meridian-schema's
 `suites.json`: one no case of the suite has, or one every plugin of the role
 passes -- the data suite's `reads-its-datasets-licences` among them, and
 every case of the connectivity suite, sending nothing new on a pause and
-cancelling at the venue on a stop with them -- fails it. Without `--verified` the rule is not checked, since a plugin not passing
+cancelling at the venue on a stop with them -- fails it. From 0.1.43 it also
+holds the test to the outcome `--run-tests` then trusts: any skip or expected
+failure where a suite is run -- a marker (`pytest.mark.xfail`, strict or not,
+`skip`, `skipif`, unittest's `skip` and `expectedFailure`), a call
+(`pytest.xfail()`, `pytest.skip()`, `importorskip`), or a `pytestmark` -- in
+the module running it or a `conftest.py` over that module fails it at its
+line, since only the contract's `closed_list`, `about` and `about_field`
+excuse a case; and, since the SDK's runner reports rather than raises, a
+collected test (`test_*` in a `test_*.py`) must bind the run and assert it
+passed in the very next statement, as the SDK's templates do --
+`report = run("<role>", producers, ...)` then
+`assert report.passed, report.failures` -- under no `try`, `with`, `if` or
+loop. A test asserting a count or one case, catching the failure, or changing
+the report first fails it at the suite's first run; tests that expect the
+suite to fail may stand beside that one. Without `--verified` the rule is not checked, since a plugin not passing
 its role's suite is not verified and breaks no rule: the reference plugin
 given `custody`, recording a statement no vendor sent, keeps every rule.
 `make check-scaffolds` makes each scaffold with the release binary and runs

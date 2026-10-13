@@ -248,6 +248,17 @@ fn uncommented(source: &Source) -> String {
 /// Python, with `#` comments removed; strings, triple-quoted ones across
 /// lines included, kept whole.
 fn python_uncommented(text: &str) -> String {
+    python_scrubbed(text, false)
+}
+
+/// Python's code alone: comments removed and every string's contents
+/// blanked, its quotes and line breaks kept, so a word in a docstring is not
+/// read as code and a line number still points at its line.
+fn python_code(text: &str) -> String {
+    python_scrubbed(text, true)
+}
+
+fn python_scrubbed(text: &str, blank_strings: bool) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut quote: Option<(char, bool)> = None;
@@ -274,9 +285,10 @@ fn python_uncommented(text: &str) -> String {
                 i += 1;
             }
             Some((q, triple)) => {
+                let kept = |c: char| if blank_strings && c != '\n' { ' ' } else { c };
                 if c == '\\' && i + 1 < chars.len() {
-                    out.push(c);
-                    out.push(chars[i + 1]);
+                    out.push(kept(c));
+                    out.push(kept(chars[i + 1]));
                     i += 2;
                     continue;
                 }
@@ -292,7 +304,7 @@ fn python_uncommented(text: &str) -> String {
                     quote = None;
                     continue;
                 }
-                out.push(c);
+                out.push(kept(c));
                 i += 1;
             }
         }
@@ -996,10 +1008,143 @@ fn named_not_presented(text: &str) -> Vec<(usize, String)> {
     named
 }
 
+const EXCUSED: &str = "no xfail or skip where a role's suite is run: no marker, no \
+    `pytest.xfail()` or `pytest.skip()`, no `pytestmark`, in the test running it, its module, \
+    or a conftest.py over it. Only the contract's own markers excuse a case (`closed_list`, \
+    `about`, `about_field`), named in the run's `not_presented` with why; every other case \
+    passes, and a test skipped or expected to fail passes `--run-tests` whatever its cases do";
+
+/// What excuses a pytest test from failing: a skip or an expected failure,
+/// as pytest's marks and calls and unittest's decorators and calls say it.
+static EXCUSES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"\b(xfail|skipif|skipIf|skipUnless|importorskip|expectedFailure|skipTest|SkipTest)\b|\.\s*(skip)\b|\b(skip)\s*\(",
+    )
+    .unwrap()
+});
+
+/// Each excuse in a module's code -- its comments and strings aside -- with
+/// its line and the word that excuses.
+fn excuses(text: &str) -> Vec<(usize, String)> {
+    let code = python_code(text);
+    EXCUSES
+        .captures_iter(&code)
+        .filter_map(|found| {
+            let word = (1..=3).find_map(|group| found.get(group))?;
+            Some((line_at(&code, word.start()), word.as_str().to_string()))
+        })
+        .collect()
+}
+
+/// A test pytest collects: a `test_*.py` or `*_test.py`.
+fn collected(path: &str) -> bool {
+    let name = file_name(path);
+    (name.starts_with("test_") && name.ends_with(".py")) || name.ends_with("_test.py")
+}
+
+/// The conftest.py files whose hooks and fixtures reach a test module: in
+/// its directory, or one above it.
+fn conftests_over<'a>(plugin: &'a Plugin, module: &str) -> impl Iterator<Item = &'a Source> {
+    let dir = module
+        .rsplit_once('/')
+        .map(|(dir, _)| dir)
+        .unwrap_or("")
+        .to_string();
+    plugin.files.iter().filter(move |source| {
+        file_name(&source.path) == "conftest.py" && {
+            let over = source
+                .path
+                .rsplit_once('/')
+                .map(|(dir, _)| dir)
+                .unwrap_or("");
+            over.is_empty() || dir == over || dir.starts_with(&format!("{over}/"))
+        }
+    })
+}
+
+/// Whether a test pytest collects -- a `test*` function at the top of the
+/// module, or a method of a `Test*` class there -- binds `role`'s run and
+/// asserts it passed in the statement after, both in the test's own body
+/// (under no `try`, `with`, `if` or loop): the SDK's idiom,
+/// `report = run("<role>", producers, ...)` then
+/// `assert report.passed, report.failures`. `passed` is every case passing,
+/// those named not presented aside; the report's other fields let a test
+/// assert less.
+fn asserts_passed(text: &str, role: &str) -> bool {
+    static DEF: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^(?:async\s+)?def\s+(\w+)").unwrap());
+    static CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^class\s+(\w+)").unwrap());
+    let binds = Regex::new(&format!(
+        r#"^([A-Za-z_]\w*)\s*(?::[^=]*)?=\s*(?:await\s+)?(?:[A-Za-z_][\w.]*\.)?run(?:_async)?\(\s*["']{}["']"#,
+        regex::escape(role)
+    ))
+    .unwrap();
+    enum Scope {
+        Class { test: bool },
+        Def { test: bool, body: Option<usize> },
+    }
+    let statements = python_statements(&python_uncommented(text));
+    let indent_of = |statement: &str| statement.len() - statement.trim_start().len();
+    let mut scopes: Vec<(usize, Scope)> = Vec::new();
+    for (at, (_, statement)) in statements.iter().enumerate() {
+        let indent = indent_of(statement);
+        let code = statement.trim();
+        while scopes.last().is_some_and(|(open, _)| indent <= *open) {
+            scopes.pop();
+        }
+        if let Some((
+            _,
+            Scope::Def {
+                body: body @ None, ..
+            },
+        )) = scopes.last_mut()
+        {
+            *body = Some(indent);
+        }
+        if let Some(def) = DEF.captures(code) {
+            let at_top = match scopes.as_slice() {
+                [] => true,
+                [(_, Scope::Class { test })] => *test,
+                _ => false,
+            };
+            let test = at_top && def[1].starts_with("test");
+            scopes.push((indent, Scope::Def { test, body: None }));
+            continue;
+        }
+        if let Some(class) = CLASS.captures(code) {
+            let test = scopes.is_empty() && class[1].starts_with("Test");
+            scopes.push((indent, Scope::Class { test }));
+            continue;
+        }
+        let Some((
+            _,
+            Scope::Def {
+                test: true,
+                body: Some(body),
+            },
+        )) = scopes.last()
+        else {
+            continue;
+        };
+        let Some(bound) = binds.captures(code).filter(|_| indent == *body) else {
+            continue;
+        };
+        let asserted = Regex::new(&format!(r"^assert\s+{}\.passed\s*(?:,|$)", &bound[1])).unwrap();
+        if statements
+            .get(at + 1)
+            .is_some_and(|(_, next)| indent_of(next) == indent && asserted.is_match(next.trim()))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn role_suite(plugin: &Plugin) -> Vec<Failure> {
     const ID: &str = "role-suite";
     let (roles, _) = declared(plugin);
     let mut failures = Vec::new();
+    let mut excused: Vec<(String, usize)> = Vec::new();
     for role in roles.iter().filter(|role| SUITES.contains(&role.as_str())) {
         let runs = Regex::new(&format!(
             r#"\brun(?:_async)?\(\s*["']{}["']"#,
@@ -1034,7 +1179,31 @@ fn role_suite(plugin: &Plugin) -> Vec<Failure> {
             continue;
         }
         let cases = suite_cases(role);
-        for source in tests {
+        for source in &tests {
+            let over = conftests_over(plugin, &source.path);
+            for excusing in std::iter::once(*source).chain(over) {
+                for (line, word) in excuses(&excusing.text) {
+                    if excused.contains(&(excusing.path.clone(), line)) {
+                        continue;
+                    }
+                    excused.push((excusing.path.clone(), line));
+                    let place = if excusing.path == source.path {
+                        "in a module that runs".to_string()
+                    } else {
+                        format!("in a conftest.py over {}, which runs", source.path)
+                    };
+                    failures.push(failure(
+                        ID,
+                        &excusing.path,
+                        line,
+                        format!(
+                            "`{word}` {place} the {role} suite: a test skipped or expected to \
+                             fail there passes whatever the suite's cases do"
+                        ),
+                        EXCUSED,
+                    ));
+                }
+            }
             for (line, case) in named_not_presented(&source.text) {
                 let found = match cases.iter().find(|(name, _)| *name == case) {
                     None => format!(
@@ -1048,6 +1217,31 @@ fn role_suite(plugin: &Plugin) -> Vec<Failure> {
                 };
                 failures.push(failure(ID, &source.path, line, found, NOT_PRESENTED));
             }
+        }
+        let asserted = tests
+            .iter()
+            .any(|source| collected(&source.path) && asserts_passed(&source.text, role));
+        if !asserted {
+            let first = tests[0];
+            let line = runs
+                .find(&first.text)
+                .map(|run| line_at(&first.text, run.start()))
+                .unwrap_or(0);
+            failures.push(failure(
+                ID,
+                &first.path,
+                line,
+                format!("it runs the {role} suite, and no test asserts the report passed"),
+                &format!(
+                    "a test pytest collects (a `test_` function in a test_*.py) binding the run \
+                     and asserting it passed in the very next statement, as the SDK's templates \
+                     do: `report = run(\"{role}\", producers, ...)` then `assert report.passed, \
+                     report.failures`, under no try, with, if or loop. `passed` is every case \
+                     passing, those named not presented aside; a test asserting anything else -- \
+                     a count, one case, nothing -- or catching its failure holds the plugin to \
+                     less than its role's suite"
+                ),
+            ));
         }
     }
     failures
