@@ -511,14 +511,16 @@ pub fn mount_url(repository: &str, digest: &str, other: &str) -> String {
     format!("{repository}/blobs/uploads/?mount={digest}&from=plugins/{other}")
 }
 
-async fn record(
-    address: &str,
-    session: &Credential,
+/// What recording a version sends: its metadata, the image's digest, and the
+/// declaration as the image printed it, whole. Every key the SDK writes is
+/// carried as written -- from contract v22 `algorithms`, which SDK 0.26.0
+/// writes only for a version declaring one -- so a key the deployment reads
+/// needs no release of this binary to reach it.
+pub fn record_body(
     metadata: &Metadata,
     declaration: Option<&serde_json::Value>,
     digest: &str,
-) -> Result<(), Failed> {
-    let http = client()?;
+) -> serde_json::Value {
     let mut body = serde_json::json!({
         "name": metadata.name, "version": metadata.version, "roles": metadata.roles,
         "interface": metadata.interface,
@@ -527,7 +529,18 @@ async fn record(
     if let Some(declaration) = declaration {
         body["declaration"] = declaration.clone();
     }
-    let body = body.to_string();
+    body
+}
+
+async fn record(
+    address: &str,
+    session: &Credential,
+    metadata: &Metadata,
+    declaration: Option<&serde_json::Value>,
+    digest: &str,
+) -> Result<(), Failed> {
+    let http = client()?;
+    let body = record_body(metadata, declaration, digest).to_string();
     let (status, body, _) = session
         .send(|bearer| {
             http.post(format!("{address}/terminal/plugins"))

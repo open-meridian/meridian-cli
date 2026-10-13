@@ -54,6 +54,36 @@ fn the_image_s_declaration_is_json_and_asks_for_storage_only_at_the_edge() {
 }
 
 #[test]
+fn the_declarations_algorithms_are_sent_as_the_image_printed_them() {
+    // SDK 0.26.0 (contract v22) writes `algorithms` into the upload's JSON
+    // only for a version declaring one; upload sends it as printed.
+    let ems = vec!["ems".to_string()];
+    let printed = r#"{"not_carried": [], "secret_settings": [], "storage": null,
+                      "algorithms": [{"algorithm_id": "twap-v1",
+                                      "description": "Time-weighted slices over the order's window."}]}"#;
+    let held = declaration(printed, &ems).unwrap();
+    let metadata = metadata(TEMPLATE).unwrap();
+    let body = record_body(&metadata, Some(&held), "sha256:abc");
+    assert_eq!(
+        body["declaration"]["algorithms"],
+        serde_json::json!([{
+            "algorithm_id": "twap-v1",
+            "description": "Time-weighted slices over the order's window.",
+        }])
+    );
+    assert_eq!(body["image_digest"], "sha256:abc");
+
+    // A version declaring none: the key is absent, as the SDK left it.
+    let none = declaration(r#"{"not_carried": [], "secret_settings": []}"#, &ems).unwrap();
+    let body = record_body(&metadata, Some(&none), "sha256:abc");
+    assert!(body["declaration"].get("algorithms").is_none(), "{body}");
+    // And no declaration named: none sent.
+    assert!(record_body(&metadata, None, "sha256:abc")
+        .get("declaration")
+        .is_none());
+}
+
+#[test]
 fn roles_are_read_and_held_to_their_form() {
     let with = TEMPLATE.replace("roles = []", "roles = [\"custody\", \"reporting\"]");
     let held = metadata(&with).unwrap();

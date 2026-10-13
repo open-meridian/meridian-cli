@@ -397,9 +397,12 @@ template of its own is refused: the reference plugin takes any role in its
 `pyproject.toml`'s `[tool.meridian]` names one, `declaration =
 "<module>:<attribute>"`, it runs the SDK's `meridian-declaration` in the
 image it built, with no network, and sends what it prints: the secret
-settings' names, what the plugin receives and does not carry, and the storage
-it asks for, refused here when a plugin holding no edge role asks for
-storage. `plugin check` holds the same declaration to that (`edge-storage`).
+settings' names, what the plugin receives and does not carry, the storage it
+asks for, refused here when a plugin holding no edge role asks for storage,
+and from contract v22 the algorithms its autonomous work may name
+(`algorithms`, which SDK 0.26.0 writes only for a version declaring one):
+every key as printed, whole. `plugin check` holds the same declaration to
+that (`edge-storage`).
 `plugin check --verified` holds a plugin holding a role with a conformance
 suite (`custody`, `data` from contract v18, and `connectivity` from contract
 v22) to a test that runs the suite (`role-suite`), which `--run-tests` then
