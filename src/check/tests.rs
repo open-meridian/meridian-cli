@@ -415,7 +415,12 @@ fn only_the_connectivity_suites_marked_cases_may_be_named_not_presented() {
     // Ruled 2026-10-13: the calendar, locate and compliance-wait cases are
     // `about` a kind of work, the execution-venue cases `about_field` a fill's
     // place of execution; every other case every connectivity plugin passes.
+    // A locate's symbol resolved by the fact's date is about locates, and the
+    // venue-originated order's two cases are gone (no such path in v22).
     let cases = super::rules::suite_cases("connectivity");
+    for gone in ["records-a-venue-originated-order", "places-a-direct-order"] {
+        assert!(cases.iter().all(|(case, _)| case != gone), "{gone}");
+    }
     for name in [
         "sends-nothing-new-on-a-pause",
         "cancels-at-the-venue-on-a-stop",
@@ -433,6 +438,7 @@ fn only_the_connectivity_suites_marked_cases_may_be_named_not_presented() {
     let marked = [
         "reads-a-calendar",
         "records-a-locate",
+        "resolves-a-venue-symbol-by-the-facts-date",
         "reads-whether-releases-wait-for-compliance",
         "hears-an-accounts-attributes-change",
         "resolves-an-executions-venue",
@@ -2154,4 +2160,14 @@ fn the_roles_and_commands_are_roles_jsons() {
         Some(("record_holdings_statement".into(), vec!["custody".into()]))
     );
     assert_eq!(held("ListBreaks"), None, "a query is no command");
+    // Ruled 2026-10-13: no venue-originated path in v22. The oms records an
+    // order, the ems creates a placement, and a connectivity plugin neither.
+    assert_eq!(
+        held("RecordOrder"),
+        Some(("record_order".into(), vec!["oms".into()]))
+    );
+    assert_eq!(
+        held("CreatePlacement"),
+        Some(("create_placement".into(), vec!["ems".into()]))
+    );
 }

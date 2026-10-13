@@ -65,8 +65,6 @@
       "scope": {
         "publishes": [
           "ReportMissingInstrument",
-          "RecordOrder",
-          "CreatePlacement",
           "RequestPlacementChange",
           "ReportPlacement",
           "ReportExecution",
@@ -1075,7 +1073,6 @@
       "topic": "platform.book.command.create-placement",
       "roles": {
         "publishes": [
-          "connectivity",
           "ems"
         ]
       },
@@ -1786,7 +1783,6 @@
       "topic": "platform.book.command.record-order",
       "roles": {
         "publishes": [
-          "connectivity",
           "oms"
         ]
       },

@@ -912,7 +912,7 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at 62b7e33 (contract v22), byte
+/// meridian-schema's boundaries/suites.json at 3d15320 (contract v22), byte
 /// for byte: each role's suite and its cases.
 const SUITES_JSON: &str = include_str!("suites.json");
 
@@ -2337,7 +2337,7 @@ fn runs_as_checked(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at 411a04e (contract v22), byte
+/// meridian-schema's boundaries/roles.json at 3d15320 (contract v22), byte
 /// for byte: its `operations` say which roles hold each command.
 const ROLES_JSON: &str = include_str!("roles.json");
 

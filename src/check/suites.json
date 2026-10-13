@@ -465,19 +465,6 @@
           ]
         },
         {
-          "name": "records-a-venue-originated-order",
-          "given": "the venue originates an order on an account the ems mapped",
-          "expect": [
-            {
-              "row": "RecordOrder",
-              "fields": {
-                "venue_account_code": "<set>",
-                "origin": "ORDER_ORIGIN_VENUE"
-              }
-            }
-          ]
-        },
-        {
           "name": "sends-nothing-new-on-a-pause",
           "given": "a pause on this plugin is in force, and a placement naming it is created",
           "expect": [
@@ -588,26 +575,6 @@
           ]
         },
         {
-          "name": "places-a-direct-order",
-          "given": "the venue originates an order on an account the ems mapped, and the plugin records it and its placement",
-          "expect": [
-            {
-              "row": "RecordOrder",
-              "fields": {
-                "venue_account_code": "<set>",
-                "origin": "ORDER_ORIGIN_VENUE"
-              }
-            },
-            {
-              "row": "CreatePlacement",
-              "fields": {
-                "order_id": "<set>",
-                "connectivity_instance_id": "<set>"
-              }
-            }
-          ]
-        },
-        {
           "name": "records-a-locate",
           "about": "locates",
           "given": "the fund asks its prime for a locate on an account its ems mapped",
@@ -625,7 +592,8 @@
         },
         {
           "name": "resolves-a-venue-symbol-by-the-facts-date",
-          "given": "a venue-originated order names the venue's symbol",
+          "about": "locates",
+          "given": "the prime's answer to a locate names the venue's symbol",
           "expect": [
             {
               "row": "ResolveIdentifier",
@@ -635,7 +603,7 @@
               }
             },
             {
-              "row": "RecordOrder",
+              "row": "RecordLocate",
               "fields": {
                 "instrument_id": "<set>"
               }
