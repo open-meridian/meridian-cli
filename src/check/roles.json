@@ -24,6 +24,9 @@
           "basis": [
             "decisions/028"
           ]
+        },
+        {
+          "duty": "Is linked to one ems and sends only its placements, with what that ems set in the venue's account field, linking no accounts of its own (contract v22)."
         }
       ],
       "leaves_to": [
@@ -40,7 +43,7 @@
           ]
         },
         {
-          "what": "choosing venues and splitting",
+          "what": "choosing venues and splitting, and the venue's account field",
           "to": [
             "ems"
           ]
@@ -60,9 +63,33 @@
       ],
       "edge": true,
       "scope": {
-        "publishes": [],
-        "reads": [],
-        "hears": []
+        "publishes": [
+          "ReportMissingInstrument",
+          "RecordOrder",
+          "CreatePlacement",
+          "RequestPlacementChange",
+          "ReportPlacement",
+          "ReportExecution",
+          "ReportCharge",
+          "RecordLocate",
+          "ReportVenueCatalogue",
+          "ReportMissingVenue"
+        ],
+        "reads": [
+          "ResolveIdentifier",
+          "ResolveInstrument",
+          "ListAccountAttributes",
+          "ListTradingInstructions",
+          "ListOrders",
+          "ResolveVenue",
+          "ReadCalendar",
+          "ComputeDate"
+        ],
+        "hears": [
+          "AccountAttributeChanged",
+          "PlacementUpdated",
+          "TradingInstructionChanged"
+        ]
       }
     },
     {
@@ -114,13 +141,23 @@
       ],
       "edge": false,
       "scope": {
-        "publishes": [],
+        "publishes": [
+          "RecordCheck",
+          "DecideApproval",
+          "RecordLocateUse"
+        ],
         "reads": [
           "ResolveInstrument",
           "ListPositions",
           "ListBreaks",
           "ListAccountFigures",
           "ListAccountAttributes",
+          "ListTradingInstructions",
+          "ListOrders",
+          "ReadOrderHistory",
+          "ListLocates",
+          "ReadCalendar",
+          "ComputeDate",
           "ListPrices",
           "ListBars",
           "ListDatasets"
@@ -130,6 +167,11 @@
           "BreakChanged",
           "AccountFiguresRecorded",
           "AccountAttributeChanged",
+          "OrderUpdated",
+          "PlacementUpdated",
+          "ExecutionRecorded",
+          "TradingInstructionChanged",
+          "LocateUpdated",
           "PricesRecorded",
           "BarsRecorded"
         ]
@@ -244,7 +286,9 @@
         ],
         "reads": [
           "ResolveIdentifier",
-          "ReadAccountsForLinking"
+          "ReadAccountsForLinking",
+          "ReadCalendar",
+          "ComputeDate"
         ],
         "hears": []
       }
@@ -302,6 +346,8 @@
           "ResolveIdentifier",
           "ResolveInstrument",
           "ResolveVenue",
+          "ReadCalendar",
+          "ComputeDate",
           "ListTrades",
           "ListDatasets"
         ],
@@ -326,6 +372,12 @@
         },
         {
           "duty": "Works a dealer-side quote once portfolio has decided to quote."
+        },
+        {
+          "duty": "Proposes child orders under a released order in its account for its in-house strategies, each split from its parent (contract v22)."
+        },
+        {
+          "duty": "Places through the connectivity plugins linked to it, usually as a desk, setting what each placement sends in the venue's account field from its map of accounts to venue account codes (contract v22)."
         }
       ],
       "leaves_to": [
@@ -357,13 +409,35 @@
       ],
       "edge": false,
       "scope": {
-        "publishes": [],
+        "publishes": [
+          "ProposeOrder",
+          "RequestOrderChange",
+          "SetWorkingCondition",
+          "CreatePlacement",
+          "RequestPlacementChange",
+          "ReportExecution",
+          "MapVenueAccount"
+        ],
         "reads": [
+          "ResolveInstrument",
+          "ListAccountAttributes",
+          "ListTradingInstructions",
+          "ListOrders",
+          "ReadVenueCatalogue",
+          "ResolveVenue",
+          "ReadCalendar",
+          "ComputeDate",
           "ListTrades",
           "ListQuotes",
           "ListDatasets"
         ],
         "hears": [
+          "AccountAttributeChanged",
+          "OrderUpdated",
+          "PlacementUpdated",
+          "ExecutionRecorded",
+          "TradingInstructionChanged",
+          "ReportVenueCatalogue",
           "TradesRecorded",
           "QuotesRecorded"
         ]
@@ -403,7 +477,10 @@
       "edge": true,
       "scope": {
         "publishes": [],
-        "reads": [],
+        "reads": [
+          "ReadCalendar",
+          "ComputeDate"
+        ],
         "hears": []
       }
     },
@@ -455,17 +532,41 @@
       ],
       "edge": false,
       "scope": {
-        "publishes": [],
+        "publishes": [
+          "ProposeOrder",
+          "RecordOrder",
+          "RequestOrderChange",
+          "DecideApproval",
+          "ReleaseOrder",
+          "SetWorkingCondition",
+          "RequestPlacementChange",
+          "ReportExecution",
+          "AcknowledgeFlag",
+          "RecordLocateUse"
+        ],
         "reads": [
           "ResolveInstrument",
           "ListPositions",
           "ListBreaks",
-          "ListAccountAttributes"
+          "ListAccountAttributes",
+          "ListTradingInstructions",
+          "ListOrders",
+          "ReadOrderHistory",
+          "ListLocates",
+          "ReadVenueCatalogue",
+          "ReadCalendar",
+          "ComputeDate"
         ],
         "hears": [
           "PositionChanged",
           "BreakChanged",
-          "AccountAttributeChanged"
+          "AccountAttributeChanged",
+          "OrderUpdated",
+          "PlacementUpdated",
+          "ExecutionRecorded",
+          "TradingInstructionChanged",
+          "LocateUpdated",
+          "ReportVenueCatalogue"
         ]
       }
     },
@@ -520,7 +621,8 @@
           "RecordEncumbrances",
           "HandleBreak",
           "ResolveBreak",
-          "CloseBreaksAsCleared"
+          "CloseBreaksAsCleared",
+          "AcknowledgeFlag"
         ],
         "reads": [
           "ListCustodialPositions",
@@ -531,7 +633,11 @@
           "ListPositions",
           "ListBreaks",
           "ListAccountFigures",
-          "ListAccountAttributes"
+          "ListAccountAttributes",
+          "ListOrders",
+          "ReadOrderHistory",
+          "ReadCalendar",
+          "ComputeDate"
         ],
         "hears": [
           "StatementRecorded",
@@ -542,7 +648,10 @@
           "PositionChanged",
           "BreakChanged",
           "AccountFiguresRecorded",
-          "AccountAttributeChanged"
+          "AccountAttributeChanged",
+          "OrderUpdated",
+          "ExecutionRecorded",
+          "UnplacedFactRecorded"
         ]
       }
     },
@@ -561,6 +670,12 @@
         },
         {
           "duty": "Decides to quote, pass or reject on the dealer side."
+        },
+        {
+          "duty": "As an intake receiving clients' orders, or an outsourced trading desk, keeps its raw messages in its own storage (contract v22).",
+          "basis": [
+            "decisions/028"
+          ]
         }
       ],
       "leaves_to": [
@@ -583,15 +698,23 @@
           ]
         }
       ],
-      "edge": false,
+      "edge": true,
       "scope": {
-        "publishes": [],
+        "publishes": [
+          "ProposeOrder",
+          "RequestOrderChange"
+        ],
         "reads": [
           "ResolveInstrument",
           "ListPositions",
           "ListBreaks",
           "ListAccountFigures",
           "ListAccountAttributes",
+          "ListTradingInstructions",
+          "ListOrders",
+          "ListLocates",
+          "ReadCalendar",
+          "ComputeDate",
           "ListPrices",
           "ListBars",
           "ListDatasets"
@@ -601,6 +724,10 @@
           "BreakChanged",
           "AccountFiguresRecorded",
           "AccountAttributeChanged",
+          "OrderUpdated",
+          "ExecutionRecorded",
+          "TradingInstructionChanged",
+          "LocateUpdated",
           "PricesRecorded",
           "BarsRecorded"
         ]
@@ -656,6 +783,10 @@
           "ListBreaks",
           "ListAccountFigures",
           "ListAccountAttributes",
+          "ListOrders",
+          "ReadOrderHistory",
+          "ReadCalendar",
+          "ComputeDate",
           "ListPrices",
           "ListBars",
           "ListDatasets"
@@ -665,6 +796,8 @@
           "BreakChanged",
           "AccountFiguresRecorded",
           "AccountAttributeChanged",
+          "OrderUpdated",
+          "ExecutionRecorded",
           "PricesRecorded",
           "BarsRecorded"
         ]
@@ -699,7 +832,10 @@
       "edge": true,
       "scope": {
         "publishes": [],
-        "reads": [],
+        "reads": [
+          "ReadCalendar",
+          "ComputeDate"
+        ],
         "hears": []
       }
     },
@@ -731,7 +867,10 @@
       "edge": true,
       "scope": {
         "publishes": [],
-        "reads": [],
+        "reads": [
+          "ReadCalendar",
+          "ComputeDate"
+        ],
         "hears": []
       }
     },
@@ -764,6 +903,8 @@
       "scope": {
         "publishes": [],
         "reads": [
+          "ReadCalendar",
+          "ComputeDate",
           "ListPrices",
           "ListBars",
           "ListTrades",
@@ -789,6 +930,8 @@
       "roles": {
         "hears": [
           "compliance",
+          "connectivity",
+          "ems",
           "oms",
           "operations",
           "portfolio",
@@ -812,6 +955,20 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "AcknowledgeFlag",
+      "step": "W11.14",
+      "title": "Acknowledge a flag",
+      "kind": "command",
+      "topic": "platform.book.command.acknowledge-flag",
+      "roles": {
+        "publishes": [
+          "oms",
+          "operations"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "ActivityReResolved",
@@ -886,6 +1043,45 @@
       "stability": "stable"
     },
     {
+      "name": "ComputeDate",
+      "step": "W3.20",
+      "title": "Work out a date",
+      "kind": "query",
+      "topic": "platform.reference.query.compute-date",
+      "roles": {
+        "reads": [
+          "compliance",
+          "confirmation",
+          "connectivity",
+          "custody",
+          "data",
+          "ems",
+          "oms",
+          "operations",
+          "portfolio",
+          "reporting",
+          "servicing",
+          "settlement",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "CreatePlacement",
+      "step": "W11.8",
+      "title": "Create a placement",
+      "kind": "command",
+      "topic": "platform.book.command.create-placement",
+      "roles": {
+        "publishes": [
+          "connectivity",
+          "ems"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "CustodialPositionUpdated",
       "step": "W2.6",
       "title": "Publish custodial position updates",
@@ -899,6 +1095,20 @@
       "stability": "stable"
     },
     {
+      "name": "DecideApproval",
+      "step": "W11.5",
+      "title": "Require, give or override approval, or reject an order",
+      "kind": "command",
+      "topic": "platform.book.command.decide-approval",
+      "roles": {
+        "publishes": [
+          "compliance",
+          "oms"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "DeclineWant",
       "step": "W10.7",
       "title": "Want what a read could not answer",
@@ -907,6 +1117,24 @@
       "roles": {
         "publishes": [
           "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ExecutionRecorded",
+      "step": "W11.13",
+      "title": "Journal each act, and publish what changed",
+      "kind": "event",
+      "topic": "platform.book.event.execution-recorded",
+      "roles": {
+        "hears": [
+          "compliance",
+          "ems",
+          "oms",
+          "operations",
+          "portfolio",
+          "reporting"
         ]
       },
       "stability": "preview"
@@ -946,6 +1174,8 @@
       "roles": {
         "reads": [
           "compliance",
+          "connectivity",
+          "ems",
           "oms",
           "operations",
           "portfolio",
@@ -1048,6 +1278,40 @@
       "stability": "preview"
     },
     {
+      "name": "ListLocates",
+      "step": "W11.18",
+      "title": "Record a locate and the prime's answer",
+      "kind": "query",
+      "topic": "platform.book.query.list-locates",
+      "roles": {
+        "reads": [
+          "compliance",
+          "oms",
+          "portfolio"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ListOrders",
+      "step": "W11.17",
+      "title": "Read orders, and an order's history",
+      "kind": "query",
+      "topic": "platform.book.query.list-orders",
+      "roles": {
+        "reads": [
+          "compliance",
+          "connectivity",
+          "ems",
+          "oms",
+          "operations",
+          "portfolio",
+          "reporting"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ListPositions",
       "step": "W9.10",
       "title": "Read positions",
@@ -1136,6 +1400,51 @@
       "stability": "preview"
     },
     {
+      "name": "ListTradingInstructions",
+      "step": "W11.16",
+      "title": "Hear and read the trading instructions in force",
+      "kind": "query",
+      "topic": "platform.book.query.list-trading-instructions",
+      "roles": {
+        "reads": [
+          "compliance",
+          "connectivity",
+          "ems",
+          "oms",
+          "portfolio"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "LocateUpdated",
+      "step": "W11.18",
+      "title": "Record a locate and the prime's answer",
+      "kind": "event",
+      "topic": "platform.book.event.locate-updated",
+      "roles": {
+        "hears": [
+          "compliance",
+          "oms",
+          "portfolio"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "MapVenueAccount",
+      "step": "W11.22",
+      "title": "Map an account to a venue account code",
+      "kind": "command",
+      "topic": "platform.config.command.map-venue-account",
+      "roles": {
+        "publishes": [
+          "ems"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ObservationsWanted",
       "step": "W10.7",
       "title": "Want what a read could not answer",
@@ -1144,6 +1453,40 @@
       "roles": {
         "hears": [
           "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "OrderUpdated",
+      "step": "W11.13",
+      "title": "Journal each act, and publish what changed",
+      "kind": "event",
+      "topic": "platform.book.event.order-updated",
+      "roles": {
+        "hears": [
+          "compliance",
+          "ems",
+          "oms",
+          "operations",
+          "portfolio",
+          "reporting"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "PlacementUpdated",
+      "step": "W11.13",
+      "title": "Journal each act, and publish what changed",
+      "kind": "event",
+      "topic": "platform.book.event.placement-updated",
+      "roles": {
+        "hears": [
+          "compliance",
+          "connectivity",
+          "ems",
+          "oms"
         ]
       },
       "stability": "preview"
@@ -1177,6 +1520,21 @@
           "portfolio",
           "reporting",
           "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ProposeOrder",
+      "step": "W11.1",
+      "title": "Propose an order",
+      "kind": "command",
+      "topic": "platform.book.command.propose-order",
+      "roles": {
+        "publishes": [
+          "ems",
+          "oms",
+          "portfolio"
         ]
       },
       "stability": "preview"
@@ -1220,6 +1578,61 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "ReadCalendar",
+      "step": "W3.19",
+      "title": "Read a calendar",
+      "kind": "query",
+      "topic": "platform.reference.query.read-calendar",
+      "roles": {
+        "reads": [
+          "compliance",
+          "confirmation",
+          "connectivity",
+          "custody",
+          "data",
+          "ems",
+          "oms",
+          "operations",
+          "portfolio",
+          "reporting",
+          "servicing",
+          "settlement",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ReadOrderHistory",
+      "step": "W11.17",
+      "title": "Read orders, and an order's history",
+      "kind": "query",
+      "topic": "platform.book.query.order-history",
+      "roles": {
+        "reads": [
+          "compliance",
+          "oms",
+          "operations",
+          "reporting"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ReadVenueCatalogue",
+      "step": "W11.20",
+      "title": "Publish the venue's catalogue",
+      "kind": "query",
+      "topic": "platform.config.query.venue-catalogue",
+      "roles": {
+        "reads": [
+          "ems",
+          "oms"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "RecordAccountFigures",
@@ -1274,6 +1687,19 @@
       "stability": "stable"
     },
     {
+      "name": "RecordCheck",
+      "step": "W11.4",
+      "title": "Record a check",
+      "kind": "command",
+      "topic": "platform.book.command.record-check",
+      "roles": {
+        "publishes": [
+          "compliance"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "RecordEncumbrances",
       "step": "W9.15",
       "title": "Record a position's encumbrances",
@@ -1313,6 +1739,33 @@
       "stability": "stable"
     },
     {
+      "name": "RecordLocate",
+      "step": "W11.18",
+      "title": "Record a locate and the prime's answer",
+      "kind": "command",
+      "topic": "platform.book.command.record-locate",
+      "roles": {
+        "publishes": [
+          "connectivity"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RecordLocateUse",
+      "step": "W11.19",
+      "title": "Reserve, give back or consume a locate",
+      "kind": "command",
+      "topic": "platform.book.command.record-locate-use",
+      "roles": {
+        "publishes": [
+          "compliance",
+          "oms"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "RecordOpeningBalance",
       "step": "W9.1",
       "title": "Record an account's opening balance",
@@ -1324,6 +1777,20 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "RecordOrder",
+      "step": "W11.2",
+      "title": "Record an order the book did not create",
+      "kind": "command",
+      "topic": "platform.book.command.record-order",
+      "roles": {
+        "publishes": [
+          "connectivity",
+          "oms"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "RecordPrices",
@@ -1365,6 +1832,47 @@
       "stability": "preview"
     },
     {
+      "name": "ReleaseOrder",
+      "step": "W11.6",
+      "title": "Release an order",
+      "kind": "command",
+      "topic": "platform.book.command.release-order",
+      "roles": {
+        "publishes": [
+          "oms"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ReportCharge",
+      "step": "W11.12",
+      "title": "Report a charge",
+      "kind": "command",
+      "topic": "platform.book.command.report-charge",
+      "roles": {
+        "publishes": [
+          "connectivity"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ReportExecution",
+      "step": "W11.11",
+      "title": "Report an execution",
+      "kind": "command",
+      "topic": "platform.book.command.report-execution",
+      "roles": {
+        "publishes": [
+          "connectivity",
+          "ems",
+          "oms"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ReportExternalAccounts",
       "step": "W2.8",
       "title": "Report the accounts a connection reaches",
@@ -1385,6 +1893,7 @@
       "topic": "platform.reference.event.instrument-missing",
       "roles": {
         "publishes": [
+          "connectivity",
           "custody",
           "data"
         ]
@@ -1399,7 +1908,21 @@
       "topic": "platform.reference.event.venue-missing",
       "roles": {
         "publishes": [
+          "connectivity",
           "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ReportPlacement",
+      "step": "W11.10",
+      "title": "Report a placement's progress",
+      "kind": "command",
+      "topic": "platform.book.command.report-placement",
+      "roles": {
+        "publishes": [
+          "connectivity"
         ]
       },
       "stability": "preview"
@@ -1416,6 +1939,53 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "ReportVenueCatalogue",
+      "step": "W11.20",
+      "title": "Publish the venue's catalogue",
+      "kind": "event",
+      "topic": "platform.config.event.venue-catalogue",
+      "roles": {
+        "publishes": [
+          "connectivity"
+        ],
+        "hears": [
+          "ems",
+          "oms"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RequestOrderChange",
+      "step": "W11.3",
+      "title": "Ask for a change to an order",
+      "kind": "command",
+      "topic": "platform.book.command.request-order-change",
+      "roles": {
+        "publishes": [
+          "ems",
+          "oms",
+          "portfolio"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RequestPlacementChange",
+      "step": "W11.9",
+      "title": "Ask for a change to a placement",
+      "kind": "command",
+      "topic": "platform.book.command.request-placement-change",
+      "roles": {
+        "publishes": [
+          "connectivity",
+          "ems",
+          "oms"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "ResolveBreak",
@@ -1438,6 +2008,7 @@
       "topic": "platform.reference.query.resolve-identifier",
       "roles": {
         "reads": [
+          "connectivity",
           "custody",
           "data",
           "reporting"
@@ -1454,7 +2025,9 @@
       "roles": {
         "reads": [
           "compliance",
+          "connectivity",
           "data",
+          "ems",
           "oms",
           "operations",
           "portfolio",
@@ -1471,7 +2044,23 @@
       "topic": "platform.reference.query.resolve-venue",
       "roles": {
         "reads": [
-          "data"
+          "connectivity",
+          "data",
+          "ems"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "SetWorkingCondition",
+      "step": "W11.7",
+      "title": "Claim, hold or pause an order",
+      "kind": "command",
+      "topic": "platform.book.command.set-working-condition",
+      "roles": {
+        "publishes": [
+          "ems",
+          "oms"
         ]
       },
       "stability": "preview"
@@ -1512,6 +2101,36 @@
         "hears": [
           "ems",
           "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "TradingInstructionChanged",
+      "step": "W11.16",
+      "title": "Hear and read the trading instructions in force",
+      "kind": "event",
+      "topic": "platform.book.event.trading-instruction-changed",
+      "roles": {
+        "hears": [
+          "compliance",
+          "connectivity",
+          "ems",
+          "oms",
+          "portfolio"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "UnplacedFactRecorded",
+      "step": "W11.13",
+      "title": "Journal each act, and publish what changed",
+      "kind": "event",
+      "topic": "platform.book.event.unplaced-fact-recorded",
+      "roles": {
+        "hears": [
+          "operations"
         ]
       },
       "stability": "preview"
@@ -1843,11 +2462,12 @@
         },
         {
           "role": "portfolio",
-          "what": "proposing orders",
-          "pending": "the order path's first revision, after the book's"
+          "row": "ProposeOrder",
+          "as": "publishes",
+          "granted": "v22"
         }
       ],
-      "available": "Positions at v8; orders with the order path's first revision. Until a common model language exists, the model is the plugin's own data and does not move with the firm."
+      "available": "Positions at v8; orders from v22, the order path's first revision. Until a common model language exists, the model is the plugin's own data and does not move with the firm."
     },
     {
       "request": "Trade bonds by request for quote",
@@ -1867,8 +2487,15 @@
         },
         {
           "role": "connectivity",
-          "what": "sending placements and reporting the venue's answers",
-          "pending": "the order path's first revision, after the book's"
+          "row": "PlacementUpdated",
+          "as": "hears",
+          "granted": "v22"
+        },
+        {
+          "role": "connectivity",
+          "row": "ReportPlacement",
+          "as": "publishes",
+          "granted": "v22"
         },
         {
           "role": "ems",
@@ -1992,11 +2619,23 @@
       "needs": [
         {
           "role": "compliance",
-          "what": "orders, executions and bookings, and raising an alert",
-          "pending": "the order path's first revision, after the book's"
+          "row": "OrderUpdated",
+          "as": "hears",
+          "granted": "v22"
+        },
+        {
+          "role": "compliance",
+          "row": "ExecutionRecorded",
+          "as": "hears",
+          "granted": "v22"
+        },
+        {
+          "role": "compliance",
+          "what": "bookings, and raising an alert",
+          "pending": "booking (slice B) and the alerts' rows, after v22"
         }
       ],
-      "available": "With the order path's first revision; the compliance language's first terms, restrictions and limits, with it."
+      "available": "Orders and executions from v22, the order path's first revision; bookings with slice B; the compliance language's first terms, restrictions and limits, with v26."
     },
     {
       "request": "Make my book match my broker automatically",

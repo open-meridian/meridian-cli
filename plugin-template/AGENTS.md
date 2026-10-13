@@ -256,7 +256,18 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   (`owner_subject` its owner) and acts as for a person, handing
   `request.caller.header` back as `acting_for`; test it with
   `PageClient.call_tool(..., subject_kind=meridian.SubjectKind.SUBJECT_KIND_SERVICE_ACCOUNT,
-  owner_subject=...)`. Each act called so names its check tool.
+  owner_subject=...)`. Each act called so names its check tool. Work
+  running one of the version's declared algorithms
+  (`Declaration(algorithms=[AlgorithmDeclaration("twap-v1", "...")])`)
+  names it, `meridian.runs_as("ems", algorithm_id="twap-v1")`, so the book
+  records which algorithm decided or executed; keep each identifier stable
+  across versions.
+- **Work out a date in core, never by hand.** A settlement date, a spot or
+  tenor date, a roll or whether a day is a business day is
+  `plugin.compute_date(...)`, a calendar's days `plugin.read_calendar(...)`:
+  the deployment's calendars and rules, one answer for every plugin, with
+  the basis it was worked out on. A date outside a calendar's coverage is
+  answered as such, never guessed.
 
 This file is for any coding agent working on the plugin, and is committed with
 it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the

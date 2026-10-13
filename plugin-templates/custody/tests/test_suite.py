@@ -110,6 +110,24 @@ LINK = {"code": "SVF-1", "instrument": "LCL-SVF", "changed_by": "Ada Park"}
 CODES = {"sync-" + state.replace("_", "-"): code for code, state in SYNC_STATES.items()}
 ACTIVITIES = {"activity-" + k.replace("_", "-"): code for code, k in ACTIVITY_KINDS.items()}
 
+
+# The settlement calendars' reads every role holds (contract v22): a plugin
+# needing a calendar's days or a settlement date asks core, the deployment's
+# one answer, and never works one out itself.
+async def reads_a_calendar(recorder: Recorder) -> None:
+    await recorder.read_calendar(
+        calendar_id="CAL-01JAE0000000000000000USSS",
+        from_date="2026-10-01",
+        to_date="2026-10-31",
+    )
+
+
+async def asks_for_a_settlement_date(recorder: Recorder) -> None:
+    await recorder.compute_date(
+        settlement=ops.SettlementDateInputs(instrument_id="LCL-1", trade_date="2026-10-09")
+    )
+
+
 PRODUCERS: dict[str, Producer] = {
     **{name: synced(code) for name, code in CODES.items()},
     "account-kind-cash": kind("CASH", "Cash"),
@@ -153,10 +171,12 @@ PRODUCERS: dict[str, Producer] = {
     "history-from-stated": converted(
         lambda c: c.sync({**CONNECTION, "history_from": "2019-01-02"})
     ),
+    "reads-a-calendar": reads_a_calendar,
+    "asks-for-a-settlement-date": asks_for_a_settlement_date,
 }
 
 
 def test_every_case_of_the_custody_suite_passes() -> None:
     report = run("custody", PRODUCERS, instance_id=INSTANCE)
     assert report.passed, report.failures
-    assert len(report.passed_cases) == 42
+    assert len(report.passed_cases) == 44

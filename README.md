@@ -505,7 +505,8 @@ its `[tool.meridian]` roles, a `roles=` argument, and the role a suite is run
 or an access is read for (`dgm` to `data`, `ccm` to `connectivity`, `match`
 to `confirmation`); anything else naming an old role is the plugin's to
 change. From 0.24.0 to 0.25.0 (contract v21) nothing a plugin calls changed
-shape, so only the pins move.
+shape, so only the pins move, and the same from 0.25.0 to 0.26.0 (contract
+v22).
 
 ## Developing a plugin live
 
@@ -606,7 +607,11 @@ templates from `templates/`, 0.23.0 (contract v19) from 0.1.38, 0.24.0
 (contract v20) from 0.1.39, with the `custody`, `data`, `operations` and
 `reporting` templates on their roles' common parts, and 0.25.0 (contract v21)
 from 0.1.41, each scaffold's `AGENTS.md` saying how a plugin acts on its own:
-as its role's service account, through `meridian.runs_as(role)`.
+as its role's service account, through `meridian.runs_as(role)`, and 0.26.0
+(contract v22) from 0.1.42, each `AGENTS.md` saying how work running a
+declared algorithm names it (`meridian.runs_as(role, algorithm_id=...)`) and
+that a date is worked out in core (`compute_date`, `read_calendar`), and the
+custody, data and reporting suites' tests meeting their v22 cases.
 
 ## Licence
 

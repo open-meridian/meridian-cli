@@ -75,6 +75,44 @@ async def reporting_currency(recorder: Recorder) -> None:
     assert await report(recorder).currency(DAY) == "LCL-CASH-USD"
 
 
+# The settlement calendars' reads every role holds (contract v22): a plugin
+# needing a calendar's days or a settlement date asks core, the deployment's
+# one answer, and never works one out itself.
+async def reads_a_calendar(recorder: Recorder) -> None:
+    await recorder.read_calendar(
+        calendar_id="CAL-01JAE0000000000000000USSS",
+        from_date="2026-10-01",
+        to_date="2026-10-31",
+    )
+
+
+async def asks_for_a_settlement_date(recorder: Recorder) -> None:
+    await recorder.compute_date(
+        settlement=ops.SettlementDateInputs(instrument_id="LCL-1", trade_date="2026-10-09")
+    )
+
+
+# The order path's reads (contract v22): the orders in scope, caught up
+# after a loss from the watermark last seen, their fills heard, and an
+# order's history for who decided and who executed it.
+async def orders_read(recorder: Recorder) -> None:
+    first = await recorder.list_orders()
+    await recorder.list_orders(since=first.as_of)
+
+
+async def an_order_and_its_fill_heard(recorder: Recorder) -> None:
+    async def heard(_: object) -> None:
+        return None
+
+    recorder.answer("OrderUpdated", lambda _: ops.OrderUpdatedEvent())
+    recorder.answer("ExecutionRecorded", lambda _: ops.ExecutionRecordedEvent())
+    await recorder.receive(order_updated=heard, execution_recorded=heard)
+
+
+async def an_orders_history(recorder: Recorder) -> None:
+    await recorder.read_order_history(account_id="ACC-1", order_id="ORD-1")
+
+
 PRODUCERS: dict[str, Producer] = {
     "reads-the-datasets-it-may-read": datasets,
     "reads-a-business-dates-closes": valued,
@@ -82,6 +120,11 @@ PRODUCERS: dict[str, Producer] = {
     "reads-daily-bars-over-a-range": valued,
     "hears-a-bar-recorded": a_bar_heard,
     "resolves-its-reporting-currency": reporting_currency,
+    "reads-orders-and-catches-up": orders_read,
+    "hears-an-order-and-an-execution": an_order_and_its_fill_heard,
+    "reads-an-orders-history-for-the-person-roles": an_orders_history,
+    "reads-a-calendar": reads_a_calendar,
+    "asks-for-a-settlement-date": asks_for_a_settlement_date,
 }
 
 
