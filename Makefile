@@ -12,13 +12,14 @@ unexport GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
 
 .PHONY: help ci-local ci-local-deep build test lint fmt lock install-hooks e2e-up e2e-migrate \
         vendor-template check-vendored-template check-install check-c-deps check-scaffolds \
-        ci-mirror-check e2e-authority-macos
+        ci-mirror-check e2e-authority-macos advisories
 
 help:
 	@echo "  make ci-local   run every gate (the pre-push gate, and what CI mirrors)"
 	@echo "  make build      compile the binary"
 	@echo "  make test       the unit tests: every check against a fake machine"
 	@echo "  make lint       rustfmt --check and clippy with warnings denied"
+	@echo "  make advisories  no published vulnerability (RustSec) reaches the binary unexplained"
 	@echo "  make check-c-deps  aws-lc-sys is the only crate that compiles C (spec/the-cli, req. 2)"
 	@echo "  make check-install  the install script, upgrade and uninstall, against stand-in releases"
 	@echo "  make check-scaffolds  each scaffold plugin new writes, its tests and suite run, a float and a send on a pause caught"
@@ -31,8 +32,8 @@ help:
 	@echo "  make vendor-template  move the scaffolds \`plugin new\` writes to SDK_REV"
 
 # Local green is the completion signal; CI is confirmation.
-ci-local: ci-mirror-check check-vendored-template build test lint check-c-deps check-install \
-          check-scaffolds
+ci-local: ci-mirror-check check-vendored-template advisories build test lint check-c-deps \
+          check-install check-scaffolds
 	@echo
 	@echo "ci-local: GREEN"
 
@@ -94,6 +95,22 @@ lint:
 		|| { echo "lint FAILED; see it with:" >&2; \
 		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target lint --progress=plain ." >&2; exit 1; }
 	@echo "lint OK: formatting and clippy clean"
+
+# Published vulnerabilities in anything the binary links, as meridian-core's
+# gate checks them: cargo-deny at the same release against the RustSec
+# database, with deny.toml naming every exception and its reason. The stage is
+# never taken from the cache, so each run reads the database as it is now and
+# an advisory published after the last run of an unchanged Cargo.lock is
+# still found. A failure names each advisory found, with its title.
+advisories:
+	@out=$$($(DOCKER) build -f Dockerfile.rust --target advisories --no-cache-filter advisories --progress=plain . 2>&1) \
+		|| { echo "advisories FAILED: a published vulnerability reaches this binary:" >&2; \
+		     printf '%s\n' "$$out" \
+		       | sed -n -e 's/.*error\[[a-z-]*\]: /title /p' -e 's/.* ID: \(RUSTSEC-[0-9-]*\).*/id \1/p' \
+		       | awk '$$1 == "title" { sub(/^title /, ""); t = $$0; next } $$1 == "id" && !seen[$$2]++ { print "  " $$2 ": " t }' >&2; \
+		     echo "See it with:" >&2; \
+		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target advisories --no-cache-filter advisories --progress=plain ." >&2; exit 1; }
+	@echo "advisories OK: no published vulnerability reaches the binary unexplained"
 
 check-c-deps:
 	@$(DOCKER) build -f Dockerfile.rust --target c-deps . >/dev/null 2>&1 \
