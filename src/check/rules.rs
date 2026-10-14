@@ -924,15 +924,20 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at 3d15320 (contract v22), byte
-/// for byte: each role's suite and its cases.
+/// meridian-schema's boundaries/suites.json at 081175d (contract v23), byte
+/// for byte: each role's suite and its cases. role-suite reads a case's name
+/// and its markers alone, never what it expects, so an expectation written
+/// with the format's `any_of` (contract v23: each way's fields, in place of
+/// `fields`) is read as any other; matching what a plugin sent to it is the
+/// SDK's runner's, which the suite's test runs.
 const SUITES_JSON: &str = include_str!("suites.json");
 
 /// A role's suite's cases, each with whether a plugin may name it not
 /// presented, with why: a case asserting a closed list's value its source
 /// never presents (`closed_list`), from contract v19 one about a kind of data
 /// the plugin never publishes (`about`; from v22 also a kind of work it never
-/// does: calendars, settlement dates, locates, compliance waits), and from v20
+/// does: calendars, settlement dates, locates, compliance waits; from v23
+/// busts, value-date rolls and currencies not stated among them), and from v20
 /// one about a field its source never states (`about_field`; from v22 a fill's
 /// place of execution). Every other case -- the data suite's
 /// `reads-its-datasets-licences` among them -- every plugin of the role passes.

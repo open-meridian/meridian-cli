@@ -315,6 +315,43 @@ fn the_suites_are_suites_jsons() {
     let connectivity = super::rules::suite_cases("connectivity");
     assert!(connectivity.contains(&("records-a-locate".to_string(), true)));
     assert!(connectivity.contains(&("acknowledges-a-placement-naming-it".to_string(), false)));
+    // Contract v23 (the OANDA batch, approved 2026-10-13): busts and value-date
+    // rolls are `about`, and so is custody's currency not stated.
+    assert!(connectivity.contains(&("reports-a-bust".to_string(), true)));
+    assert!(connectivity.contains(&("reports-a-value-date-roll".to_string(), true)));
+    assert!(custody.contains(&("currency-not-stated".to_string(), true)));
+}
+
+#[test]
+fn a_case_expecting_any_of_its_ways_is_read_as_any_other() {
+    // Contract v23: the suite format's `any_of`, in place of `fields`. The
+    // vendored copy carries it, and role-suite reads the case -- its name and
+    // its markers -- whatever its expectation is written with.
+    let published: serde_json::Value =
+        serde_json::from_str(include_str!("suites.json")).expect("suites.json reads");
+    let case = published["suites"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|suite| suite["role"] == "connectivity")
+        .flat_map(|suite| suite["cases"].as_array().into_iter().flatten())
+        .find(|case| case["name"] == "reports-a-fill-with-its-settlement-date")
+        .expect("the case is published");
+    let asked = &case["expect"][0];
+    assert_eq!(asked["row"], "ComputeDate");
+    assert!(
+        asked.get("fields").is_none(),
+        "any_of is in place of fields"
+    );
+    assert_eq!(asked["any_of"].as_array().map(Vec::len), Some(3));
+    assert!(published["suites_are"]
+        .as_str()
+        .is_some_and(|says| says.contains("any_of")));
+    let connectivity = super::rules::suite_cases("connectivity");
+    assert!(
+        connectivity.contains(&("reports-a-fill-with-its-settlement-date".to_string(), false)),
+        "read, and required: any_of excuses nothing"
+    );
 }
 
 /// A connectivity plugin's test running its suite: `not_presented` as given.
@@ -416,7 +453,9 @@ fn only_the_connectivity_suites_marked_cases_may_be_named_not_presented() {
     // `about` a kind of work, the execution-venue cases `about_field` a fill's
     // place of execution; every other case every connectivity plugin passes.
     // A locate's symbol resolved by the fact's date is about locates, and the
-    // venue-originated order's two cases are gone (no such path in v22).
+    // venue-originated order's two cases are gone (no such path in v22). From
+    // contract v23 venue-originated fills, charges without a fill, busts and
+    // value-date rolls are `about` too.
     let cases = super::rules::suite_cases("connectivity");
     for gone in ["records-a-venue-originated-order", "places-a-direct-order"] {
         assert!(cases.iter().all(|(case, _)| case != gone), "{gone}");
@@ -443,6 +482,14 @@ fn only_the_connectivity_suites_marked_cases_may_be_named_not_presented() {
         "hears-an-accounts-attributes-change",
         "resolves-an-executions-venue",
         "reports-a-venue-not-held",
+        // Contract v23: venue-originated fills, charges without a fill, and
+        // the OANDA batch's busts and value-date rolls (approved 2026-10-13).
+        "reports-a-fill-on-no-placement",
+        "reports-a-later-fill-on-the-accepted-placement",
+        "re-reports-a-charge-on-the-accepted-placement",
+        "reports-a-charge",
+        "reports-a-bust",
+        "reports-a-value-date-roll",
     ];
     for (case, may) in &cases {
         assert_eq!(*may, marked.contains(&case.as_str()), "{case}");
