@@ -924,7 +924,7 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at 3f5f618 (contract v23), byte
+/// meridian-schema's boundaries/suites.json at 78e998e (contract v23), byte
 /// for byte: each role's suite and its cases. role-suite reads a case's name
 /// and its markers alone, never what it expects, so an expectation written
 /// with the format's `any_of` (contract v23: each way's fields, in place of
@@ -2536,7 +2536,7 @@ fn runs_as_checked(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at 3f5f618 (contract v23), byte
+/// meridian-schema's boundaries/roles.json at 78e998e (contract v23), byte
 /// for byte: its `operations` say which roles hold each command, v23's
 /// value-date roll, accept, DK and outcomes among them.
 const ROLES_JSON: &str = include_str!("roles.json");

@@ -361,6 +361,28 @@ fn records_an_outcome_expects_its_determined_or_its_final_stage() {
         data_case("restates-a-disputed-outcome")["about"],
         "disputed outcomes"
     );
+    // Custody's currency-not-stated takes a derived or a supplied currency
+    // (meridian-schema 78e998e): still about currencies not stated.
+    let custody = super::rules::suite_cases("custody");
+    assert!(custody.contains(&("currency-not-stated".to_string(), true)));
+    let not_stated = published["suites"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|suite| suite["role"] == "custody")
+        .flat_map(|suite| suite["cases"].as_array().into_iter().flatten())
+        .find(|case| case["name"] == "currency-not-stated")
+        .expect("the case is published");
+    let kinds: Vec<&str> = not_stated["expect"][0]["any_of"]
+        .as_array()
+        .expect("written any_of")
+        .iter()
+        .filter_map(|way| way["provenance"][0]["kind"].as_str())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["PROVENANCE_KIND_DERIVED", "PROVENANCE_KIND_SUPPLIED"]
+    );
 }
 
 #[test]

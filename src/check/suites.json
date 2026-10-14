@@ -1118,20 +1118,32 @@
         {
           "name": "currency-not-stated",
           "about": "currencies not stated",
-          "given": "the venue states no currency for a holding, and states its average cost",
+          "given": "the venue states no currency for a holding, and states its average cost; the plugin derives the currency by a named rule, or the plugin's admin supplied the account's currency",
           "expect": [
             {
               "row": "RecordHolding",
-              "fields": {
-                "currency_assumed": "<unset>",
-                "provenance": [
-                  {
-                    "field": "average_cost.currency_code",
-                    "kind": "PROVENANCE_KIND_DERIVED",
-                    "rule": "<set>"
-                  }
-                ]
-              }
+              "any_of": [
+                {
+                  "currency_assumed": "<unset>",
+                  "provenance": [
+                    {
+                      "field": "average_cost.currency_code",
+                      "kind": "PROVENANCE_KIND_DERIVED",
+                      "rule": "<set>"
+                    }
+                  ]
+                },
+                {
+                  "currency_assumed": "<unset>",
+                  "provenance": [
+                    {
+                      "field": "average_cost.currency_code",
+                      "kind": "PROVENANCE_KIND_SUPPLIED",
+                      "person": "<set>"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "row": "ResolveIdentifier",
