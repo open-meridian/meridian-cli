@@ -5,7 +5,7 @@
 # is the test and says what each check is; this gives it a Mac. On a Mac of
 # your own it is `make e2e-authority-macos`.
 #
-# On a release tag and by hand, and NOT on every push to main: a macOS runner
+# On a release tag and by hand, and NOT on every pull request: a macOS runner
 # is the slow and costly kind, and what this tests is what a release ships --
 # the published binary through the published install script.
 #

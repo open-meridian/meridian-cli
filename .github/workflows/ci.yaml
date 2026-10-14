@@ -8,10 +8,13 @@
 
 name: ci
 
+# On the pull request and by hand, and not again on main: a change lands
+# through a pull request that must be up to date with main and merges with a
+# merge commit, so the tree this run passed is the tree the merge puts on main
+# (the product owner, 2026-10-14).
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

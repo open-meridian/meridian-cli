@@ -686,7 +686,7 @@ The host needs Docker and nothing else: the toolchain is pinned inside
 A version tag, `v<version>` (the version in `Cargo.toml`), publishes a release: one
 binary per target (macOS and Linux, each on x86_64 and arm64), each with its
 `.sha256`, which `install.sh` and `meridian upgrade` fetch. Nothing is
-published from a push to `main`. `plugin new`'s templates are vendored from
+published from a merge to `main`. `plugin new`'s templates are vendored from
 meridian-python's `template/` and `templates/` at a pinned commit (`make vendor-template`;
 `check-vendored-template` fails when it drifts), so a release carries the SDK
 version the new plugin pins: 0.20.0 from 0.1.35, 0.21.0 from 0.1.36, 0.22.0
