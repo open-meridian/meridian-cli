@@ -924,7 +924,7 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at 081175d (contract v23), byte
+/// meridian-schema's boundaries/suites.json at 3f5f618 (contract v23), byte
 /// for byte: each role's suite and its cases. role-suite reads a case's name
 /// and its markers alone, never what it expects, so an expectation written
 /// with the format's `any_of` (contract v23: each way's fields, in place of
@@ -937,9 +937,9 @@ const SUITES_JSON: &str = include_str!("suites.json");
 /// never presents (`closed_list`), from contract v19 one about a kind of data
 /// the plugin never publishes (`about`; from v22 also a kind of work it never
 /// does: calendars, settlement dates, locates, compliance waits; from v23
-/// busts, value-date rolls and currencies not stated among them), and from v20
-/// one about a field its source never states (`about_field`; from v22 a fill's
-/// place of execution). Every other case -- the data suite's
+/// busts, value-date rolls, currencies not stated and disputed outcomes among
+/// them), and from v20 one about a field its source never states
+/// (`about_field`; from v22 a fill's place of execution). Every other case -- the data suite's
 /// `reads-its-datasets-licences` among them -- every plugin of the role passes.
 pub(crate) fn suite_cases(role: &str) -> Vec<(String, bool)> {
     let published: serde_json::Value =
@@ -2536,8 +2536,9 @@ fn runs_as_checked(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at 3d15320 (contract v22), byte
-/// for byte: its `operations` say which roles hold each command.
+/// meridian-schema's boundaries/roles.json at 3f5f618 (contract v23), byte
+/// for byte: its `operations` say which roles hold each command, v23's
+/// value-date roll, accept, DK and outcomes among them.
 const ROLES_JSON: &str = include_str!("roles.json");
 
 /// Each command a plugin may send, as the SDK names its call

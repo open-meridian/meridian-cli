@@ -320,6 +320,47 @@ fn the_suites_are_suites_jsons() {
     assert!(connectivity.contains(&("reports-a-bust".to_string(), true)));
     assert!(connectivity.contains(&("reports-a-value-date-roll".to_string(), true)));
     assert!(custody.contains(&("currency-not-stated".to_string(), true)));
+    // v23's last items (approved 2026-10-13): the outcome cases are `about`,
+    // a disputed outcome its own kind, so a source with no dispute process
+    // names it not presented and is held to the other two only by theirs.
+    assert_eq!(optional("records-an-outcome"), Some(true), "about outcomes");
+    assert_eq!(
+        optional("restates-a-disputed-outcome"),
+        Some(true),
+        "about disputed outcomes"
+    );
+}
+
+#[test]
+fn records_an_outcome_expects_its_determined_or_its_final_stage() {
+    // v23's last items (approved 2026-10-13): the vendored copy is
+    // meridian-schema 3f5f618's, its records-an-outcome written any_of.
+    let published: serde_json::Value =
+        serde_json::from_str(include_str!("suites.json")).expect("suites.json reads");
+    let data_case = |name: &str| {
+        published["suites"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|suite| suite["role"] == "data")
+            .flat_map(|suite| suite["cases"].as_array().into_iter().flatten())
+            .find(|case| case["name"] == name)
+            .cloned()
+            .expect("the case is published")
+    };
+    let recorded = data_case("records-an-outcome");
+    let ways = recorded["expect"][0]["any_of"]
+        .as_array()
+        .expect("written any_of");
+    let stages: Vec<&str> = ways
+        .iter()
+        .filter_map(|way| way["outcomes"][0]["stage"].as_str())
+        .collect();
+    assert_eq!(stages, ["OUTCOME_STAGE_DETERMINED", "OUTCOME_STAGE_FINAL"]);
+    assert_eq!(
+        data_case("restates-a-disputed-outcome")["about"],
+        "disputed outcomes"
+    );
 }
 
 #[test]
@@ -2474,5 +2515,23 @@ fn the_roles_and_commands_are_roles_jsons() {
     assert_eq!(
         held("CreatePlacement"),
         Some(("create_placement".into(), vec!["ems".into()]))
+    );
+    // The vendored copy is v23's (meridian-schema 3f5f618): its commands
+    // and the roles that hold them.
+    assert_eq!(
+        held("ReportValueDateRoll"),
+        Some(("report_value_date_roll".into(), vec!["connectivity".into()]))
+    );
+    assert_eq!(
+        held("AcceptExecution"),
+        Some(("accept_execution".into(), vec!["ems".into()]))
+    );
+    assert_eq!(
+        held("DontKnowExecution"),
+        Some(("dont_know_execution".into(), vec!["ems".into()]))
+    );
+    assert_eq!(
+        held("RecordOutcomes"),
+        Some(("record_outcomes".into(), vec!["data".into()]))
     );
 }

@@ -1729,7 +1729,7 @@
     {
       "role": "data",
       "since": "v18",
-      "says": "A data plugin passing every case records each source's prices and bars exactly, under its dataset, its business date, its source's times and its raw record; restates a forming day under the same row key and sends an identical repeat unchanged; resolves every subject and venue before it records, reporting what does not resolve, and reads the record of a subject another source resolved to name it in its own; names a price in a token by the token's own cash instrument, never a fiat code; and records what a want asks, or declines it per subject. From v19 it records each trade it publishes with the platform's trade attributes, converted at the edge, and the side that took liquidity where its source says it, a withdrawal as a new version; and each quote it publishes with the sides its source states; and keeps a standing want of a streamed dataset current. A case about a kind of data the plugin declares it never publishes is not presented, with why. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
+      "says": "A data plugin passing every case records each source's prices and bars exactly, under its dataset, its business date, its source's times and its raw record; restates a forming day under the same row key and sends an identical repeat unchanged; resolves every subject and venue before it records, reporting what does not resolve, and reads the record of a subject another source resolved to name it in its own; names a price in a token by the token's own cash instrument, never a fiat code; and records what a want asks, or declines it per subject. From v19 it records each trade it publishes with the platform's trade attributes, converted at the edge, and the side that took liquidity where its source says it, a withdrawal as a new version; and each quote it publishes with the sides its source states; and keeps a standing want of a streamed dataset current. A case about a kind of data the plugin declares it never publishes is not presented, with why. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why; and a case about outcomes or disputed outcomes (`about`, contract v23) a plugin with no event contracts, or whose source has no disputes, marks not presented, with why.\n",
       "cases": [
         {
           "name": "a-daily-close",
@@ -2275,31 +2275,48 @@
           "name": "records-an-outcome",
           "about": "outcomes",
           "since": "v23",
-          "given": "the source determines an event contract to pay its full payout, stating its stage, its word for the result and its settlement value per contract",
+          "given": "the source determines an event contract to pay its full payout, stating its stage, determined or final, its word for the result and its settlement value per contract",
           "expect": [
             {
               "row": "RecordOutcomes",
-              "fields": {
-                "outcomes": [
-                  {
-                    "determination": "OUTCOME_DETERMINATION_PAYS",
-                    "stage": "OUTCOME_STAGE_DETERMINED",
-                    "settlement_value": "<set>",
-                    "determination_as_reported": "<set>",
-                    "meta": {
-                      "row_key": "<set>",
-                      "business_date": "<unset>",
-                      "raw": "<set>"
+              "any_of": [
+                {
+                  "outcomes": [
+                    {
+                      "determination": "OUTCOME_DETERMINATION_PAYS",
+                      "stage": "OUTCOME_STAGE_DETERMINED",
+                      "settlement_value": "<set>",
+                      "determination_as_reported": "<set>",
+                      "meta": {
+                        "row_key": "<set>",
+                        "business_date": "<unset>",
+                        "raw": "<set>"
+                      }
                     }
-                  }
-                ]
-              }
+                  ]
+                },
+                {
+                  "outcomes": [
+                    {
+                      "determination": "OUTCOME_DETERMINATION_PAYS",
+                      "stage": "OUTCOME_STAGE_FINAL",
+                      "settlement_value": "<set>",
+                      "determination_as_reported": "<set>",
+                      "meta": {
+                        "row_key": "<set>",
+                        "business_date": "<unset>",
+                        "raw": "<set>"
+                      }
+                    }
+                  ]
+                }
+              ]
             }
           ]
         },
         {
           "name": "restates-a-disputed-outcome",
-          "about": "outcomes",
+          "about": "disputed outcomes",
           "since": "v23",
           "given": "the source's determination of an event contract is disputed after it was recorded",
           "expect": [
