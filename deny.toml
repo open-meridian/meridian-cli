@@ -1,0 +1,14 @@
+# What `make advisories` checks, and every exception to it with its reason.
+#
+# Only advisories: licences and bans are other questions. An exception here is
+# a decision, so each one names the advisory, why it does not reach us, and
+# what would change that. The same check as meridian-core's, at the same
+# cargo-deny release: every Rust repository's gate checks advisories (the
+# product owner, 2026-10-14).
+
+[advisories]
+# Unmaintained crates are reported by their direct dependents' advisories when
+# they matter; failing the build on every one would make the gate noise.
+unmaintained = "workspace"
+# None: every published vulnerability in anything the CLI links fails the gate.
+ignore = []
