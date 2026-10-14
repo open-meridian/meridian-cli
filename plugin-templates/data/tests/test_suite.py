@@ -14,9 +14,10 @@ recorded or synthetic exchange with it, and keep every case passing.
 
 A case about a kind of data (its `about`) the plugin declares it never
 publishes is not presented, with why, rather than mapped: this plugin's one
-dataset is daily closes and bars (declaration.py), so it states no trades
-and no quotes. Declare a dataset of trades or quotes and those cases are
-required again, and fail until each is mapped.
+dataset is daily closes and bars (declaration.py), so it states no trades,
+no quotes and no event contract's outcomes. Declare a dataset of trades,
+quotes or outcomes and those cases are required again, and fail until each
+is mapped.
 """
 
 from __future__ import annotations
@@ -182,7 +183,12 @@ PRODUCERS: dict[str, Producer] = {
 #: Each kind of data a case may be about that is one of the lake's data
 #: types, by its message: a case about one the catalogue does not declare is
 #: about something this plugin never publishes.
-KINDS = {"trades": "meridian.v1.Trade", "quotes": "meridian.v1.Quote"}
+KINDS = {
+    "trades": "meridian.v1.Trade",
+    "quotes": "meridian.v1.Quote",
+    "outcomes": "meridian.v1.Outcome",
+    "disputed outcomes": "meridian.v1.Outcome",
+}
 DECLARED = {kind for dataset in DECLARATION.catalogue for kind in dataset.data_types}
 
 NOT_PRESENTED: dict[str, str] = {

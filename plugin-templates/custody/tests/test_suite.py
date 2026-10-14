@@ -155,7 +155,7 @@ PRODUCERS: dict[str, Producer] = {
     "pending-by-value-date": holdings(
         positions=[position(settled=None, pending=[{"value_date": "2026-10-10", "units": "4"}])]
     ),
-    "resolve-states-what-the-source-states": holdings(positions=[position()]),
+    "resolve-gives-the-currency-with-its-provenance": holdings(positions=[position()]),
     "kind-not-converted-on-an-ambiguous-resolve": ambiguous,
     **{name: activity(code) for name, code in ACTIVITIES.items()},
     "activity-kind-not-converted": activity("ODD", type_name="Odd lot adjustment"),

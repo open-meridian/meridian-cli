@@ -128,6 +128,15 @@ PRODUCERS: dict[str, Producer] = {
 }
 
 
+#: A case about something this plugin never reports on is not presented,
+#: with why, rather than mapped (its `about`): this board values prices, and
+#: no event contract's outcome (contract v23). Value event contracts and
+#: map the case.
+NOT_PRESENTED: dict[str, str] = {
+    "hears-and-reads-an-outcome": "this board values prices, and no event contract's outcome",
+}
+
+
 def test_every_case_of_the_reporting_suite_passes() -> None:
-    report = run("reporting", PRODUCERS, instance_id="reference-1")
+    report = run("reporting", PRODUCERS, not_presented=NOT_PRESENTED, instance_id="reference-1")
     assert report.passed, report.failures
