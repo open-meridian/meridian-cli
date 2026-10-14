@@ -1190,16 +1190,57 @@
           ]
         },
         {
-          "name": "resolve-states-what-the-source-states",
-          "given": "the venue names a holding's security by its symbol and states its kind and currency",
+          "name": "resolve-gives-the-currency-with-its-provenance",
+          "given": "the venue names a holding's security by its symbol and states its kind; it states the security's currency, or the plugin derives it by a named rule, or the plugin's admin supplied the account's currency",
           "expect": [
             {
               "row": "ResolveIdentifier",
-              "fields": {
-                "identifiers": "<set>",
-                "stated_asset_class": "<set>",
-                "stated_currency": "<set>"
-              }
+              "any_of": [
+                {
+                  "identifiers": "<set>",
+                  "stated_asset_class": "<set>",
+                  "stated_currency": "<set>",
+                  "provenance": "<unset>"
+                },
+                {
+                  "identifiers": "<set>",
+                  "stated_asset_class": "<set>",
+                  "stated_currency": "<set>",
+                  "provenance": [
+                    {
+                      "field": "stated_currency",
+                      "kind": "PROVENANCE_KIND_REPORTED",
+                      "raw_record": {
+                        "key": "<set>"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "identifiers": "<set>",
+                  "stated_asset_class": "<set>",
+                  "stated_currency": "<set>",
+                  "provenance": [
+                    {
+                      "field": "stated_currency",
+                      "kind": "PROVENANCE_KIND_SUPPLIED",
+                      "person": "<set>"
+                    }
+                  ]
+                },
+                {
+                  "identifiers": "<set>",
+                  "stated_asset_class": "<set>",
+                  "stated_currency": "<set>",
+                  "provenance": [
+                    {
+                      "field": "stated_currency",
+                      "kind": "PROVENANCE_KIND_DERIVED",
+                      "rule": "<set>"
+                    }
+                  ]
+                }
+              ]
             }
           ]
         },

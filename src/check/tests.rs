@@ -383,6 +383,40 @@ fn records_an_outcome_expects_its_determined_or_its_final_stage() {
         kinds,
         ["PROVENANCE_KIND_DERIVED", "PROVENANCE_KIND_SUPPLIED"]
     );
+    // resolve-states-what-the-source-states is
+    // resolve-gives-the-currency-with-its-provenance (meridian-schema
+    // 4b193b4, approved 2026-10-13): required, any_of the currency stated and
+    // one supplied or derived with its entry on ResolveIdentifier.
+    assert!(custody.contains(&(
+        "resolve-gives-the-currency-with-its-provenance".to_string(),
+        false
+    )));
+    assert!(!custody
+        .iter()
+        .any(|(name, _)| name == "resolve-states-what-the-source-states"));
+    let resolve = published["suites"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|suite| suite["role"] == "custody")
+        .flat_map(|suite| suite["cases"].as_array().into_iter().flatten())
+        .find(|case| case["name"] == "resolve-gives-the-currency-with-its-provenance")
+        .expect("the renamed case is published");
+    let ways: Vec<&str> = resolve["expect"][0]["any_of"]
+        .as_array()
+        .expect("written any_of")
+        .iter()
+        .map(|way| way["provenance"][0]["kind"].as_str().unwrap_or("stated"))
+        .collect();
+    assert_eq!(
+        ways,
+        [
+            "stated",
+            "PROVENANCE_KIND_REPORTED",
+            "PROVENANCE_KIND_SUPPLIED",
+            "PROVENANCE_KIND_DERIVED"
+        ]
+    );
 }
 
 #[test]
