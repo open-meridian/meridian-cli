@@ -344,6 +344,62 @@ fn a_new_plugin_commits_the_agents_shared_files_and_keeps_all_of_them_out_of_its
     }
 }
 
+#[cfg(unix)]
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path).expect("there").permissions().mode() & 0o777
+}
+
+#[cfg(unix)]
+#[test]
+fn every_template_writes_its_ci_first_pre_push_hook_executable() {
+    // SDK 0.28.0's templates carry the plugin pre-push hook (CI-first): it
+    // runs nothing for a branch push and the plugin's check before a push
+    // straight to main. Git runs it only if it is executable, so it is
+    // written 0755 as git checks the template's copy out, and the copy
+    // vendored here keeps that bit too.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut templates = vec![(None, root.join("plugin-template"))];
+    for (role, _) in ROLE_TEMPLATES {
+        templates.push((Some(role), root.join("plugin-templates").join(role)));
+    }
+    for (role, vendored) in templates {
+        for held in EXECUTABLE {
+            assert_eq!(
+                mode(&vendored.join(held)),
+                0o755,
+                "{role:?}: vendored {held}"
+            );
+        }
+        let scratch = Scratch::new("hook");
+        let into = scratch.0.join("prices");
+        scaffold("prices", &into, role).expect("scaffolded");
+        let hook = into.join("hooks/pre-push");
+        assert_eq!(mode(&hook), 0o755, "{role:?}");
+        let text = std::fs::read_to_string(&hook).expect("written");
+        assert!(
+            text.starts_with("#!/usr/bin/env bash\n"),
+            "{role:?}: {text}"
+        );
+        assert!(
+            text.contains("refs/heads/main") && text.contains("meridian plugin check --run-tests"),
+            "{role:?}: {text}"
+        );
+        // Every other file stays as the system writes one: not executable.
+        for file in every_file(&into) {
+            if !EXECUTABLE.contains(&file.as_str()) {
+                assert_eq!(mode(&into.join(&file)) & 0o111, 0, "{role:?}: {file}");
+            }
+        }
+        // Kept out of the image, as the tests and CI are.
+        let dockerignore = std::fs::read_to_string(into.join(".dockerignore")).expect("written");
+        assert!(
+            dockerignore.lines().any(|l| l.trim() == "hooks"),
+            "{role:?}"
+        );
+    }
+}
+
 #[test]
 fn plugin_dev_sends_none_of_the_agents_files() {
     let scratch = Scratch::new("claude-live");
@@ -362,4 +418,6 @@ fn plugin_dev_sends_none_of_the_agents_files() {
         sent.keys().collect::<Vec<_>>()
     );
     assert!(sent.contains_key("pyproject.toml"));
+    // Nor the pre-push hook, which `.dockerignore` keeps out of the image.
+    assert!(!sent.keys().any(|path| path.starts_with("hooks")));
 }

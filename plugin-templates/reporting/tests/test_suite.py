@@ -113,6 +113,30 @@ async def an_orders_history(recorder: Recorder) -> None:
     await recorder.read_order_history(account_id="ACC-1", order_id="ORD-1")
 
 
+async def bookings_heard_and_read(recorder: Recorder) -> None:
+    """Contract v24: an order booked to its accounts, heard, and the bookings
+    read, each allocation an account's part to report."""
+
+    async def heard(_: object) -> None:
+        return None
+
+    recorder.answer("BookingUpdated", lambda _: ops.BookingUpdatedEvent())
+    await recorder.receive(booking_updated=heard)
+    await recorder.list_bookings(account_id="ACC-1")
+
+
+async def alerts_heard_and_read(recorder: Recorder) -> None:
+    """Contract v24: an alert raised, heard, and the alerts read for a
+    person's report."""
+
+    async def heard(_: object) -> None:
+        return None
+
+    recorder.answer("AlertChanged", lambda _: ops.AlertChangedEvent())
+    await recorder.receive(alert_changed=heard)
+    await recorder.list_alerts(account_id="ACC-1")
+
+
 PRODUCERS: dict[str, Producer] = {
     "reads-the-datasets-it-may-read": datasets,
     "reads-a-business-dates-closes": valued,
@@ -125,6 +149,8 @@ PRODUCERS: dict[str, Producer] = {
     "reads-an-orders-history-for-the-person-roles": an_orders_history,
     "reads-a-calendar": reads_a_calendar,
     "asks-for-a-settlement-date": asks_for_a_settlement_date,
+    "hears-and-reads-bookings": bookings_heard_and_read,
+    "hears-and-reads-alerts": alerts_heard_and_read,
 }
 
 

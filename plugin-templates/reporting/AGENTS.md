@@ -299,7 +299,14 @@ came in `meridian` 0.1.15; with an older one, the person runs
   they send against a stand-in for the sidecar; replace its tests as you
   replace the pages, and add one for each page and each operation.
 - The plugin's CI (`.github/workflows/check.yaml`) runs the same
-  `meridian plugin check --run-tests` on every push.
+  `meridian plugin check --run-tests` on every pull request and every push
+  to main.
+- **A change lands through a pull request** (CI-first): push a branch, open
+  the pull request, and merge once its CI is green. The pre-push hook
+  (`hooks/pre-push`, activated once with `git config core.hooksPath hooks`)
+  runs nothing for a branch push, and runs `meridian plugin check
+  --run-tests` before a push straight to main. Never bypass it with
+  `--no-verify`.
 
 What the check cannot decide stays advice, below: which component fits, the
 page's layout, custom properties the kit does not define, figures as strings,

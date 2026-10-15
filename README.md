@@ -427,7 +427,12 @@ Manage, an Accounts page under Open and View), a `Dockerfile`,
 `pyproject.toml`, and `AGENTS.md`, which teaches any coding agent the live
 loop below. `CLAUDE.md` and the `develop-live` skill lead Claude Code to the
 same text. Commit them with the plugin; `.dockerignore` keeps them out of its
-image.
+image. From SDK 0.28.0 (CLI 0.1.45) every template also writes the plugin's
+pre-push hook, `hooks/pre-push`, executable: CI-first, it runs nothing for a
+branch push, whose pull request's CI is the gate, and `meridian plugin check
+--run-tests` before a push straight to main. `git config core.hooksPath hooks`
+turns it on in the plugin's repository, and `.dockerignore` keeps it out of
+the image too.
 
 `--role` with `custody`, `data`, `operations` or `reporting` writes that
 role's template instead, from meridian-python's `templates/`: a whole plugin
@@ -699,7 +704,11 @@ as its role's service account, through `meridian.runs_as(role)`, and 0.26.0
 (contract v22) from 0.1.42, each `AGENTS.md` saying how work running a
 declared algorithm names it (`meridian.runs_as(role, algorithm_id=...)`) and
 that a date is worked out in core (`compute_date`, `read_calendar`), and the
-custody, data and reporting suites' tests meeting their v22 cases.
+custody, data and reporting suites' tests meeting their v22 cases, 0.27.0
+(contract v23) from 0.1.43, and 0.28.0 (contract v24) from 0.1.45, each
+scaffold with the CI-first pre-push hook (`hooks/pre-push`, written
+executable) and the custody and reporting suites' tests meeting their v24
+cases.
 
 ## Licence
 
