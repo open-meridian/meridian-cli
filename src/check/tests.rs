@@ -2590,4 +2590,102 @@ fn the_roles_and_commands_are_roles_jsons() {
         held("RecordOutcomes"),
         Some(("record_outcomes".into(), vec!["data".into()]))
     );
+    // v24's (meridian-schema a6a0af7): booking, the allocation instruction,
+    // the give-up, the alert, and the reference role's template offer.
+    for (name, call, roles) in [
+        ("BookOrder", "book_order", &["oms"][..]),
+        ("HandOffBooking", "hand_off_booking", &["oms"][..]),
+        (
+            "CorrectBooking",
+            "correct_booking",
+            &["oms", "operations"][..],
+        ),
+        ("RecordSleeveCross", "record_sleeve_cross", &["oms"][..]),
+        (
+            "SetAllocationInstruction",
+            "set_allocation_instruction",
+            &["operations", "portfolio"][..],
+        ),
+        (
+            "ReportGiveUp",
+            "report_give_up",
+            &["confirmation", "connectivity"][..],
+        ),
+        ("RaiseAlert", "raise_alert", &["compliance"][..]),
+        ("AcknowledgeAlert", "acknowledge_alert", &["compliance"][..]),
+        (
+            "OfferTemplateFields",
+            "offer_template_fields",
+            &["reference"][..],
+        ),
+    ] {
+        assert_eq!(
+            held(name),
+            Some((
+                call.to_string(),
+                roles.iter().map(|r| r.to_string()).collect()
+            )),
+            "{name}"
+        );
+    }
+    // ListReplacements is a read every role makes, not a command.
+    assert_eq!(held("ListReplacements"), None);
+}
+
+#[test]
+fn a_reference_plugin_names_a_role_of_the_deployment_and_runs_no_suite_yet() {
+    // Contract v24 adds the reference role (the one-ID spec), its suite in
+    // preview: a plugin may hold it, and --verified does not hold it to the
+    // suite yet.
+    let plugin = Scaffolded::tested("reference-role");
+    plugin.replace("pyproject.toml", "roles = []", "roles = [\"reference\"]");
+    for report in [plugin.check(), plugin.check_verified()] {
+        assert!(
+            !report.failures.iter().any(|f| f.rule == "tool-meridian"),
+            "{}",
+            text(&report)
+        );
+        assert!(
+            !report.failures.iter().any(|f| f.rule == "role-suite"),
+            "{}",
+            text(&report)
+        );
+    }
+    assert!(!super::rules::SUITES.contains(&"reference"));
+    assert!(!super::rules::EDGE_ROLES.contains(&"reference"));
+    let cases = super::rules::suite_cases("reference");
+    for case in [
+        "fills-a-template",
+        "licensed-vendor-value-stays",
+        "offers-never-overwrite-a-person",
+        "reads-the-record-it-fills",
+        "resolves-a-security-it-reconciles",
+    ] {
+        assert!(cases.iter().any(|(name, _)| name == case), "{case}");
+    }
+}
+
+#[test]
+fn every_suite_holds_v24s_replacement_and_template_cases_which_every_plugin_passes() {
+    for role in super::rules::SUITES {
+        let cases = super::rules::suite_cases(role);
+        for case in [
+            "hears-and-reads-a-replacement",
+            "reads-the-template-catalogue",
+        ] {
+            assert_eq!(
+                cases.iter().find(|(name, _)| name == case),
+                Some(&(case.to_string(), false)),
+                "{role}: {case}"
+            );
+        }
+    }
+    let custody = super::rules::suite_cases("custody");
+    assert!(custody
+        .iter()
+        .any(|(name, _)| name == "records-a-thinly-described-holding-unresolved"));
+    let connectivity = super::rules::suite_cases("connectivity");
+    assert!(connectivity
+        .iter()
+        .any(|(name, _)| name == "reports-a-give-up-rejected"));
 }

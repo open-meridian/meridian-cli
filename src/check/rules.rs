@@ -115,7 +115,7 @@ pub const TESTS_PASS: Rule = Rule {
 /// The roles a deployment has (decisions/020): meridian-design's
 /// matrix/roles.tsv, as this release of the CLI knows it. What a plugin may
 /// publish and subscribe to is its roles', and nothing else.
-pub const ROLES: [&str; 13] = [
+pub const ROLES: [&str; 14] = [
     "compliance",
     "confirmation",
     "connectivity",
@@ -125,6 +125,7 @@ pub const ROLES: [&str; 13] = [
     "oms",
     "operations",
     "portfolio",
+    "reference",
     "reporting",
     "servicing",
     "settlement",
@@ -924,12 +925,13 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at 4b193b4 (contract v23), byte
-/// for byte: each role's suite and its cases. role-suite reads a case's name
-/// and its markers alone, never what it expects, so an expectation written
-/// with the format's `any_of` (contract v23: each way's fields, in place of
-/// `fields`) is read as any other; matching what a plugin sent to it is the
-/// SDK's runner's, which the suite's test runs.
+/// meridian-schema's boundaries/suites.json at a6a0af7 (contract v24), byte
+/// for byte: each role's suite and its cases, every role's v24 cases on a
+/// replacement and the template catalogue among them. role-suite reads a
+/// case's name and its markers alone, never what it expects, so an
+/// expectation written with the format's `any_of` (contract v23: each way's
+/// fields, in place of `fields`) is read as any other; matching what a plugin
+/// sent to it is the SDK's runner's, which the suite's test runs.
 const SUITES_JSON: &str = include_str!("suites.json");
 
 /// A role's suite's cases, each with whether a plugin may name it not
@@ -2536,9 +2538,10 @@ fn runs_as_checked(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at 4b193b4 (contract v23), byte
-/// for byte: its `operations` say which roles hold each command, v23's
-/// value-date roll, accept, DK and outcomes among them.
+/// meridian-schema's boundaries/roles.json at a6a0af7 (contract v24), byte
+/// for byte: its `operations` say which roles hold each command, v24's
+/// booking (the oms's), the allocation instruction, the give-up, the alert and
+/// the reference role's template offer among them.
 const ROLES_JSON: &str = include_str!("roles.json");
 
 /// Each command a plugin may send, as the SDK names its call
