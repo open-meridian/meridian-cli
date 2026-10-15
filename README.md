@@ -618,7 +618,13 @@ or an access is read for (`dgm` to `data`, `ccm` to `connectivity`, `match`
 to `confirmation`); anything else naming an old role is the plugin's to
 change. From 0.24.0 to 0.25.0 (contract v21) nothing a plugin calls changed
 shape, so only the pins move, and the same from 0.25.0 to 0.26.0 (contract
-v22).
+v22) and from 0.26.0 to 0.27.0 (contract v23). From 0.27.0 to 0.28.0
+(contract v24, one ID for every instrument) the SDK's step rewrites a
+record's `instrument_id.startswith("LCL-")` into its `provisional` mark, the
+platform's ID read from the `open_meridian` identifier into the record's
+`instrument_id`, and a test's `LCL-suite-n` into `INS-suite-n`; a prefix test
+or an `open_meridian` read with no record at hand is left by hand, and the
+check after it warns of an ID the plugin keeps (`replaced-ids-followed`).
 
 ## Developing a plugin live
 

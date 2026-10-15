@@ -622,3 +622,162 @@ async fn a_data_plugin_written_as_a_dgm_on_0_23_0_comes_out_holding_data() {
     let verified = crate::check::check_as(&plugin.0, false, true).unwrap();
     assert!(verified.passed(), "{}", crate::check::text(&verified));
 }
+
+#[tokio::test]
+async fn a_custody_plugin_on_0_27_0_takes_the_one_id_rewrites_of_0_28_0() {
+    // A custody plugin as 0.27.0 wrote it, testing a record's ID for the
+    // prefix LCL-, reading the platform's ID from the open_meridian
+    // identifier, and keeping an ID of its own; its test naming the suite
+    // runner's LCL-suite-1.
+    let plugin = Plugin::of_role("one-id", "custody", "0.27.0", &[]);
+    let held = concat!(
+        "import meridian\n",
+        "\n",
+        "HOUSE_CASH = \"LCL-01JHOUSECASH\"\n",
+        "\n",
+        "\n",
+        "def is_local(record):\n",
+        "    return record.instrument_id.startswith(\"LCL-\")\n",
+        "\n",
+        "\n",
+        "def platform_id(record):\n",
+        "    return next(i.value for i in record.identifiers if i.scheme == \"open_meridian\")\n",
+        "\n",
+        "\n",
+        "def kept_local(held_id):\n",
+        "    return held_id.startswith(\"LCL-\")\n",
+    );
+    plugin.write("src/migrated_plugin/held.py", held);
+    plugin.write(
+        "tests/test_held.py",
+        "def test_resolved():\n    assert \"LCL-suite-1\"\n",
+    );
+
+    // The SDK's 0.27.0 to 0.28.0 step, as it answers (its migration.toml's
+    // rules): the prefix test read as the record's provisional mark, the
+    // open_meridian read as its instrument_id, the test's fixture as the
+    // platform's ID; the prefix tested with no record at hand left by hand.
+    let rewritten = held
+        .replace(
+            "record.instrument_id.startswith(\"LCL-\")",
+            "record.provisional",
+        )
+        .replace(
+            "next(i.value for i in record.identifiers if i.scheme == \"open_meridian\")",
+            "record.instrument_id",
+        );
+    let mut fake = Fake::new(
+        &serde_json::json!({
+            "from": "0.27.0",
+            "to": "0.28.0",
+            "steps": [{
+                "from": "0.27.0",
+                "to": "0.28.0",
+                "summary": "The SDK declares contract v24 (meridian.SCHEMA_VERSION). An execution is booked to its accounts.",
+                "breaking": false,
+                "rewrote": [
+                    {"file": "src/migrated_plugin/held.py", "rule": "lcl-prefix-provisional", "what": "a record's prefix test", "places": 1},
+                    {"file": "src/migrated_plugin/held.py", "rule": "open-meridian-instrument-id", "what": "the platform's ID read", "places": 1},
+                    {"file": "tests/test_held.py", "rule": "suite-fixture-ins", "what": "the suite's fixture", "places": 1},
+                ],
+            }],
+            "files": {
+                "src/migrated_plugin/held.py": rewritten,
+                "tests/test_held.py": "def test_resolved():\n    assert \"INS-suite-1\"\n",
+            },
+            "by_hand": [{
+                "from": "0.27.0",
+                "to": "0.28.0",
+                "rule": "lcl-prefix-tested",
+                "file": "src/migrated_plugin/held.py",
+                "line": 15,
+                "found": "return held_id.startswith(\"LCL-\")",
+                "what": "an ID tested for the prefix LCL- where no record is at hand",
+                "instead": "read the record's mark: resolve_instrument's instrument.provisional",
+            }],
+        })
+        .to_string(),
+    );
+    fake.index = Ok((
+        200,
+        r#"{"info": {"version": "0.28.0"}, "releases": {"0.27.0": [], "0.28.0": []}}"#.into(),
+    ));
+    let report = done(migrate(&fake, &PYTHON, &plugin.asked()).await);
+
+    // Run in 0.28.0's image, from 0.27.0, given the code and the tests.
+    let (build, dockerfile) = fake.ran_docker("build").unwrap();
+    assert_eq!(
+        build[3],
+        "meridian-migrate:ghcr.io-open-meridian-plugin-python-0.28.0"
+    );
+    assert!(dockerfile.starts_with("FROM ghcr.io/open-meridian/plugin-python:0.28.0\n"));
+    let (run, given) = fake.ran_docker("run").unwrap();
+    assert!(run.ends_with(&["--from", "0.27.0", "--to", "0.28.0"].map(String::from)));
+    let given: serde_json::Value = serde_json::from_str(&given).unwrap();
+    let files = given["files"].as_object().unwrap();
+    assert!(files.contains_key("src/migrated_plugin/held.py"));
+    assert!(files.contains_key("tests/test_held.py"));
+    // The CI-first pre-push hook is the plugin's, not the steps'.
+    assert!(!files.keys().any(|path| path.starts_with("hooks/")));
+
+    // Written: the pins, the rewritten code and its test.
+    assert_eq!(plugin.read("src/migrated_plugin/held.py"), rewritten);
+    assert!(plugin.read("tests/test_held.py").contains("INS-suite-1"));
+    assert!(plugin
+        .read("pyproject.toml")
+        .contains("open-meridian==0.28.0"));
+    assert!(plugin.read("Dockerfile").contains("plugin-python:0.28.0"));
+    assert_eq!(
+        report.wrote,
+        [
+            "Dockerfile",
+            "pyproject.toml",
+            "src/migrated_plugin/held.py",
+            "tests/test_held.py"
+        ]
+    );
+    assert!(!report.steps[0].breaking);
+
+    // Left by hand: the prefix with no record at hand, with its step.
+    assert_eq!(report.by_hand.len(), 1);
+    let left = &report.by_hand[0];
+    assert_eq!(
+        (left.rule.as_str(), left.line, left.from.as_deref()),
+        ("lcl-prefix-tested", Some(15), Some("0.27.0"))
+    );
+
+    // The check after it passes, warning of the ID the plugin keeps: a write
+    // naming it is accepted after its record is replaced (requirement 11).
+    assert!(report.check.passed(), "{}", text(&report));
+    assert_eq!(report.check.warnings.len(), 1, "{}", text(&report));
+    assert_eq!(report.check.warnings[0].rule, "replaced-ids-followed");
+    assert_eq!(report.check.warnings[0].line, 3);
+    assert!(!report.done(), "a place is left by hand");
+
+    let said = text(&report);
+    assert!(
+        said.contains("open-meridian 0.27.0 to 0.28.0, the steps run in ghcr.io/open-meridian/plugin-python:0.28.0"),
+        "{said}"
+    );
+    assert!(
+        said.contains("0.27.0 to 0.28.0  The SDK declares contract v24 (meridian.SCHEMA_VERSION)."),
+        "{said}"
+    );
+    assert!(
+        said.contains(
+            "src/migrated_plugin/held.py  lcl-prefix-provisional, open-meridian-instrument-id"
+        ) && said.contains("tests/test_held.py           suite-fixture-ins"),
+        "{said}"
+    );
+    assert!(
+        said.contains("lcl-prefix-tested  src/migrated_plugin/held.py:15"),
+        "{said}"
+    );
+    assert!(said.contains("warn  replaced-ids-followed"), "{said}");
+    let json = json(&report);
+    assert_eq!(
+        json["check"]["warnings"][0]["rule"],
+        "replaced-ids-followed"
+    );
+    assert_eq!(json["by_hand"][0]["to"], "0.28.0");
+}
