@@ -21,7 +21,7 @@ use super::{Failure, Plugin, Rule, Source};
 /// The rules, in the order they are reported: what the project is, what it
 /// declares, its pages, its settings, how it reaches the deployment, and its
 /// tests. Running the tests is `TESTS_PASS`, which only `--run-tests` asks.
-pub const RULES: [Rule; 16] = [
+pub const RULES: [Rule; 17] = [
     Rule {
         id: "template-shape",
         holds: "the project keeps the template's shape",
@@ -100,6 +100,12 @@ pub const RULES: [Rule; 16] = [
         check: through_the_sdk,
     },
     Rule {
+        id: "replaced-ids-followed",
+        holds: "no instrument ID kept in the code is written after its record is replaced \
+                (a warning: the deployment accepts a replaced ID)",
+        check: replaced_ids_followed,
+    },
+    Rule {
         id: "tests-exist",
         holds: "the plugin has tests",
         check: tests_exist,
@@ -170,6 +176,14 @@ pub const ONLY_VERIFIED: [&str; 2] = ["role-suite", "role-pages"];
 /// failing it (the spec's Q7: "Advice, not failure, for community and local
 /// plugins").
 pub const ADVISED: [&str; 1] = ["role-pages"];
+
+/// The rules whose findings are warnings, failing nothing whether or not the
+/// plugin is checked as verified: what they find, the deployment accepts. A
+/// write naming a replaced instrument ID is accepted forever and recorded
+/// under the record it became, and `plugin check` warns a plugin that writes
+/// one, so it can update what it keeps (spec/the-platform-master-mints-every-
+/// instrument-from-a-template, requirement 11).
+pub const WARNED: [&str; 1] = ["replaced-ids-followed"];
 
 // ── Which files ──────────────────────────────────────────────────────────
 
@@ -3614,6 +3628,61 @@ fn through_the_sdk(plugin: &Plugin) -> Vec<Failure> {
         }
     }
     failures
+}
+
+// ── replaced-ids-followed (contract v24) ─────────────────────────────────
+
+const FOLLOWED: &str = "keep no instrument's ID in the code: resolve the instrument from an \
+    identifier it states (`resolve_identifier`), or follow the kept ID to the record it became \
+    before writing it, with `meridian.CurrentIdMap` (`ids.current(\"<id>\")`, the map caught up \
+    on start and fed by `receive(replace_merged_instrument=ids.heard)`). A replaced ID is \
+    accepted on every write, forever, and recorded under the record it became, so this fails \
+    nothing";
+
+/// An instrument ID written in the plugin's code: a string holding the
+/// platform's (`INS-`) or the deployment's (`LCL-`) ID and nothing else. A
+/// provisional `LCL-` record is replaced once the platform's answers, and an
+/// `INS-` record when the platform merges it, so a write naming a kept one
+/// names a replaced ID from then on. One followed where it is written --
+/// `<map>.current("<id>")` -- is not kept. Tests are not the plugin's code:
+/// the suites' fixtures are IDs.
+fn replaced_ids_followed(plugin: &Plugin) -> Vec<Failure> {
+    const ID: &str = "replaced-ids-followed";
+    static KEPT: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#""((?:INS|LCL)-[0-9A-Za-z][0-9A-Za-z_-]*)"|'((?:INS|LCL)-[0-9A-Za-z][0-9A-Za-z_-]*)'"#)
+            .unwrap()
+    });
+    let mut warnings = Vec::new();
+    for source in python(plugin) {
+        let text = python_uncommented(&source.text);
+        for kept in KEPT.captures_iter(&text) {
+            let whole = kept.get(0).expect("the match");
+            let id = kept
+                .get(1)
+                .or_else(|| kept.get(2))
+                .expect("one side")
+                .as_str();
+            if text[..whole.start()].trim_end().ends_with(".current(") {
+                continue;
+            }
+            let whose = if id.starts_with("LCL-") {
+                "the deployment's provisional record, replaced once the platform's answers"
+            } else {
+                "the platform's record, replaced if the platform merges it"
+            };
+            warnings.push(failure(
+                ID,
+                &source.path,
+                line_at(&text, whole.start()),
+                format!(
+                    "`{id}` is an instrument's ID kept in the code ({whose}): a write naming it \
+                     then names a replaced ID"
+                ),
+                FOLLOWED,
+            ));
+        }
+    }
+    warnings
 }
 
 // ── tests ────────────────────────────────────────────────────────────────

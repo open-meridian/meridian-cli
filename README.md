@@ -570,6 +570,25 @@ binds to it -- and each `act("<tool>", ...)` in its block, the tool as
 written or through a constant; a tool named some other way, or not among the
 plugin's acts, it passes over.
 
+From contract v24 every instrument is named by the platform master's ID, and
+a deployment's provisional `LCL-` record, or an `INS-` record the platform
+merges, is replaced by the record it became. A write naming a replaced ID is
+accepted forever and recorded under that record
+(spec/the-platform-master-mints-every-instrument-from-a-template, requirement
+11), so `plugin check` warns of an instrument ID kept in the plugin's code --
+a Python string holding an `INS-` or `LCL-` ID and nothing else, outside its
+tests -- at its line (`replaced-ids-followed`): resolve the instrument from an
+identifier it states, or follow the kept ID to the record it became with
+`meridian.CurrentIdMap`; one written as `<map>.current("<id>")` is followed
+already. A warning fails nothing, verified or not: it is printed with its
+rule, file and line, and listed under `warnings` in `--json`. The check reads
+meridian-schema's v24 `roles.json` and `suites.json` (a6a0af7): `reference`
+is a role, its suite in preview and not yet held by `--verified`;
+`roles-declared` knows v24's commands and the roles holding them (booking's,
+`set_allocation_instruction`, `report_give_up`, the alerts',
+`offer_template_fields`); and every suite's `hears-and-reads-a-replacement`
+and `reads-the-template-catalogue` are cases every plugin of the role passes.
+
 `launch` shows the roles the version asks for and runs it only once
 you approve them; `--yes` approves for a script that has already read them.
 Its pages are on its own name, `https://my-plugin.plugins.meridian.localhost/`,
