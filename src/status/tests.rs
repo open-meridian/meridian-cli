@@ -5,8 +5,6 @@ use super::*;
 /// A cluster answering kubectl as the test says, each call kept.
 struct Fake {
     metrics: bool,
-    snapshots: bool,
-    database: bool,
     asked: Mutex<Vec<Vec<String>>>,
 }
 
@@ -14,8 +12,6 @@ impl Fake {
     fn new() -> Fake {
         Fake {
             metrics: true,
-            snapshots: true,
-            database: true,
             asked: Mutex::new(Vec::new()),
         }
     }
@@ -66,13 +62,6 @@ impl Cluster for Fake {
         if joined.starts_with("get deployments,statefulsets") {
             return Ok(workloads().to_string());
         }
-        if joined.starts_with("get pods") && joined.contains("component=database") {
-            return Ok(if self.database {
-                serde_json::json!({"items": [pods()["items"][2].clone()]}).to_string()
-            } else {
-                serde_json::json!({"items": []}).to_string()
-            });
-        }
         if joined.starts_with("get pods") {
             return Ok(pods().to_string());
         }
@@ -86,24 +75,6 @@ impl Cluster for Fake {
             } else {
                 Err("the server could not find the requested resource".into())
             };
-        }
-        if joined.contains("pg_database") {
-            return Ok("meridian\npostgres\n".into());
-        }
-        if joined.contains("to_regclass") {
-            let has = joined.contains("-d meridian");
-            return Ok(format!(
-                "{}|{}\n",
-                if has { "t" } else { "f" },
-                if self.snapshots { "t" } else { "f" }
-            ));
-        }
-        if joined.contains("FROM book_entry") {
-            return Ok(if self.snapshots {
-                "ACC-01SNAP|1200|1792108800000000000\nACC-02FRESH|12|0\n".into()
-            } else {
-                "ACC-01SNAP|24192|0\n".into()
-            });
         }
         if joined.starts_with("logs") {
             return Ok("[pod/meridian-bor-7c9/bor] replayed ACC-01SNAP\n".into());
@@ -134,14 +105,13 @@ fn memory_quantities_read_as_bytes() {
 #[tokio::test]
 async fn status_says_each_component_and_the_books_health() {
     let fake = Fake::new();
-    let held = status(&fake, &asked()).await.unwrap();
-    assert_eq!(
-        held.components
-            .iter()
-            .map(|c| c.name.as_str())
-            .collect::<Vec<_>>(),
-        ["bor", "dashboard", "database"]
-    );
+    let mut held = status(&fake, &asked()).await.unwrap();
+    held.accounts = Ok(accounts_from(&serde_json::json!({"accounts": [
+        {"account_id": "ACC-01SNAP", "replay_length": 1200, "snapshot_at_ns": "1792108800000000000"},
+        {"account_id": "ACC-02FRESH", "replay_length": 12},
+    ]})));
+    let names: Vec<&str> = held.components.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["bor", "dashboard", "database"]);
     let bor = &held.components[0];
     assert_eq!((bor.ready, bor.wanted, bor.restarts), (1, 1, 3));
     assert_eq!(bor.last_reason, "OOMKilled");
@@ -161,27 +131,21 @@ async fn status_says_each_component_and_the_books_health() {
     let json = json_of(&held);
     assert_eq!(json["components"][0]["last_restart_reason"], "OOMKilled");
     assert_eq!(json["book_health"][0]["replay_entries"], 1200);
-
-    // Read-only: nothing but get, get --raw and psql's selects.
+    // Read-only: nothing but get and get --raw.
     for call in fake.asked.lock().unwrap().iter() {
-        let first = call[0].as_str();
-        assert!(matches!(first, "get" | "exec"), "{call:?}");
-        if first == "exec" {
-            let query = call.last().unwrap();
-            assert!(query.starts_with("SELECT"), "{query}");
-        }
+        assert_eq!(call[0], "get", "{call:?}");
     }
 }
 
 #[tokio::test]
-async fn without_metrics_or_snapshots_it_says_so() {
+async fn without_metrics_it_says_so_and_book_health_not_read_says_why() {
     let fake = Fake {
         metrics: false,
-        snapshots: false,
         ..Fake::new()
     };
-    let held = status(&fake, &asked()).await.unwrap();
+    let mut held = status(&fake, &asked()).await.unwrap();
     assert!(held.components.iter().all(|c| c.memory.is_none()));
+    held.accounts = Err("not connected to a deployment: `meridian connect` first".into());
     let said = said(&held, 0);
     assert!(
         said.contains("memory in use is not known: the cluster serves no metrics"),
@@ -189,23 +153,50 @@ async fn without_metrics_or_snapshots_it_says_so() {
     );
     assert!(said.contains("bor        1/1 ready  3 restart(s), the last OOMKilled at 2026-10-15T09:12:00Z  limit 512 MiB"), "{said}");
     assert!(
-        said.contains("ACC-01SNAP  replays 24192 entries, no snapshot yet: its whole journal"),
+        said.contains(
+            "Book health:\n  not read: not connected to a deployment: `meridian connect` first"
+        ),
         "{said}"
     );
-    assert!(health_query(false).contains("FROM book_entry GROUP BY account_id"));
-    assert!(health_query(true).contains(SNAPSHOT_TABLE));
 }
 
 #[tokio::test]
-async fn a_database_not_the_charts_own_is_said_rather_than_read() {
-    let fake = Fake {
-        database: false,
-        ..Fake::new()
-    };
-    let held = status(&fake, &asked()).await.unwrap();
-    assert!(said(&held, 0).contains(
-        "Book health:\n  not read: the book's database is not the one this chart brings"
-    ));
+async fn book_health_is_the_deployments_answer_to_read_book_health() {
+    use crate::fake_http::{serve, Asked, Reply};
+    let (address, kept) = serve(|asked: &Asked| {
+        if asked.path == BOOK_HEALTH_PATH {
+            Reply::json(
+                200,
+                serde_json::json!({"accounts": [
+                    {"account_id": "ACC-01", "replay_length": 40, "snapshot_at_ns": 1792108800000000000u64},
+                ]}),
+            )
+        } else {
+            Reply::json(404, serde_json::json!({"error": "no such route"}))
+        }
+    })
+    .await;
+    let session = crate::credential::Credential::terminal_session(&address, "a-session");
+    let accounts = book_health(&address, &session).await.unwrap();
+    assert_eq!(
+        accounts,
+        [Account {
+            account_id: "ACC-01".into(),
+            replay: 40,
+            snapshot_at_ns: Some(1_792_108_800_000_000_000)
+        }]
+    );
+    assert_eq!(
+        kept.lock().unwrap()[0].header("authorization"),
+        Some("Bearer a-session")
+    );
+
+    let (older, _) = serve(|_: &Asked| Reply::json(404, serde_json::json!({}))).await;
+    let session = crate::credential::Credential::terminal_session(&older, "a-session");
+    assert!(book_health(&older, &session)
+        .await
+        .unwrap_err()
+        .contains("does not answer ReadBookHealth yet"));
 }
 
 #[tokio::test]

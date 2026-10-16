@@ -10,14 +10,16 @@
 //! uses against its limit, where the cluster serves its metrics. Then **book
 //! health**, a section of it (item 122): per account, the replay length since
 //! the account's last snapshot -- the journal's entries the book replays to
-//! answer it -- and when that snapshot was taken (W9.10). Read-only: it
-//! changes nothing.
+//! answer it -- and when that snapshot was taken (W9.10), read from core's
+//! row ReadBookHealth (item 155) on the session `meridian connect` keeps.
+//! Read-only: it changes nothing.
 //!
 //! **`meridian logs <component> [--since <duration>]`** prints what a
 //! component's pods printed, each line under its pod's name.
 //!
-//! Both act through the administrator's own kubectl, as `doctor`, `up` and
-//! `backup` do: the chart says what runs, and this reads it.
+//! The components and logs are read through the administrator's own kubectl,
+//! as `doctor`, `up` and `backup` do: the chart says what runs, and this reads
+//! it. Book health is the deployment's own answer.
 
 use std::collections::BTreeMap;
 
@@ -230,118 +232,68 @@ pub struct Account {
     pub snapshot_at_ns: Option<u64>,
 }
 
-/// Where core keeps its snapshots, and what of them is read. PLACEHOLDER
-/// (CLI 0.1.46): core's v25 has not built its snapshots yet (W9.10, "core's
-/// own and no record kind"); the table and its columns are aligned with
-/// core's before this is pushed. Until a deployment has it, every account's
-/// replay is its whole journal, and is said so.
-pub const SNAPSHOT_TABLE: &str = "book_snapshot";
+/// Where `meridian status` reads book health: core's row `ReadBookHealth`
+/// (the product owner, 2026-10-16, item 155), through the dashboard's
+/// terminal surface as the CLI reads the catalogue, on the delegation
+/// `meridian connect` keeps; its tool is `dashboard__read_book_health`.
+///
+/// SEAM, PLACEHOLDER (CLI 0.1.46): design is adding the row; its path, its
+/// message names and its fixture replace this path and [`accounts_from`]
+/// when they land. Until a deployment answers it, book health says it is not
+/// read, and why.
+pub const BOOK_HEALTH_PATH: &str = "/terminal/book/health";
 
-/// The query reading book health from the book's database: per account, the
-/// entries after its last snapshot, and when that was taken.
-pub fn health_query(with_snapshots: bool) -> String {
-    if with_snapshots {
-        format!(
-            "SELECT e.account_id, count(*) FILTER (WHERE s.last_sequence IS NULL OR \
-             e.first_sequence > s.last_sequence), coalesce(max(s.taken_at_ns), 0) \
-             FROM book_entry e LEFT JOIN (SELECT account_id, max(last_sequence) AS \
-             last_sequence, max(taken_at_ns) AS taken_at_ns FROM {SNAPSHOT_TABLE} GROUP BY \
-             account_id) s USING (account_id) GROUP BY e.account_id ORDER BY 2 DESC, 1"
-        )
-    } else {
-        "SELECT account_id, count(*), 0 FROM book_entry GROUP BY account_id ORDER BY 2 DESC, 1"
-            .into()
-    }
-}
-
-/// psql's `-At` answer, `account|replay|taken_at_ns` a line, as accounts.
-pub fn accounts_of(printed: &str, with_snapshots: bool) -> Vec<Account> {
-    printed
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.split('|');
-            let account_id = parts.next()?.trim().to_string();
-            let replay = parts.next()?.trim().parse().ok()?;
-            let taken: u64 = parts
-                .next()
-                .and_then(|t| t.trim().parse().ok())
+/// The row's answer as accounts: per account, the replay length since its
+/// last snapshot and that snapshot's time. SEAM: the field names are taken
+/// as DESIGN25's text says them (an account, its replay length, its
+/// snapshot's time in nanoseconds) and are aligned with the fixture.
+pub fn accounts_from(answer: &serde_json::Value) -> Vec<Account> {
+    answer["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|held| {
+            let account_id = held["account_id"].as_str()?.to_string();
+            let replay = held["replay_length"]
+                .as_u64()
+                .or_else(|| held["replay_length"].as_str()?.parse().ok())?;
+            let at = held["snapshot_at_ns"]
+                .as_u64()
+                .or_else(|| held["snapshot_at_ns"].as_str()?.parse().ok())
                 .unwrap_or(0);
-            (!account_id.is_empty()).then_some(Account {
+            Some(Account {
                 account_id,
                 replay,
-                snapshot_at_ns: (with_snapshots && taken > 0).then_some(taken),
+                snapshot_at_ns: (at > 0).then_some(at),
             })
         })
         .collect()
 }
 
-/// Book health, read in the database this chart brings: the database that
-/// holds the book's journal, its accounts, and whether core's snapshots are
-/// there. A deployment on a database somebody else runs is said so.
-pub async fn book_health(cluster: &dyn Cluster, asked: &Asked) -> Result<Vec<Account>, String> {
-    let ns = asked.namespace.as_str();
-    let pods = json(
-        cluster,
-        &[
-            "get",
-            "pods",
-            "-n",
-            ns,
-            "-l",
-            &format!(
-                "app.kubernetes.io/instance={},meridian.dev/component=database",
-                asked.release
-            ),
-            "-o",
-            "json",
-        ],
-    )
-    .await?;
-    let Some(pod) = pods["items"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|pod| pod["status"]["phase"] == "Running")
-        .and_then(|pod| pod["metadata"]["name"].as_str())
-    else {
-        return Err(
-            "the book's database is not the one this chart brings, or it is not running, so its \
-             health is not read here"
-                .into(),
-        );
-    };
-    let psql = |database: String, query: String| async move {
-        cluster
-            .kubectl(&[
-                "exec", "-n", ns, pod, "--", "psql", "-X", "-At", "-U", "postgres", "-d",
-                &database, "-c", &query,
-            ])
-            .await
-    };
-    let databases = psql(
-        "postgres".into(),
-        "SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY 1".into(),
-    )
-    .await?;
-    for database in databases.lines().map(str::trim).filter(|d| !d.is_empty()) {
-        let held = psql(
-            database.to_string(),
-            format!(
-                "SELECT to_regclass('book_entry') IS NOT NULL, to_regclass('{SNAPSHOT_TABLE}') IS \
-                 NOT NULL"
-            ),
-        )
+/// Book health from the deployment: ReadBookHealth through the dashboard.
+pub async fn book_health(
+    address: &str,
+    session: &crate::credential::Credential,
+) -> Result<Vec<Account>, String> {
+    let http = crate::catalogue::http().map_err(|failed| failed.said().to_string())?;
+    let (status, body, _) = session
+        .send(|bearer| {
+            http.get(format!("{address}{BOOK_HEALTH_PATH}"))
+                .bearer_auth(bearer)
+        })
         .await
-        .unwrap_or_default();
-        let mut flags = held.trim().split('|');
-        if flags.next() != Some("t") {
-            continue;
-        }
-        let snapshots = flags.next() == Some("t");
-        let printed = psql(database.to_string(), health_query(snapshots)).await?;
-        return Ok(accounts_of(&printed, snapshots));
+        .map_err(|failed| failed.said().to_string())?;
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(format!(
+            "{address} does not answer ReadBookHealth yet: its core is older than this CLI"
+        ));
     }
-    Ok(Vec::new())
+    if !status.is_success() {
+        return Err(format!("{address} refused ({status}): {}", body.trim()));
+    }
+    let answer: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|failed| format!("{address} answered with something unreadable: {failed}"))?;
+    Ok(accounts_from(&answer))
 }
 
 /// Everything `status` reads.
@@ -404,7 +356,9 @@ pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, Stri
     Ok(Status {
         components,
         no_metrics,
-        accounts: book_health(cluster, asked).await,
+        // Read from the deployment by the caller (`book_health`), which
+        // holds the session; the cluster has no part in it.
+        accounts: Err("not read".into()),
     })
 }
 

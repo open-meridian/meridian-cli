@@ -213,17 +213,20 @@ the first time and kept 30 days; never a password. The platform is --platform's
                             version (default: community)
       --tag <vX.Y.Z>        publish: the release tag, signed with an SSH key registered on
                             the organisation, of the version pyproject.toml holds
-      --organisation <slug> <NAME?:--organisation> publish, key: the organisation the
-                            listing or the key is its; a listing is organisation/plugin
-      --reason <text>       <NAME?:--reason> key revoke: why, as the revocation records it
+      --organisation <slug> publish, key: the organisation the listing or the key is its
+                            (default: the one the plugin's git remote names); a listing
+                            is organisation/plugin
+      --reason <text>       key revoke: why, as the revocation records it
       --not-trusted-after <time>
-                            <NAME?:--not-trusted-after> key revoke: when the key stopped
-                            being trusted, as 2026-10-16T12:00Z (default: now)
+                            key revoke: when the key stopped being trusted, as
+                            2026-10-16T12:00Z (default: now)
       --to <file>           download: where the bundle goes (default:
                             <organisation>-<plugin>-<version>.plugin-bundle.tar)
       --timeout <d>         publish: how long to follow the build (default: 30m)
 
-status, logs: read-only, through kubectl, as doctor and backup are
+status, logs: read-only; the components and logs through kubectl, as doctor and backup
+are, and status's book health from the deployment, through the session meridian
+connect keeps (--deployment names one)
       --release <name>      the Helm release (default: meridian)
       --since <span>        logs: only what was printed in the last 30s, 10m, 2h or 1d
       --json                status: one JSON object on stdout
@@ -1268,17 +1271,31 @@ async fn publish_command(arguments: &Arguments, words: &[&str], platform: &str) 
         eprintln!("meridian plugin publish: takes no words; --dir names the plugin's directory\n\n{USAGE}");
         return 2;
     }
-    let (Some(registry), Some(tag), Some(organisation)) = (
+    let (Some(registry), Some(tag)) = (
         arguments.value("--registry", "--registry"),
         arguments.value("--tag", "--tag"),
-        arguments.value("--organisation", "--organisation"),
     ) else {
         eprintln!(
-            "meridian plugin publish: --registry community|verified, --tag vX.Y.Z and \
-             --organisation <slug> say what is published, and where"
+            "meridian plugin publish: --registry community|verified and --tag vX.Y.Z say what is \
+             published, and where"
         );
         return 2;
     };
+    let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
+    let given = arguments.value("--organisation", "--organisation");
+    let organisation = match registry::organisation(given, &dir, &registry::Git) {
+        Ok(organisation) => organisation,
+        Err(refused) => {
+            eprintln!("meridian plugin publish: {refused}");
+            return 2;
+        }
+    };
+    if given.is_none() {
+        eprintln!(
+            "Publishing as {organisation}, the organisation the plugin's git remote names; \
+             --organisation names another."
+        );
+    }
     let follow_for = match arguments.value("--timeout", "--timeout") {
         None => registry::FOLLOW_FOR,
         Some(given) => match upgrade_deployment::duration(given) {
@@ -1290,10 +1307,10 @@ async fn publish_command(arguments: &Arguments, words: &[&str], platform: &str) 
         },
     };
     let asked = registry::Publish {
-        dir: std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or(".")),
+        dir,
         registry: registry.into(),
         tag: tag.into(),
-        organisation: organisation.into(),
+        organisation,
         follow_for,
         follow_every: registry::FOLLOW_EVERY,
     };
@@ -1328,14 +1345,19 @@ async fn publish_command(arguments: &Arguments, words: &[&str], platform: &str) 
 /// `meridian plugin key register <file.pub> | revoke <key-id> | list`
 /// (W5.30), the organisation's tag-signing keys.
 async fn key_command(arguments: &Arguments, words: &[&str], platform: &str) -> i32 {
-    let Some(organisation) = arguments.value("--organisation", "--organisation") else {
-        eprintln!("meridian plugin key: --organisation <slug> names whose keys");
-        return 2;
+    let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
+    let organisation = match registry::organisation(
+        arguments.value("--organisation", "--organisation"),
+        &dir,
+        &registry::Git,
+    ) {
+        Ok(organisation) => organisation,
+        Err(refused) => {
+            eprintln!("meridian plugin key: {refused}");
+            return 2;
+        }
     };
-    if !registry::is_slug(organisation) {
-        eprintln!("meridian plugin key: `{organisation}` is not an organisation's slug");
-        return 2;
-    }
+    let organisation = organisation.as_str();
     enum Act {
         Register(String, String),
         Revoke(String, u64, String),
@@ -1532,7 +1554,11 @@ async fn status_command(arguments: &Arguments, namespace: &str) -> i32 {
         namespace: namespace.into(),
     };
     match status::status(&status::ThisCluster, &asked).await {
-        Ok(held) => {
+        Ok(mut held) => {
+            held.accounts = match held_session(arguments) {
+                Ok(session) => status::book_health(session.address(), &session).await,
+                Err(refusal) => Err(refusal),
+            };
             if arguments.set("--json") {
                 println!("{}", status::json_of(&held));
             } else {

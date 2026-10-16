@@ -607,10 +607,13 @@ which it prompts for as advice and requires of a verified plugin, and
 written: UTF-8, 64 KiB a section and 256 KiB in all, no HTML, no image, no
 `javascript:`, `vbscript:`, `data:` or `file:` link, no link whose text names
 one host and whose target another, no character that hides text, and nothing
-that reads as instructions to an agent (the screen's eleven rules, as core
-and the platform name them). A heading's text past one screen of the tab, a
-link shown as plain text, and a file in `docs/` that is not a section are
-advice, failing nothing. A plugin on an SDK before 0.29.0 is advised, never
+that reads as instructions to an agent (the screen's rules, as core and the
+platform name them). A heading's text past one screen of the tab, a link
+shown as plain text, a file in `docs/` that is not a section, and text the
+screen holds as "addressed to the reader" (`you need to ...`, which setup
+steps often say) are advice, failing nothing: the deployment and the
+platform show such a section to people as written and withhold it only from
+agents, never refusing it. A plugin on an SDK before 0.29.0 is advised, never
 failed. `plugin upload` sends the texts with the declaration, each held to
 the digest the declaration names, and says where the version's
 documentation is read; `plugin new` writes a prompt for each section, and
@@ -639,8 +642,9 @@ signs and pushes nothing. `download` writes a plugin bundle -- the image, its
 referrers, its documentation and the platform's signed key status -- only
 once every digest and signature verifies against the platform's keys this
 release carries; `upload --bundle` carries it into a deployment that reaches
-nothing, which verifies it again. `--organisation`, `--reason` and
-`--not-trusted-after` are proposed names, awaiting approval.
+nothing, which verifies it again. `--organisation` defaults to the
+organisation the plugin's git remote names; where that is not known, the
+command says to name it.
 
 ## status and logs
 
@@ -655,8 +659,10 @@ its pods are ready, how often they restarted and why the last time
 (`OOMKilled`), and the memory it uses against its limit where the cluster
 serves metrics. Its book health says, per account, how many journal entries
 the book replays since the account's last snapshot, and when that was taken.
-`logs` prints what a component's pods printed. Both read through kubectl and
-change nothing, so a deployment admin never runs kubectl or helm by hand.
+`logs` prints what a component's pods printed. The components and logs are
+read through kubectl, and book health is the deployment's own answer (core's
+`ReadBookHealth`, on the session `meridian connect` keeps); nothing is
+changed, and a deployment admin never runs kubectl or helm by hand.
 
 ## Moving a plugin to a newer SDK
 

@@ -528,6 +528,51 @@ pub fn github_repository(origin: &str) -> Result<String, String> {
     }
 }
 
+/// The organisation a repository is linked to, where `--organisation` names
+/// none (item 154): the slug its GitHub owner is, lower case. The platform
+/// holds the link (the GitHub App, W5.33) and refuses a publish naming an
+/// organisation the repository is not linked to, so a wrong default publishes
+/// nothing. None where the owner is no slug.
+pub fn organisation_of(repository: &str) -> Option<String> {
+    let owner = repository
+        .strip_prefix("https://github.com/")?
+        .split('/')
+        .next()?
+        .to_ascii_lowercase();
+    is_slug(&owner).then_some(owner)
+}
+
+/// `--organisation`, or the organisation the plugin's git remote is linked
+/// to; refused, naming the flag, where neither is known.
+pub fn organisation(
+    given: Option<&str>,
+    dir: &Path,
+    repository: &dyn Repository,
+) -> Result<String, String> {
+    if let Some(given) = given {
+        return if is_slug(given) {
+            Ok(given.to_string())
+        } else {
+            Err(format!(
+                "`{given}` is not an organisation's slug: lower-case letters, digits and hyphens, \
+                 at most 39"
+            ))
+        };
+    }
+    repository
+        .origin(dir)
+        .and_then(|origin| github_repository(&origin))
+        .ok()
+        .and_then(|url| organisation_of(&url))
+        .ok_or_else(|| {
+            format!(
+                "the organisation is not known from {}'s git remote: name it with --organisation \
+                 <slug>",
+                dir.display()
+            )
+        })
+}
+
 /// What `meridian plugin publish` was asked.
 pub struct Publish {
     pub dir: PathBuf,

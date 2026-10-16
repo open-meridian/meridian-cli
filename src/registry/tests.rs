@@ -494,3 +494,29 @@ async fn the_keys_are_registered_revoked_and_listed_as_the_rows_say() {
     let revoke = asked.iter().find(|a| a.method == "DELETE").unwrap();
     assert_eq!(revoke.json()["reason"], "copied");
 }
+
+#[test]
+fn the_organisation_defaults_to_the_one_the_git_remote_names() {
+    // Item 154: `--organisation` approved, defaulting to the organisation the
+    // remote is linked to; refused, naming the flag, where none is known.
+    let here = Path::new(".");
+    assert_eq!(
+        organisation(Some("open-meridian"), here, &repo()).unwrap(),
+        "open-meridian"
+    );
+    assert_eq!(organisation(None, here, &repo()).unwrap(), "acme");
+    let mixed = Repo {
+        origin: "https://github.com/Acme-Co/plugin-venue".into(),
+        ..repo()
+    };
+    assert_eq!(organisation(None, here, &mixed).unwrap(), "acme-co");
+    let elsewhere = Repo {
+        origin: "https://gitlab.com/acme/plugin-venue".into(),
+        ..repo()
+    };
+    let refused = organisation(None, here, &elsewhere).unwrap_err();
+    assert!(refused.contains("--organisation"), "{refused}");
+    assert!(organisation(Some("Not A Slug"), here, &repo())
+        .unwrap_err()
+        .contains("not an organisation's slug"));
+}
