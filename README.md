@@ -582,7 +582,9 @@ identifier it states, or follow the kept ID to the record it became with
 `meridian.CurrentIdMap`; one written as `<map>.current("<id>")` is followed
 already. A warning fails nothing, verified or not: it is printed with its
 rule, file and line, and listed under `warnings` in `--json`. The check reads
-meridian-schema's v24 `roles.json` and `suites.json` (a6a0af7): `reference`
+meridian-schema's v25 `roles.json` and `suites.json` (3983435; from v24's,
+connectivity no longer reads the escape hatch, and the give-up's case is
+marked `about: give-ups`): `reference`
 is a role, its suite in preview and not yet held by `--verified`;
 `roles-declared` knows v24's commands and the roles holding them (booking's,
 `set_allocation_instruction`, `report_give_up`, the alerts',
@@ -594,6 +596,67 @@ you approve them; `--yes` approves for a script that has already read them.
 Its pages are on its own name, `https://my-plugin.plugins.meridian.localhost/`,
 opened from the dashboard's home by a button for each level you hold on it:
 Manage (`admin`), Open (`write`) and View (`read`).
+
+### The plugin's documentation (contract v25)
+
+A plugin's `docs/` is what a deployment admin reads on its Documentation tab
+before launching it: `overview.md` and `setup.md`, which `plugin check`
+requires (`documentation-sections`), `troubleshooting.md` and `terms.md`,
+which it prompts for as advice and requires of a verified plugin, and
+`pages.md`. `documentation-safe` holds each section to what the tab shows as
+written: UTF-8, 64 KiB a section and 256 KiB in all, no HTML, no image, no
+`javascript:`, `vbscript:`, `data:` or `file:` link, no link whose text names
+one host and whose target another, no character that hides text, and nothing
+that reads as instructions to an agent (the screen's eleven rules, as core
+and the platform name them). A heading's text past one screen of the tab, a
+link shown as plain text, and a file in `docs/` that is not a section are
+advice, failing nothing. A plugin on an SDK before 0.29.0 is advised, never
+failed. `plugin upload` sends the texts with the declaration, each held to
+the digest the declaration names, and says where the version's
+documentation is read; `plugin new` writes a prompt for each section, and
+its CI checks with the meridian that wrote it (`MERIDIAN_VERSION`).
+
+## The registries (contract v25)
+
+```
+meridian plugin key register ~/.ssh/release.pub --organisation acme
+meridian plugin publish --registry community --tag v0.18.0 --organisation acme
+meridian plugin key list --organisation acme
+meridian plugin key revoke SGK-... --organisation acme --reason "copied from a build machine"
+meridian plugin download acme/venue-desk@0.18.0       # on a connected machine
+meridian plugin upload --bundle acme-venue-desk-0.18.0.plugin-bundle.tar
+```
+
+These act through a sign-in to the platform (`--platform`), made in your
+browser the first time and kept 30 days, never a password; its access tokens
+live ten minutes and are good at the publishing API alone. `publish` holds
+the plugin to `plugin check` first, and refuses a tag that is not `v` and the
+version pyproject.toml holds, or that is not signed with an SSH key
+(`git -c gpg.format=ssh tag -s v0.18.0`); then it asks the platform to build
+the tag, with a token good for that plugin alone, and follows the build until
+it is listed, queued for review, or refused, saying each check. It builds,
+signs and pushes nothing. `download` writes a plugin bundle -- the image, its
+referrers, its documentation and the platform's signed key status -- only
+once every digest and signature verifies against the platform's keys this
+release carries; `upload --bundle` carries it into a deployment that reaches
+nothing, which verifies it again. `--organisation`, `--reason` and
+`--not-trusted-after` are proposed names, awaiting approval.
+
+## status and logs
+
+```
+meridian status                 # each component, and the book's health per account
+meridian status --json
+meridian logs bor --since 10m
+```
+
+`status` says each of the deployment's components: its image, how many of
+its pods are ready, how often they restarted and why the last time
+(`OOMKilled`), and the memory it uses against its limit where the cluster
+serves metrics. Its book health says, per account, how many journal entries
+the book replays since the account's last snapshot, and when that was taken.
+`logs` prints what a component's pods printed. Both read through kubectl and
+change nothing, so a deployment admin never runs kubectl or helm by hand.
 
 ## Moving a plugin to a newer SDK
 
