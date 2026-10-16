@@ -39,6 +39,10 @@ sha2 = "0.10"
 # to sign with it and to know when a certificate is near its end.
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "x509-parser"] }
 x509-parser = "0.18"
+# A plugin bundle's signatures (contract v25): the platform's ECDSA P-256 key
+# over DSSE envelopes and its key status. aws-lc-rs, which reqwest's TLS and
+# rcgen already link, so no second C library and nothing new in the tree.
+aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys"] }
 # The certificates' dates, as rcgen takes them. In the tree already.
 time = { version = "0.3", default-features = false, features = ["std"] }
 # The root's SHA-1, which is how macOS's `security` names a certificate to

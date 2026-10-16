@@ -375,6 +375,135 @@ fn client() -> Result<reqwest::Client, Failed> {
         .map_err(|failed| Failed::Refused(failed.to_string()))
 }
 
+/// The client upload and a bundle's upload send with.
+pub(crate) fn http() -> Result<reqwest::Client, Failed> {
+    client()
+}
+
+/// One blob into a repository of the deployment's registry, through the
+/// dashboard, unless it holds it already.
+pub(crate) async fn send_blob(
+    http: &reqwest::Client,
+    address: &str,
+    session: &Credential,
+    repository: &str,
+    digest: &str,
+    bytes: Vec<u8>,
+) -> Result<(), Failed> {
+    let held = http
+        .head(format!("{repository}/blobs/{digest}"))
+        .bearer_auth(session.bearer().await?)
+        .send()
+        .await
+        .map_err(|failed| unreachable(address, failed))?;
+    if held.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(refused(address, "", held.status(), ""));
+    }
+    if held.status().is_success() {
+        eprintln!("  {digest}: already there");
+        return Ok(());
+    }
+    let started = http
+        .post(format!("{repository}/blobs/uploads/"))
+        .bearer_auth(session.bearer().await?)
+        .send()
+        .await
+        .map_err(|failed| unreachable(address, failed))?;
+    let status = started.status();
+    let location = started
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+    let Some(location) = location.filter(|_| status.is_success()) else {
+        return Err(refused(
+            address,
+            "the registry did not start an upload",
+            status,
+            &started.text().await.unwrap_or_default(),
+        ));
+    };
+    let size = bytes.len();
+    let sent = http
+        .put(upload_url(address, &location, digest))
+        .bearer_auth(session.bearer().await?)
+        .header("content-type", "application/octet-stream")
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|failed| unreachable(address, failed))?;
+    let status = sent.status();
+    if !status.is_success() {
+        return Err(refused(
+            address,
+            &format!("{digest} was not taken"),
+            status,
+            &sent.text().await.unwrap_or_default(),
+        ));
+    }
+    eprintln!("  {digest}: sent, {size} bytes");
+    Ok(())
+}
+
+/// One manifest into a repository of the deployment's registry, under
+/// `reference`: a version, a digest, or the referrers' tag.
+pub(crate) async fn send_manifest(
+    http: &reqwest::Client,
+    address: &str,
+    session: &Credential,
+    repository: &str,
+    reference: &str,
+    media_type: &str,
+    bytes: Vec<u8>,
+) -> Result<(), Failed> {
+    let named = http
+        .put(format!("{repository}/manifests/{reference}"))
+        .bearer_auth(session.bearer().await?)
+        .header("content-type", media_type)
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|failed| unreachable(address, failed))?;
+    let status = named.status();
+    if !status.is_success() {
+        return Err(refused(
+            address,
+            &format!("the manifest {reference} was not taken"),
+            status,
+            &named.text().await.unwrap_or_default(),
+        ));
+    }
+    Ok(())
+}
+
+/// Record a version with the body given: a bundle's, its listing and source
+/// registry among it (UploadPlugin takes a bundle, W8.14).
+pub(crate) async fn record_json(
+    address: &str,
+    session: &Credential,
+    body: &serde_json::Value,
+) -> Result<(), Failed> {
+    let http = client()?;
+    let body = body.to_string();
+    let (status, text, _) = session
+        .send(|bearer| {
+            http.post(format!("{address}/terminal/plugins"))
+                .bearer_auth(bearer)
+                .header("content-type", "application/json")
+                .body(body.clone())
+        })
+        .await?;
+    if !status.is_success() {
+        return Err(refused(
+            address,
+            "the version was not recorded",
+            status,
+            &text,
+        ));
+    }
+    Ok(())
+}
+
 /// What the dashboard refused, said as live.rs says it: a missing or lapsed
 /// session (401, on any `/terminal/` path, the registry's included) apart
 /// from everything else, and anything else after what was being done.
