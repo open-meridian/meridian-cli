@@ -2665,10 +2665,32 @@ impl Declaration<'_> {
     }
 }
 
+/// A view's body as declarations hold it: from the `def` the regex matched,
+/// every line indented past it, and the line the body starts on.
+fn view_body(text: &str, def: &regex::Captures) -> (usize, String) {
+    let indent = def[1].len();
+    let start = def.get(0).expect("matched").start();
+    let first = line_at(text, start) + 1;
+    let lines: Vec<&str> = text[start..]
+        .lines()
+        .skip(1)
+        .take_while(|line| line.trim().is_empty() || line.len() - line.trim_start().len() > indent)
+        .collect();
+    (first, lines.join("\n"))
+}
+
 fn declarations(plugin: &Plugin) -> Vec<Declaration<'_>> {
     static DECORATOR: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"@\s*[A-Za-z_][A-Za-z0-9_.]*\.(page|route|tool)\s*\(").unwrap()
     });
+    // The same declaration called rather than decorating:
+    // `reconciliations = pages.page(...)(_reconciliations)`, the view the
+    // name in the second call.
+    static CALLED: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(@\s*)?\b[A-Za-z_][A-Za-z0-9_.]*\.(page|route|tool)\s*\(").unwrap()
+    });
+    static APPLIED: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\)\s*\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)").unwrap());
     static SETTING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bSetting\s*\(").unwrap());
     static DEF: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?m)^([ \t]*)(?:async[ \t]+)?def[ \t]+([A-Za-z_][A-Za-z0-9_]*)").unwrap()
@@ -2706,6 +2728,41 @@ fn declarations(plugin: &Plugin) -> Vec<Declaration<'_>> {
                 arguments,
                 body,
                 view,
+            });
+        }
+        for call in CALLED.captures_iter(&text) {
+            if call.get(1).is_some() {
+                continue; // a decorator, read above
+            }
+            let whole = call.get(0).expect("matched");
+            let arguments = enclosed(&text[whole.end()..]);
+            let after = &text[whole.end() + arguments.len()..];
+            let Some(applied) = APPLIED.captures(after) else {
+                continue; // a call that declares nothing until applied
+            };
+            let view = applied[1]
+                .rsplit('.')
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            let named = Regex::new(&format!(
+                r"(?m)^([ \t]*)(?:async[ \t]+)?def[ \t]+{}\b",
+                regex::escape(&view)
+            ))
+            .expect("an identifier's pattern");
+            let body = named.captures(&text).map(|def| view_body(&text, &def));
+            let kind = match &call[2] {
+                "page" => "page",
+                "route" => "route",
+                _ => "tool",
+            };
+            found.push(Declaration {
+                source,
+                kind,
+                line: line_at(&text, whole.start()),
+                arguments: arguments.to_string(),
+                body,
+                view: Some(view),
             });
         }
         for call in SETTING.find_iter(&text) {

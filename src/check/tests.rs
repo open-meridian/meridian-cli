@@ -3157,3 +3157,61 @@ fn text_addressed_to_the_reader_is_advice_saying_people_still_read_it() {
         .iter()
         .all(|f| f.rule != "documentation-safe"));
 }
+
+#[test]
+fn a_page_declared_by_calling_rather_than_decorating_is_the_roles_page_all_the_same() {
+    // Sample operations' Reconciliations and Opening balances, as the plugin
+    // agent found them (2026-10-16): `x = pages.page(...)(view)`.
+    let plugin = Scaffolded::of_role("called-pages", "operations");
+    let page = page_py();
+    plugin.replace(
+        &page,
+        "@pages.page(\n    \"/reconciliations\",",
+        "async def _reconciliations(request: meridian.Request) -> meridian.Response:\n    \
+         return await reconciliations_view(request)\n\n\nreconciliations = pages.page(\n    \
+         \"/reconciliations\",",
+    );
+    plugin.replace(
+        &page,
+        "    name=\"read_reconciliations\",\n)\nasync def reconciliations(",
+        "    name=\"read_reconciliations\",\n)(_reconciliations)\n\n\nasync def reconciliations_view(",
+    );
+    plugin.replace(
+        &page,
+        "@pages.page(\n    \"/opening\",",
+        "opening = pages.page(\n    \"/opening\",",
+    );
+    plugin.replace(
+        &page,
+        "    name=\"read_opening_balances\",\n)\nasync def opening_balances(",
+        "    name=\"read_opening_balances\",\n)(opening_balances_view)\n\n\nasync def opening_balances_view(",
+    );
+    let written = plugin.read(&page);
+    assert!(
+        written.contains(")(_reconciliations)") && written.contains(")(opening_balances_view)")
+    );
+    assert!(!written.contains("@pages.page(\n    \"/opening\""));
+    for report in [plugin.check(), plugin.check_verified()] {
+        assert!(report.passed(), "{}", text(&report));
+        assert!(
+            report
+                .advice
+                .iter()
+                .all(|advice| advice.rule != "role-pages"),
+            "{}",
+            text(&report)
+        );
+    }
+    // A call never applied to a view declares nothing.
+    plugin.replace(&page, ")(opening_balances_view)", ")");
+    let verified = plugin.check_verified();
+    assert!(
+        verified
+            .failures
+            .iter()
+            .any(|failure| failure.rule == "role-pages"
+                && failure.found.contains("Opening balances")),
+        "{}",
+        text(&verified)
+    );
+}
