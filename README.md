@@ -607,8 +607,10 @@ which it prompts for as advice and requires of a verified plugin, and
 written: UTF-8, 64 KiB a section and 256 KiB in all, no HTML, no image, no
 `javascript:`, `vbscript:`, `data:` or `file:` link, no link whose text names
 one host and whose target another, no character that hides text, and nothing
-that reads as instructions to an agent (the screen's rules, as core and the
-platform name them). A heading's text past one screen of the tab, a link
+that reads as instructions to an agent or makes a claim the registries refuse
+-- endorsement, verification, regulatory readiness, posing as Open Meridian,
+acting for the reader (the screen's rules, as core and the platform name
+them). A heading's text past one screen of the tab, a link
 shown as plain text, a file in `docs/` that is not a section, and text the
 screen holds as "addressed to the reader" (`you need to ...`, which setup
 steps often say) are advice, failing nothing: the deployment and the

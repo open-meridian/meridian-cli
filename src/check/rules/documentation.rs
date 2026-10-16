@@ -18,8 +18,10 @@
 //!   a section, 256 KiB in all), and holds no raw HTML, no image, no link to a
 //!   script, data or a file, no link whose text names one host and whose
 //!   target another, no character that hides text, and no text that reads as
-//!   instructions to an agent -- the screen's rules, named as core and the
-//!   platform name them. A level-two heading's text past what one screen of
+//!   instructions to an agent or makes a claim the registries refuse -- the
+//!   screen's rules, named as core and the platform name them (endorsement,
+//!   verification, regulatory readiness, posing as Open Meridian and acting
+//!   for the reader among them). A level-two heading's text past what one screen of
 //!   the tab shows, a link the tab will show as plain text, and text the
 //!   screen holds as "addressed to the reader" -- which ordinary setup
 //!   wording matches, and which the deployment and the platform show to
@@ -70,6 +72,10 @@ const SAFE_INSTEAD: &str = "plain Markdown the Documentation tab shows as writte
 const SCREEN_INSTEAD: &str = "write for the person reading, in plain words: nothing addressed to \
     an agent or a model, nothing claiming to speak for Open Meridian or the deployment, and no \
     tool's name; the deployment withholds such text from agents, and the registries refuse it";
+const CLAIM_INSTEAD: &str = "say only what is so and what was done: no endorsement, \
+    certification or approval by Open Meridian or the platform, no verification or audit beyond \
+    the platform's own, no regulatory readiness, and nothing written as from Open Meridian's \
+    staff; the registries refuse such text";
 /// The screen's rule that ordinary instructions to a person match too, said
 /// as advice (the coordinator's ruling on Q7, 2026-10-16, agreement A).
 const ADDRESSED: &str = "addressed to the reader";
@@ -417,6 +423,45 @@ static SCREEN: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
     .collect()
 });
 
+/// The platform's vendor-text rules beyond the security master's
+/// (meridian-platform domain/registry_text.py CLAIM_PATTERNS, fc9285f; the
+/// corpus's RT39-RT43, design 46ccf10), by its names, which core adopts too.
+/// Each fails, with whether it is a claim (else text acting for the reader).
+/// The registry's own tool names are left to "tool name"'s `x__y` and the
+/// registries.
+static CLAIMS: LazyLock<Vec<(&'static str, bool, Regex)>> = LazyLock::new(|| {
+    [
+        (
+            "acts for the reader",
+            false,
+            r"\b(?:install|approve|launch|update|enable|grant|star)\b.{0,40}?\b(?:automatically|immediately|without (?:asking|review|approval|confirmation))\b|\b(?:auto-?approve|skip (?:the )?(?:review|approval|notice))\b",
+        ),
+        (
+            "claims endorsement",
+            true,
+            r"\b(?:endorsed|recommended|certified|approved|vetted|audited|guaranteed|sponsored) by (?:open meridian|the platform|meridian)\b|\bofficial(?:ly)? (?:open meridian|meridian) (?:plugin|partner)\b",
+        ),
+        (
+            "claims verification",
+            true,
+            r"\b(?:fully|independently) (?:verified|audited|reviewed)\b|\bverified (?:safe|secure|compliant)\b|\bsecurity[- ]audited\b",
+        ),
+        (
+            "poses as open meridian",
+            true,
+            r"\b(?:this is|message from|on behalf of|from) (?:the )?(?:open meridian|meridian) (?:team|staff|platform|support|security)\b",
+        ),
+        (
+            "claims regulatory readiness",
+            true,
+            r"\b(?:sec|finra|mifid(?: ii)?|17a-4|sox|soc ?2)[- ](?:compliant|approved|certified|ready)\b|\bregulator(?:y)?[- ]approved\b",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, claim, pattern)| (name, claim, Regex::new(pattern).unwrap()))
+    .collect()
+});
+
 /// The contract's terms the rule "instruction words" leaves alone: exactly
 /// these five, singular or plural (the data dictionary's).
 static TERMS: LazyLock<Regex> = LazyLock::new(|| {
@@ -497,8 +542,8 @@ fn safe_findings(section: &Section) -> (Vec<Failure>, Vec<Failure>) {
         // The contract's own terms, which "instruction words" would read as
         // an instruction to an agent: the dictionary's allocation, trading,
         // settlement, execution and handling instructions, exempt from that
-        // rule alone, as core
-        // and the platform exempt them (agreement A, 2026-10-16).
+        // rule alone, as core and the platform exempt them (agreement A,
+        // 2026-10-16).
         let without_terms = TERMS.replace_all(&screened, " ");
         for (rule, pattern) in SCREEN.iter() {
             let read = if *rule == "instruction words" {
@@ -527,6 +572,24 @@ fn safe_findings(section: &Section) -> (Vec<Failure>, Vec<Failure>) {
                 format!("it reads as instructions to an agent ({rule})"),
                 SCREEN_INSTEAD,
             ));
+        }
+        for (rule, claim, pattern) in CLAIMS.iter() {
+            if !pattern.is_match(&screened) {
+                continue;
+            }
+            failures.push(if *claim {
+                fail(
+                    n + 1,
+                    format!("it makes a claim the registries refuse ({rule})"),
+                    CLAIM_INSTEAD,
+                )
+            } else {
+                fail(
+                    n + 1,
+                    format!("it reads as instructions to an agent ({rule})"),
+                    SCREEN_INSTEAD,
+                )
+            });
         }
     }
 
