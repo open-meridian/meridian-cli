@@ -51,7 +51,7 @@ pub const PYTHON: Sdk = Sdk {
     releases: "https://pypi.org/pypi/open-meridian/json",
     runner: &["python", "-m", "meridian.migrations"],
     extensions: &["py"],
-    named: &["pyproject.toml"],
+    named: &["pyproject.toml", "Dockerfile"],
 };
 
 /// What the migrations run in: the SDK's image with its `migrate` extra. It
@@ -587,8 +587,9 @@ pub async fn migrate(host: &dyn Host, sdk: &Sdk, asked: &Asked) -> Migrated {
         format!("{}:{latest}", sdk.image)
     });
 
-    // What the steps are given: the plugin's code, and pyproject.toml with
-    // its pin moved, as it will be written.
+    // What the steps are given: the plugin's code, and pyproject.toml and
+    // the Dockerfile with their pins moved, as they will be written (0.29.0's
+    // step reads whether the image holds the documentation).
     let (pyproject, dockerfile, pins_moved) = moved(sdk, &pins, &to);
     let mut sent = std::collections::BTreeMap::new();
     let mut by_hand = Vec::new();
@@ -602,6 +603,10 @@ pub async fn migrate(host: &dyn Host, sdk: &Sdk, asked: &Asked) -> Migrated {
         }
         if relative == "pyproject.toml" {
             sent.insert(relative, pyproject.clone());
+            continue;
+        }
+        if relative == "Dockerfile" {
+            sent.insert(relative, dockerfile.clone());
             continue;
         }
         match std::fs::read(&path).map(String::from_utf8) {
@@ -694,7 +699,9 @@ pub async fn migrate(host: &dyn Host, sdk: &Sdk, asked: &Asked) -> Migrated {
     if !writes.iter().any(|(path, _)| path == "pyproject.toml") {
         writes.push(("pyproject.toml".into(), pyproject));
     }
-    writes.push(("Dockerfile".into(), dockerfile));
+    if !writes.iter().any(|(path, _)| path == "Dockerfile") {
+        writes.push(("Dockerfile".into(), dockerfile));
+    }
     // The CI's meridian, moved to this one (it tracks the CLI).
     let mut pins_moved = pins_moved;
     if let Some((workflow, said)) = std::fs::read_to_string(dir.join(CHECK_WORKFLOW))

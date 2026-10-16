@@ -373,6 +373,25 @@ async fn a_plugin_on_the_latest_already_is_only_checked() {
 }
 
 #[tokio::test]
+async fn a_dockerfile_a_step_rewrote_is_written_as_the_step_left_it() {
+    // The Dockerfile goes to the steps with its pin moved; one a step
+    // rewrites comes back with the move in it, and is what is written.
+    let plugin = Plugin::at("migrated", "0.6.1");
+    let rewritten = plugin
+        .read("Dockerfile")
+        .replace("plugin-python:0.6.1", "plugin-python:0.7.0")
+        + "COPY docs/ docs/\n";
+    let mut said: serde_json::Value = serde_json::from_str(&answered("")).unwrap();
+    said["files"] = serde_json::json!({ "Dockerfile": rewritten });
+    said["by_hand"] = serde_json::json!([]);
+    said["steps"][0]["rewrote"] = serde_json::json!([]);
+    let fake = Fake::new(&said.to_string());
+    let report = done(migrate(&fake, &PYTHON, &plugin.asked()).await);
+    assert_eq!(plugin.read("Dockerfile"), rewritten);
+    assert_eq!(report.wrote, ["Dockerfile", "pyproject.toml"]);
+}
+
+#[tokio::test]
 async fn the_pins_move_the_steps_run_in_the_latest_image_and_what_they_wrote_is_written() {
     let plugin = Plugin::at("migrated", "0.6.1");
     // A Makefile naming the base too, as meridian-snaptrade's does.
@@ -418,16 +437,22 @@ async fn the_pins_move_the_steps_run_in_the_latest_image_and_what_they_wrote_is_
         .map(String::from)
     ));
 
-    // Given the code and pyproject.toml with its pin moved; not the rest.
+    // Given the code, and pyproject.toml and the Dockerfile with their pins
+    // moved (0.29.0's step reads whether the image holds docs/); not the
+    // rest.
     let given: serde_json::Value = serde_json::from_str(&given).unwrap();
     let files = given["files"].as_object().unwrap();
     assert!(files["pyproject.toml"]
         .as_str()
         .unwrap()
         .contains("open-meridian==0.7.0"));
+    assert!(files["Dockerfile"]
+        .as_str()
+        .unwrap()
+        .contains("plugin-python:0.7.0"));
     assert!(files.contains_key("src/migrated_plugin/page.py"));
     assert!(files.contains_key("tests/test_page.py"));
-    assert!(!files.contains_key("Dockerfile") && !files.contains_key("AGENTS.md"));
+    assert!(!files.contains_key("AGENTS.md"));
 
     // Written: the pins, and the file the steps rewrote.
     assert!(plugin
