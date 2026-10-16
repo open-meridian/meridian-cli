@@ -417,6 +417,11 @@ static SCREEN: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
     .collect()
 });
 
+/// The contract's terms the rule "instruction words" leaves alone: exactly
+/// these three, singular or plural (the data dictionary's).
+static TERMS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(?:allocation|trading|settlement) instructions?\b").unwrap());
+
 /// A line as the screen reads it: full-width letters as themselves, lower
 /// case, its whitespace collapsed.
 fn screened_form(line: &str) -> String {
@@ -488,8 +493,18 @@ fn safe_findings(section: &Section) -> (Vec<Failure>, Vec<Failure>) {
             ));
         }
         let screened = screened_form(line);
+        // The contract's own terms, which "instruction words" would read as
+        // an instruction to an agent: the dictionary's allocation, trading
+        // and settlement instructions, exempt from that rule alone, as core
+        // and the platform exempt them (agreement A, 2026-10-16).
+        let without_terms = TERMS.replace_all(&screened, " ");
         for (rule, pattern) in SCREEN.iter() {
-            if !pattern.is_match(&screened) {
+            let read = if *rule == "instruction words" {
+                without_terms.as_ref()
+            } else {
+                screened.as_str()
+            };
+            if !pattern.is_match(read) {
                 continue;
             }
             if *rule == ADDRESSED {
