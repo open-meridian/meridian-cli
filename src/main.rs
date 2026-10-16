@@ -136,7 +136,8 @@ plugin new:
                             reference plugin
 
 plugin check: needs no deployment. Exits 0 when every rule holds, 1 when one does
-not, each failure with its file, line and what to write instead
+not, each failure with its file, line and what to write instead. A warning
+(replaced-ids-followed: an instrument ID kept in the code) fails nothing
       --dir <dir>           the plugin's directory (default: .)
       --run-tests           run its tests too, with pytest
       --verified            hold it as a verified plugin is: every changing route

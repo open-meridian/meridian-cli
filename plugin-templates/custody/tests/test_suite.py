@@ -47,8 +47,11 @@ def account(**given: Any) -> dict[str, Any]:
 
 
 def position(**given: Any) -> dict[str, Any]:
+    # From contract v24 a resolve states the minimum a record needs (W3.7):
+    # an identifier, a description and a currency.
     return {
         "symbol": "QQQ",
+        "description": "Invesco QQQ Trust",
         "kind": "ETF",
         "units": "10",
         "settled": "10",
@@ -90,6 +93,21 @@ async def ambiguous(recorder: Recorder) -> None:
     )
     await Converter(recorder).statement(
         account(positions=[position(kind="WARRANT", kind_name="Warrant")]), CONNECTION, DAY
+    )
+
+
+async def thinly_described(recorder: Recorder) -> None:
+    """Contract v24: a holding named by the custodian's own symbol alone, no
+    description of the security, and nothing matched: recorded unresolved,
+    with its raw record, never a record made up from the symbol."""
+    recorder.answer(
+        "ResolveIdentifier",
+        lambda _: ops.ResolveIdentifierResult(
+            found=False, miss_reason=ops.MISS_REASON_NOT_FOUND
+        ),
+    )
+    await Converter(recorder).statement(
+        account(positions=[position(symbol="ZZTOP", description="")]), CONNECTION, DAY
     )
 
 
@@ -157,6 +175,7 @@ PRODUCERS: dict[str, Producer] = {
     ),
     "resolve-gives-the-currency-with-its-provenance": holdings(positions=[position()]),
     "kind-not-converted-on-an-ambiguous-resolve": ambiguous,
+    "records-a-thinly-described-holding-unresolved": thinly_described,
     **{name: activity(code) for name, code in ACTIVITIES.items()},
     "activity-kind-not-converted": activity("ODD", type_name="Odd lot adjustment"),
     "activity-signs": activity("SELL", units="-5", price="412.10", amount="2060.50"),
@@ -179,4 +198,17 @@ PRODUCERS: dict[str, Producer] = {
 def test_every_case_of_the_custody_suite_passes() -> None:
     report = run("custody", PRODUCERS, instance_id=INSTANCE)
     assert report.passed, report.failures
-    assert len(report.passed_cases) == 44
+    assert len(report.passed_cases) == 47
+    # Contract v24: the two cases every suite holds, which the SDK answers.
+    assert report.answered_by_sdk == [
+        "hears-and-reads-a-replacement",
+        "reads-the-template-catalogue",
+    ]
+
+
+def test_every_case_passes_on_the_deployments_provisional_records_too() -> None:
+    """Contract v24: a resolve may answer the deployment's provisional
+    record, an LCL- ID, as well as the platform's INS- one; the plugin's
+    conversion is the same, an ID being opaque."""
+    report = run("custody", PRODUCERS, instance_id=INSTANCE, provisional=True)
+    assert report.passed, report.failures

@@ -78,6 +78,9 @@ pub enum Outcome {
     /// Not run: the tests, without `--run-tests`; a rule only `--verified`
     /// holds, without it.
     Skipped,
+    /// Found what a warning rule warns of (`rules::WARNED`): said, and
+    /// failing nothing, whether or not the plugin is checked as verified.
+    Warned,
 }
 
 impl Outcome {
@@ -86,6 +89,7 @@ impl Outcome {
             Outcome::Passed => "passed",
             Outcome::Failed => "failed",
             Outcome::Skipped => "skipped",
+            Outcome::Warned => "warned",
         }
     }
 }
@@ -97,6 +101,9 @@ pub struct Report {
     /// What a rule only `--verified` holds found on a plugin not checked as
     /// verified, said as advice and failing nothing (`rules::ADVISED`).
     pub advice: Vec<Failure>,
+    /// What a warning rule found (`rules::WARNED`): failing nothing, in
+    /// every mode, since what it warns of the deployment accepts.
+    pub warnings: Vec<Failure>,
 }
 
 impl Report {
@@ -212,6 +219,7 @@ pub fn check_as(dir: &Path, run_tests: bool, verified: bool) -> Result<Report, S
         outcomes: Vec::new(),
         failures: Vec::new(),
         advice: Vec::new(),
+        warnings: Vec::new(),
     };
     for rule in RULES.iter() {
         if !verified && rules::ONLY_VERIFIED.contains(&rule.id) {
@@ -224,13 +232,17 @@ pub fn check_as(dir: &Path, run_tests: bool, verified: bool) -> Result<Report, S
             continue;
         }
         let failures = (rule.check)(&plugin);
-        let outcome = if failures.is_empty() {
-            Outcome::Passed
-        } else {
-            Outcome::Failed
+        let outcome = match (failures.is_empty(), rules::WARNED.contains(&rule.id)) {
+            (true, _) => Outcome::Passed,
+            (false, true) => Outcome::Warned,
+            (false, false) => Outcome::Failed,
         };
         report.outcomes.push((rule.id, rule.holds, outcome));
-        report.failures.extend(failures);
+        if outcome == Outcome::Warned {
+            report.warnings.extend(failures);
+        } else {
+            report.failures.extend(failures);
+        }
     }
     let pass = &rules::TESTS_PASS;
     if run_tests {
@@ -285,6 +297,7 @@ pub fn text(report: &Report) -> String {
             Outcome::Passed => "ok  ",
             Outcome::Failed => "FAIL",
             Outcome::Skipped => "--  ",
+            Outcome::Warned => "warn",
         };
         let holds = match outcome {
             Outcome::Skipped => format!("{holds}: {}", skipped_unless(id)),
@@ -292,8 +305,13 @@ pub fn text(report: &Report) -> String {
         };
         out.push_str(&format!("  {mark}  {id:width$}  {holds}\n"));
         let mut said_instead = "";
-        // A skipped rule's advice is said where its failures would be.
-        let found = report.failures.iter().chain(&report.advice);
+        // A skipped rule's advice, and a warning rule's warnings, are said
+        // where its failures would be.
+        let found = report
+            .failures
+            .iter()
+            .chain(&report.advice)
+            .chain(&report.warnings);
         for failure in found.filter(|failure| failure.rule == *id) {
             out.push_str(&format!(
                 "        {}: {}\n",
@@ -317,6 +335,13 @@ pub fn text(report: &Report) -> String {
             "\nAdvice, {} place(s), failing nothing: a verified plugin is held to it \
              (--verified).\n",
             report.advice.len()
+        ));
+    }
+    if !report.warnings.is_empty() {
+        out.push_str(&format!(
+            "\nWarnings, {} place(s), failing nothing: what the deployment accepts, and the \
+             plugin should still change.\n",
+            report.warnings.len()
         ));
     }
     if failed == 0 {
@@ -346,6 +371,13 @@ pub fn json(report: &Report) -> serde_json::Value {
             "line": if failure.line == 0 { serde_json::Value::Null } else { failure.line.into() },
             "found": failure.found,
             "instead": failure.instead,
+        })).collect::<Vec<_>>(),
+        "warnings": report.warnings.iter().map(|warning| serde_json::json!({
+            "rule": warning.rule,
+            "file": warning.file,
+            "line": if warning.line == 0 { serde_json::Value::Null } else { warning.line.into() },
+            "found": warning.found,
+            "instead": warning.instead,
         })).collect::<Vec<_>>(),
     })
 }

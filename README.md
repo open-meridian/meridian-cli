@@ -427,7 +427,12 @@ Manage, an Accounts page under Open and View), a `Dockerfile`,
 `pyproject.toml`, and `AGENTS.md`, which teaches any coding agent the live
 loop below. `CLAUDE.md` and the `develop-live` skill lead Claude Code to the
 same text. Commit them with the plugin; `.dockerignore` keeps them out of its
-image.
+image. From SDK 0.28.0 (CLI 0.1.45) every template also writes the plugin's
+pre-push hook, `hooks/pre-push`, executable: CI-first, it runs nothing for a
+branch push, whose pull request's CI is the gate, and `meridian plugin check
+--run-tests` before a push straight to main. `git config core.hooksPath hooks`
+turns it on in the plugin's repository, and `.dockerignore` keeps it out of
+the image too.
 
 `--role` with `custody`, `data`, `operations` or `reporting` writes that
 role's template instead, from meridian-python's `templates/`: a whole plugin
@@ -565,6 +570,25 @@ binds to it -- and each `act("<tool>", ...)` in its block, the tool as
 written or through a constant; a tool named some other way, or not among the
 plugin's acts, it passes over.
 
+From contract v24 every instrument is named by the platform master's ID, and
+a deployment's provisional `LCL-` record, or an `INS-` record the platform
+merges, is replaced by the record it became. A write naming a replaced ID is
+accepted forever and recorded under that record
+(spec/the-platform-master-mints-every-instrument-from-a-template, requirement
+11), so `plugin check` warns of an instrument ID kept in the plugin's code --
+a Python string holding an `INS-` or `LCL-` ID and nothing else, outside its
+tests -- at its line (`replaced-ids-followed`): resolve the instrument from an
+identifier it states, or follow the kept ID to the record it became with
+`meridian.CurrentIdMap`; one written as `<map>.current("<id>")` is followed
+already. A warning fails nothing, verified or not: it is printed with its
+rule, file and line, and listed under `warnings` in `--json`. The check reads
+meridian-schema's v24 `roles.json` and `suites.json` (a6a0af7): `reference`
+is a role, its suite in preview and not yet held by `--verified`;
+`roles-declared` knows v24's commands and the roles holding them (booking's,
+`set_allocation_instruction`, `report_give_up`, the alerts',
+`offer_template_fields`); and every suite's `hears-and-reads-a-replacement`
+and `reads-the-template-catalogue` are cases every plugin of the role passes.
+
 `launch` shows the roles the version asks for and runs it only once
 you approve them; `--yes` approves for a script that has already read them.
 Its pages are on its own name, `https://my-plugin.plugins.meridian.localhost/`,
@@ -594,7 +618,13 @@ or an access is read for (`dgm` to `data`, `ccm` to `connectivity`, `match`
 to `confirmation`); anything else naming an old role is the plugin's to
 change. From 0.24.0 to 0.25.0 (contract v21) nothing a plugin calls changed
 shape, so only the pins move, and the same from 0.25.0 to 0.26.0 (contract
-v22).
+v22) and from 0.26.0 to 0.27.0 (contract v23). From 0.27.0 to 0.28.0
+(contract v24, one ID for every instrument) the SDK's step rewrites a
+record's `instrument_id.startswith("LCL-")` into its `provisional` mark, the
+platform's ID read from the `open_meridian` identifier into the record's
+`instrument_id`, and a test's `LCL-suite-n` into `INS-suite-n`; a prefix test
+or an `open_meridian` read with no record at hand is left by hand, and the
+check after it warns of an ID the plugin keeps (`replaced-ids-followed`).
 
 ## Developing a plugin live
 
@@ -699,7 +729,11 @@ as its role's service account, through `meridian.runs_as(role)`, and 0.26.0
 (contract v22) from 0.1.42, each `AGENTS.md` saying how work running a
 declared algorithm names it (`meridian.runs_as(role, algorithm_id=...)`) and
 that a date is worked out in core (`compute_date`, `read_calendar`), and the
-custody, data and reporting suites' tests meeting their v22 cases.
+custody, data and reporting suites' tests meeting their v22 cases, 0.27.0
+(contract v23) from 0.1.43, and 0.28.0 (contract v24) from 0.1.45, each
+scaffold with the CI-first pre-push hook (`hooks/pre-push`, written
+executable) and the custody and reporting suites' tests meeting their v24
+cases.
 
 ## Licence
 

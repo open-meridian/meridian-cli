@@ -22,7 +22,7 @@ mod tests;
 
 /// The template, file by file, as it sits in `plugin-template/`. A test fails
 /// if a file there is missing from this list, so a new one cannot be dropped.
-const TEMPLATE: [(&str, &str); 15] = [
+const TEMPLATE: [(&str, &str); 16] = [
     ("AGENTS.md", include_str!("../plugin-template/AGENTS.md")),
     (
         ".claude/skills/develop-live/SKILL.md",
@@ -68,13 +68,17 @@ const TEMPLATE: [(&str, &str); 15] = [
         ".github/workflows/check.yaml",
         include_str!("../plugin-template/.github/workflows/check.yaml"),
     ),
+    (
+        "hooks/pre-push",
+        include_str!("../plugin-template/hooks/pre-push"),
+    ),
 ];
 
 /// The `data` template, as it sits in `plugin-templates/data/`: a vendor's
 /// prices put into the lake, its catalogue declared, the data role's common
 /// pages, Connection and Datasets, with their read tools, and its tests
 /// running the suite.
-const DATA: [(&str, &str); 19] = [
+const DATA: [(&str, &str); 20] = [
     (
         "AGENTS.md",
         include_str!("../plugin-templates/data/AGENTS.md"),
@@ -151,12 +155,16 @@ const DATA: [(&str, &str); 19] = [
         ".github/workflows/check.yaml",
         include_str!("../plugin-templates/data/.github/workflows/check.yaml"),
     ),
+    (
+        "hooks/pre-push",
+        include_str!("../plugin-templates/data/hooks/pre-push"),
+    ),
 ];
 
 /// The `custody` template, as it sits in `plugin-templates/custody/`: a
 /// custodian's accounts and statements brought in, on the custody role's
 /// common pages with their tools, and its tests running the suite.
-const CUSTODY: [(&str, &str); 21] = [
+const CUSTODY: [(&str, &str); 22] = [
     (
         "AGENTS.md",
         include_str!("../plugin-templates/custody/AGENTS.md"),
@@ -243,13 +251,17 @@ const CUSTODY: [(&str, &str); 21] = [
         ".github/workflows/check.yaml",
         include_str!("../plugin-templates/custody/.github/workflows/check.yaml"),
     ),
+    (
+        "hooks/pre-push",
+        include_str!("../plugin-templates/custody/hooks/pre-push"),
+    ),
 ];
 
 /// The `operations` template, as it sits in `plugin-templates/operations/`:
 /// the operations role's common pages, Breaks, Reconciliations and Opening
 /// balances, with their tools, an opening balance's confirmation checked so
 /// an agent may prepare it.
-const OPERATIONS: [(&str, &str); 17] = [
+const OPERATIONS: [(&str, &str); 18] = [
     (
         "AGENTS.md",
         include_str!("../plugin-templates/operations/AGENTS.md"),
@@ -322,12 +334,16 @@ const OPERATIONS: [(&str, &str); 17] = [
         ".github/workflows/check.yaml",
         include_str!("../plugin-templates/operations/.github/workflows/check.yaml"),
     ),
+    (
+        "hooks/pre-push",
+        include_str!("../plugin-templates/operations/hooks/pre-push"),
+    ),
 ];
 
 /// The `reporting` template, as it sits in `plugin-templates/reporting/`: the
 /// book's positions valued at the close from the lake, its Datasets page, its
 /// tests running the suite.
-const REPORTING: [(&str, &str); 17] = [
+const REPORTING: [(&str, &str); 18] = [
     (
         "AGENTS.md",
         include_str!("../plugin-templates/reporting/AGENTS.md"),
@@ -396,6 +412,10 @@ const REPORTING: [(&str, &str); 17] = [
         ".github/workflows/check.yaml",
         include_str!("../plugin-templates/reporting/.github/workflows/check.yaml"),
     ),
+    (
+        "hooks/pre-push",
+        include_str!("../plugin-templates/reporting/hooks/pre-push"),
+    ),
 ];
 
 /// The roles `plugin new --role` has a template for, each with its files.
@@ -438,6 +458,11 @@ fn template(role: Option<&str>) -> Result<&'static [(&'static str, &'static str)
         ))
     }
 }
+
+/// The files a template holds executable, written so: the pre-push hook git
+/// runs once the plugin sets `core.hooksPath hooks` (CI-first, from SDK
+/// 0.28.0), which git skips, with only a hint, when it is not.
+pub const EXECUTABLE: [&str; 1] = ["hooks/pre-push"];
 
 /// What the template calls itself.
 const DISTRIBUTION: &str = "reference-plugin";
@@ -488,17 +513,34 @@ pub fn scaffold(name: &str, into: &Path, role: Option<&str>) -> Result<Vec<PathB
     let module = name.replace('-', "_");
 
     let mut wrote = Vec::new();
-    for (path, contents) in files {
-        let path = into.join(renamed(path, name, &module));
+    for (held, contents) in files {
+        let path = into.join(renamed(held, name, &module));
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|failed| format!("{}: {failed}", parent.display()))?;
         }
         std::fs::write(&path, renamed(contents, name, &module))
             .map_err(|failed| format!("{}: {failed}", path.display()))?;
+        if EXECUTABLE.contains(held) {
+            executable(&path)?;
+        }
         wrote.push(path);
     }
     Ok(wrote)
+}
+
+/// Readable by all and executable, as git checks the template's copy out
+/// (0755). The CLI's targets are macOS and Linux; elsewhere there is no bit.
+fn executable(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|failed| format!("{}: {failed}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 /// The template's name for itself, replaced by the plugin's. The distribution

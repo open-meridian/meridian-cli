@@ -1444,10 +1444,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.27.0", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.28.0", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.27.0",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.28.0",
         ),
         (
             "tool-meridian",
@@ -1670,25 +1670,38 @@ fn a_plugin_breaking_every_rule_is_told_each_with_its_place_and_its_fix() {
     plugin.add_after(
         &main_py(),
         "log = logging.getLogger",
-        "import nats\nTOKEN = os.environ.get(\"BROKER_TOKEN\")\nSECRET = meridian.Setting(\"api_key\", str, secret=True)\nprint(settings.values[\"api_key\"])\nKIND = meridian.RecordKind(\"fills\", \"Fills\", window_days=30)\nPAST = meridian.Setting(\"fills_past_window\", str)",
+        "import nats\nTOKEN = os.environ.get(\"BROKER_TOKEN\")\nSECRET = meridian.Setting(\"api_key\", str, secret=True)\nprint(settings.values[\"api_key\"])\nKIND = meridian.RecordKind(\"fills\", \"Fills\", window_days=30)\nPAST = meridian.Setting(\"fills_past_window\", str)\nHELD = \"LCL-01JBROKEN\"",
     );
     plugin.replace(&page_py(), "    params=OpenStatement,\n", "");
     plugin.replace(&page_py(), "    checked_by=\"check_link_account\",\n", "");
     plugin.write(&format!("src/{MODULE}/sweep.py"), SWEEP_LINKING);
 
     // As a verified plugin is checked, so the rules only --verified holds are
-    // among them.
+    // among them. A warning rule fails nothing even so: it warns.
     let report = plugin.check_verified();
     let mut failed = failed_rules(&report);
     failed.sort();
-    let mut every: Vec<&str> = RULES.iter().map(|rule| rule.id).collect();
+    let mut every: Vec<&str> = RULES
+        .iter()
+        .map(|rule| rule.id)
+        .filter(|id| !super::rules::WARNED.contains(id))
+        .collect();
     every.sort();
     assert_eq!(failed, every, "{}", text(&report));
     assert_eq!(report.outcomes.last().map(|o| o.2), Some(Outcome::Skipped));
+    assert_eq!(
+        report.warnings.iter().map(|w| w.rule).collect::<Vec<_>>(),
+        super::rules::WARNED
+    );
 
     let said = text(&report);
     for rule in RULES.iter() {
-        assert!(said.contains(&format!("FAIL  {}", rule.id)), "{said}");
+        let mark = if super::rules::WARNED.contains(&rule.id) {
+            "warn"
+        } else {
+            "FAIL"
+        };
+        assert!(said.contains(&format!("{mark}  {}", rule.id)), "{said}");
     }
     assert!(
         said.contains(&format!(
@@ -1700,7 +1713,7 @@ fn a_plugin_breaking_every_rule_is_told_each_with_its_place_and_its_fix() {
     assert!(
         said.contains(&format!(
             "{} of {} rules failed",
-            RULES.len(),
+            RULES.len() - super::rules::WARNED.len(),
             RULES.len() + 1
         )),
         "{said}"
@@ -2590,4 +2603,216 @@ fn the_roles_and_commands_are_roles_jsons() {
         held("RecordOutcomes"),
         Some(("record_outcomes".into(), vec!["data".into()]))
     );
+    // v24's (meridian-schema a6a0af7): booking, the allocation instruction,
+    // the give-up, the alert, and the reference role's template offer.
+    for (name, call, roles) in [
+        ("BookOrder", "book_order", &["oms"][..]),
+        ("HandOffBooking", "hand_off_booking", &["oms"][..]),
+        (
+            "CorrectBooking",
+            "correct_booking",
+            &["oms", "operations"][..],
+        ),
+        ("RecordSleeveCross", "record_sleeve_cross", &["oms"][..]),
+        (
+            "SetAllocationInstruction",
+            "set_allocation_instruction",
+            &["operations", "portfolio"][..],
+        ),
+        (
+            "ReportGiveUp",
+            "report_give_up",
+            &["confirmation", "connectivity"][..],
+        ),
+        ("RaiseAlert", "raise_alert", &["compliance"][..]),
+        ("AcknowledgeAlert", "acknowledge_alert", &["compliance"][..]),
+        (
+            "OfferTemplateFields",
+            "offer_template_fields",
+            &["reference"][..],
+        ),
+    ] {
+        assert_eq!(
+            held(name),
+            Some((
+                call.to_string(),
+                roles.iter().map(|r| r.to_string()).collect()
+            )),
+            "{name}"
+        );
+    }
+    // ListReplacements is a read every role makes, not a command.
+    assert_eq!(held("ListReplacements"), None);
+}
+
+#[test]
+fn a_reference_plugin_names_a_role_of_the_deployment_and_runs_no_suite_yet() {
+    // Contract v24 adds the reference role (the one-ID spec), its suite in
+    // preview: a plugin may hold it, and --verified does not hold it to the
+    // suite yet.
+    let plugin = Scaffolded::tested("reference-role");
+    plugin.replace("pyproject.toml", "roles = []", "roles = [\"reference\"]");
+    for report in [plugin.check(), plugin.check_verified()] {
+        assert!(
+            !report.failures.iter().any(|f| f.rule == "tool-meridian"),
+            "{}",
+            text(&report)
+        );
+        assert!(
+            !report.failures.iter().any(|f| f.rule == "role-suite"),
+            "{}",
+            text(&report)
+        );
+    }
+    assert!(!super::rules::SUITES.contains(&"reference"));
+    assert!(!super::rules::EDGE_ROLES.contains(&"reference"));
+    let cases = super::rules::suite_cases("reference");
+    for case in [
+        "fills-a-template",
+        "licensed-vendor-value-stays",
+        "offers-never-overwrite-a-person",
+        "reads-the-record-it-fills",
+        "resolves-a-security-it-reconciles",
+    ] {
+        assert!(cases.iter().any(|(name, _)| name == case), "{case}");
+    }
+}
+
+#[test]
+fn every_suite_holds_v24s_replacement_and_template_cases_which_every_plugin_passes() {
+    for role in super::rules::SUITES {
+        let cases = super::rules::suite_cases(role);
+        for case in [
+            "hears-and-reads-a-replacement",
+            "reads-the-template-catalogue",
+        ] {
+            assert_eq!(
+                cases.iter().find(|(name, _)| name == case),
+                Some(&(case.to_string(), false)),
+                "{role}: {case}"
+            );
+        }
+    }
+    let custody = super::rules::suite_cases("custody");
+    assert!(custody
+        .iter()
+        .any(|(name, _)| name == "records-a-thinly-described-holding-unresolved"));
+    let connectivity = super::rules::suite_cases("connectivity");
+    assert!(connectivity
+        .iter()
+        .any(|(name, _)| name == "reports-a-give-up-rejected"));
+}
+
+// ── replaced-ids-followed (contract v24; the one-ID spec's requirement 11) ──
+
+#[test]
+fn an_instrument_id_kept_in_the_code_is_warned_and_fails_nothing_verified_or_not() {
+    let plugin = Scaffolded::tested("kept-id");
+    let line = plugin.add_after(
+        &page_py(),
+        "TITLE = ",
+        concat!(
+            "HELD = \"LCL-01JABCDEFGHJKMNPQRSTVWXYZ\"\n",
+            "INDEX = {'spx': 'INS-7KQ2M9X4'}\n",
+            "FOLLOWED = ids.current(\"LCL-01JFOLLOWED\")\n",
+            "# HELD_BEFORE = \"LCL-01JCOMMENTED\"\n",
+            "PREFIX = \"LCL-\"\n",
+            "SAID = \"a record such as LCL-01J... is provisional\"\n",
+            "PROVISIONAL = record.provisional",
+        ),
+    );
+    // A test's fixture is an ID, and tests are not the plugin's code.
+    plugin.write(
+        "tests/test_ids.py",
+        "def test_the_suite_resolves():\n    assert \"INS-suite-1\" != \"LCL-suite-1\"\n",
+    );
+
+    for report in [plugin.check(), plugin.check_verified()] {
+        assert!(report.passed(), "{}", text(&report));
+        let warned: Vec<(&str, &str, usize)> = report
+            .warnings
+            .iter()
+            .map(|w| (w.rule, w.file.as_str(), w.line))
+            .collect();
+        let page = page_py();
+        assert_eq!(
+            warned,
+            [
+                ("replaced-ids-followed", page.as_str(), line),
+                ("replaced-ids-followed", page.as_str(), line + 1),
+            ],
+            "{}",
+            text(&report)
+        );
+        assert!(report
+            .outcomes
+            .iter()
+            .any(|(id, _, outcome)| *id == "replaced-ids-followed" && *outcome == Outcome::Warned));
+    }
+
+    let report = plugin.check();
+    let first = &report.warnings[0];
+    assert!(
+        first.found.contains("`LCL-01JABCDEFGHJKMNPQRSTVWXYZ`")
+            && first.found.contains("provisional")
+            && first.found.contains("names a replaced ID"),
+        "{}",
+        first.found
+    );
+    assert!(report.warnings[1].found.contains("`INS-7KQ2M9X4`"));
+    assert!(report.warnings[1].found.contains("the platform merges it"));
+    assert!(
+        first.instead.contains("meridian.CurrentIdMap")
+            && first.instead.contains("resolve_identifier")
+            && first.instead.contains("fails nothing"),
+        "{}",
+        first.instead
+    );
+
+    let said = text(&report);
+    assert!(said.contains("warn  replaced-ids-followed"), "{said}");
+    assert!(
+        said.contains(&format!(
+            "{}:{line}: `LCL-01JABCDEFGHJKMNPQRSTVWXYZ`",
+            page_py()
+        )),
+        "{said}"
+    );
+    assert!(
+        said.contains("Warnings, 2 place(s), failing nothing")
+            && said.contains("Every rule it was checked against holds."),
+        "{said}"
+    );
+
+    let json = json(&report);
+    assert_eq!(json["passed"], true);
+    assert_eq!(json["failures"].as_array().unwrap().len(), 0);
+    assert_eq!(json["warnings"].as_array().unwrap().len(), 2);
+    assert_eq!(json["warnings"][0]["rule"], "replaced-ids-followed");
+    assert_eq!(json["warnings"][0]["line"], line);
+    assert!(json["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|rule| rule["rule"] == "replaced-ids-followed" && rule["outcome"] == "warned"));
+}
+
+#[test]
+fn a_plugin_keeping_no_instrument_id_is_warned_of_nothing() {
+    let plugin = Scaffolded::tested("no-kept-id");
+    let report = plugin.check();
+    assert!(report.warnings.is_empty(), "{}", text(&report));
+    assert!(report
+        .outcomes
+        .iter()
+        .any(|(id, _, outcome)| *id == "replaced-ids-followed" && *outcome == Outcome::Passed));
+    let said = text(&report);
+    assert!(!said.contains("Warnings,"), "{said}");
+    assert_eq!(json(&report)["warnings"], serde_json::json!([]));
+    // Nor is any role's template.
+    for role in ["custody", "data", "operations", "reporting"] {
+        let plugin = Scaffolded::of_role(&format!("no-kept-id-{role}"), role);
+        let report = plugin.check_verified();
+        assert!(report.warnings.is_empty(), "{role}: {}", text(&report));
+    }
 }

@@ -6,7 +6,7 @@
     {
       "role": "compliance",
       "since": "v18",
-      "says": "A compliance plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
+      "says": "A compliance plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it acknowledges an error-account alert for a person, raises its own, and hears and reads bookings and alerts. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue, and decides an order on a local record, which no price check can run on.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -274,13 +274,129 @@
               "row": "ListOutcomes"
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "acknowledges-an-error-account-alert",
+          "since": "v24",
+          "given": "a booking allocates an overfill's excess to the error account, and a person in compliance reviews it",
+          "expect": [
+            {
+              "row": "AlertChanged"
+            },
+            {
+              "row": "AcknowledgeAlert",
+              "fields": {
+                "reason": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "raises-its-own-alert",
+          "since": "v24",
+          "given": "the plugin's post-trade review finds an order booked with no check on record",
+          "expect": [
+            {
+              "row": "RaiseAlert",
+              "fields": {
+                "account_id": "<set>",
+                "reason": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-alerts-and-catches-up",
+          "since": "v24",
+          "given": "the plugin starts, and later lost deliveries",
+          "expect": [
+            {
+              "row": "ListAlerts"
+            }
+          ]
+        },
+        {
+          "name": "hears-and-reads-bookings",
+          "since": "v24",
+          "given": "a block is booked across two funds, and the plugin checks the booking's fairness",
+          "expect": [
+            {
+              "row": "BookingUpdated"
+            },
+            {
+              "row": "ListBookings"
+            }
+          ]
+        },
+        {
+          "name": "decides-an-order-on-a-local-record",
+          "since": "v24",
+          "given": "an order is proposed on an instrument whose record is provisional, the deployment's escape hatch on",
+          "expect": [
+            {
+              "row": "OrderUpdated"
+            },
+            {
+              "row": "ResolveInstrument",
+              "fields": {
+                "instrument_id": "<set>"
+              }
+            },
+            {
+              "row": "RecordCheck",
+              "fields": {
+                "order_id": "<set>",
+                "verdict": "<set>",
+                "rule": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-whether-orders-may-name-local-records",
+          "since": "v24",
+          "given": "the plugin is about to propose or accept on an instrument whose record is provisional, and shows a person whether the deployment's escape hatch is on",
+          "expect": [
+            {
+              "row": "ReadLocalRecordOrders"
+            }
+          ]
         }
       ]
     },
     {
       "role": "confirmation",
       "since": "v22",
-      "says": "A confirmation plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
+      "says": "A confirmation plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it reports a prime broker's answer to a give-up. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
       "cases": [
         {
           "name": "reads-a-calendar",
@@ -312,13 +428,56 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reports-a-give-up-rejected",
+          "since": "v24",
+          "given": "the prime broker a trade was given up to rejects it",
+          "expect": [
+            {
+              "row": "ReportGiveUp",
+              "fields": {
+                "execution_id": "<set>",
+                "reason": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "connectivity",
       "since": "v22",
-      "says": "A connectivity plugin passing every case sends the placements naming its instance and no other, with what its ems set in the venue's account field; reports every acknowledgement, rejection, restatement, fill, bust and charge in the contract's meanings, each with the raw record it was converted from and the venue's text only where no contract reason maps; marks an unconverted status outcome unknown and resolves it by asking, never by sending again; derives an execution ID the same way twice; states every fill's settlement date, the venue's or the date read's; sends nothing new on a pause and cancels at its venue on a stop, reporting each cancel as a fact; and publishes its venue's catalogue. A case about calendars, settlement dates, locates or compliance waits (`about`, contract v22) a plugin whose work never uses them marks not presented, with why, and a case about a fill's place of execution (`about_field`) one whose venue never states it; and a case about venue-originated fills, charges without a fill, busts or value-date rolls (`about`, contract v23) one whose venue never originates a fill, never charges a fee with no fill, never busts or corrects a fill, or settles its trades rather than rolling them.\n",
+      "says": "A connectivity plugin passing every case sends the placements naming its instance and no other, with what its ems set in the venue's account field; reports every acknowledgement, rejection, restatement, fill, bust and charge in the contract's meanings, each with the raw record it was converted from and the venue's text only where no contract reason maps; marks an unconverted status outcome unknown and resolves it by asking, never by sending again; derives an execution ID the same way twice; states every fill's settlement date, the venue's or the date read's; sends nothing new on a pause and cancels at its venue on a stop, reporting each cancel as a fact; and publishes its venue's catalogue. A case about calendars, settlement dates, locates or compliance waits (`about`, contract v22) a plugin whose work never uses them marks not presented, with why, and a case about a fill's place of execution (`about_field`) one whose venue never states it; and a case about venue-originated fills, charges without a fill, busts or value-date rolls (`about`, contract v23) one whose venue never originates a fill, never charges a fee with no fill, never busts or corrects a fill, or settles its trades rather than rolling them. From contract v24 it reports a prime broker's answer to a give-up. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
       "cases": [
         {
           "name": "acknowledges-a-placement-naming-it",
@@ -816,13 +975,66 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reports-a-give-up-rejected",
+          "since": "v24",
+          "given": "the prime broker a trade was given up to rejects it",
+          "expect": [
+            {
+              "row": "ReportGiveUp",
+              "fields": {
+                "execution_id": "<set>",
+                "reason": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-whether-orders-may-name-local-records",
+          "since": "v24",
+          "given": "the plugin is about to propose or accept on an instrument whose record is provisional, and shows a person whether the deployment's escape hatch is on",
+          "expect": [
+            {
+              "row": "ReadLocalRecordOrders"
+            }
+          ]
         }
       ]
     },
     {
       "role": "custody",
       "since": "v11",
-      "says": "A custody plugin passing every case reports its source's accounts with their kinds, its sync state in the contract's own values, and each account's holdings counted once, every row referencing the raw record it was converted from, the settled and pending quantities stated, the custodian named, and every value it closed rather than read carrying its provenance; it sends a value it cannot convert as not known beside the value as reported, and withholds a statement it cannot serve clean. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why; and a case about plan fund codes, sweep funds or splits (`about`, contract v23) a plugin whose custodian never states them marks not presented, with why, and a case about a currency not stated (`about`, contract v23) one whose custodian states the currency of every holding.\n",
+      "says": "A custody plugin passing every case reports its source's accounts with their kinds, its sync state in the contract's own values, and each account's holdings counted once, every row referencing the raw record it was converted from, the settled and pending quantities stated, the custodian named, and every value it closed rather than read carrying its provenance; it sends a value it cannot convert as not known beside the value as reported, and withholds a statement it cannot serve clean. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why; and a case about plan fund codes, sweep funds or splits (`about`, contract v23) a plugin whose custodian never states them marks not presented, with why, and a case about a currency not stated (`about`, contract v23) one whose custodian states the currency of every holding. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue, and records a holding its source describes too thinly for a record unresolved, never dropped.\n",
       "cases": [
         {
           "name": "sync-current",
@@ -1776,13 +1988,62 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "records-a-thinly-described-holding-unresolved",
+          "since": "v24",
+          "given": "the venue names a holding by its own symbol alone, stating no description of the security, and the resolve answers not found",
+          "expect": [
+            {
+              "row": "ResolveIdentifier"
+            },
+            {
+              "row": "RecordHolding",
+              "fields": {
+                "instrument_id": "<unset>",
+                "unresolved_identifiers": "<set>",
+                "raw_record": {
+                  "key": "<set>"
+                }
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "data",
       "since": "v18",
-      "says": "A data plugin passing every case records each source's prices and bars exactly, under its dataset, its business date, its source's times and its raw record; restates a forming day under the same row key and sends an identical repeat unchanged; resolves every subject and venue before it records, reporting what does not resolve, and reads the record of a subject another source resolved to name it in its own; names a price in a token by the token's own cash instrument, never a fiat code; and records what a want asks, or declines it per subject. From v19 it records each trade it publishes with the platform's trade attributes, converted at the edge, and the side that took liquidity where its source says it, a withdrawal as a new version; and each quote it publishes with the sides its source states; and keeps a standing want of a streamed dataset current. A case about a kind of data the plugin declares it never publishes is not presented, with why. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why; and a case about outcomes or disputed outcomes (`about`, contract v23) a plugin with no event contracts, or whose source has no disputes, marks not presented, with why.\n",
+      "says": "A data plugin passing every case records each source's prices and bars exactly, under its dataset, its business date, its source's times and its raw record; restates a forming day under the same row key and sends an identical repeat unchanged; resolves every subject and venue before it records, reporting what does not resolve, and reads the record of a subject another source resolved to name it in its own; names a price in a token by the token's own cash instrument, never a fiat code; and records what a want asks, or declines it per subject. From v19 it records each trade it publishes with the platform's trade attributes, converted at the edge, and the side that took liquidity where its source says it, a withdrawal as a new version; and each quote it publishes with the sides its source states; and keeps a standing want of a streamed dataset current. A case about a kind of data the plugin declares it never publishes is not presented, with why. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why; and a case about outcomes or disputed outcomes (`about`, contract v23) a plugin with no event contracts, or whose source has no disputes, marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
       "cases": [
         {
           "name": "a-daily-close",
@@ -2406,13 +2667,42 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "ems",
       "since": "v19",
-      "says": "An ems plugin passing every case learns the datasets it may read, reads trades over a range and the latest quotes from the deployment's default sources unless it names others, hears every trade and the latest quotes the lake records after, narrowed to the subjects it asked for, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
+      "says": "An ems plugin passing every case learns the datasets it may read, reads trades over a range and the latest quotes from the deployment's default sources unless it names others, hears every trade and the latest quotes the lake records after, narrowed to the subjects it asked for, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -2769,13 +3059,52 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-whether-orders-may-name-local-records",
+          "since": "v24",
+          "given": "the plugin is about to propose or accept on an instrument whose record is provisional, and shows a person whether the deployment's escape hatch is on",
+          "expect": [
+            {
+              "row": "ReadLocalRecordOrders"
+            }
+          ]
         }
       ]
     },
     {
       "role": "oms",
       "since": "v22",
-      "says": "An oms plugin passing every case releases a proposed order through the gate for a person or its service account, asks for changes, claims, holds and pauses, decides an approval its policy asks of it, records a telephoned order and a manual execution for a person, acknowledges a late fact, records a locate's use, reads the venue's catalogue, and seeds by a read and hears what follows of orders, placements, executions, locates and the trading instructions. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
+      "says": "An oms plugin passing every case releases a proposed order through the gate for a person or its service account, asks for changes, claims, holds and pauses, decides an approval its policy asks of it, records a telephoned order and a manual execution for a person, acknowledges a late fact, records a locate's use, reads the venue's catalogue, and seeds by a read and hears what follows of orders, placements, executions, locates and the trading instructions. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it books an order's executions to its instructed accounts, a block at its average price with the residual on a named allocation and an overfill's excess on the error account, cancels and rebooks before the hand-off, sees a booking held after a bust, records a sleeve cross, and hears and reads bookings and a held booking's alert. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
       "cases": [
         {
           "name": "proposes-an-order",
@@ -3036,13 +3365,238 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "books-an-order-to-its-instructed-accounts",
+          "since": "v24",
+          "given": "a single order's executions are to be booked to the accounts its allocation instruction names",
+          "expect": [
+            {
+              "row": "BookOrder",
+              "fields": {
+                "order_id": "<set>",
+                "execution_ids": "<set>",
+                "allocations": [
+                  {
+                    "account_id": "<set>",
+                    "quantity": "<set>",
+                    "average_price": "<set>",
+                    "gross_amount": "<set>",
+                    "net_amount": "<set>",
+                    "intended_settlement_date": "<set>"
+                  }
+                ]
+              }
+            },
+            {
+              "row": "BookingUpdated"
+            }
+          ]
+        },
+        {
+          "name": "books-a-block-at-average-price",
+          "since": "v24",
+          "given": "a block order's executions across two funds are to be booked at their average price",
+          "expect": [
+            {
+              "row": "BookOrder",
+              "fields": {
+                "allocations": [
+                  {
+                    "account_id": "<set>",
+                    "average_price": "<same>",
+                    "average_priced": true
+                  },
+                  {
+                    "account_id": "<set>",
+                    "average_price": "<same>",
+                    "average_priced": true
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "puts-the-residual-on-a-named-allocation",
+          "since": "v24",
+          "given": "the executions' gross does not split evenly across the accounts",
+          "expect": [
+            {
+              "row": "BookOrder",
+              "fields": {
+                "allocations": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "books-an-overfill-to-the-error-account",
+          "since": "v24",
+          "given": "the venue filled more than the order's quantity, and the firm books the excess to its error account",
+          "expect": [
+            {
+              "row": "BookOrder",
+              "fields": {
+                "allocations": [
+                  {
+                    "account_id": "<set>",
+                    "reason": "<set>"
+                  }
+                ]
+              }
+            },
+            {
+              "row": "AlertChanged"
+            }
+          ]
+        },
+        {
+          "name": "cancels-and-rebooks-before-hand-off",
+          "since": "v24",
+          "given": "a booked booking is wrong before its hand-off",
+          "expect": [
+            {
+              "row": "CorrectBooking",
+              "fields": {
+                "booking_id": "<set>",
+                "reason": "<set>"
+              }
+            },
+            {
+              "row": "BookOrder",
+              "fields": {
+                "execution_ids": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "holds-after-a-bust",
+          "since": "v24",
+          "given": "an execution in a booked booking is busted before the hand-off",
+          "expect": [
+            {
+              "row": "BookingUpdated"
+            },
+            {
+              "row": "HandOffBooking",
+              "fields": {
+                "booking_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "account-not-instructed-refused",
+          "since": "v24",
+          "given": "a booking names an account the instruction does not name and that is not marked an error account, and is refused REFUSAL_REASON_ACCOUNT_NOT_INSTRUCTED",
+          "expect": [
+            {
+              "row": "BookOrder",
+              "fields": {
+                "allocations": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "unbalanced-booking-refused",
+          "since": "v24",
+          "given": "a booking whose allocations do not sum to the executions booked is refused REFUSAL_REASON_BOOKING_UNBALANCED",
+          "expect": [
+            {
+              "row": "BookOrder",
+              "fields": {
+                "allocations": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-bookings-and-catches-up",
+          "since": "v24",
+          "given": "the plugin starts, and later lost deliveries",
+          "expect": [
+            {
+              "row": "ListBookings"
+            },
+            {
+              "row": "ListBookings",
+              "fields": {
+                "since": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "records-a-sleeve-cross-for-two-orders",
+          "since": "v24",
+          "given": "portfolio decides to cross a position between two sleeves of one account, standing in for two opposite orders",
+          "expect": [
+            {
+              "row": "RecordSleeveCross"
+            }
+          ]
+        },
+        {
+          "name": "hears-and-reads-a-held-bookings-alert",
+          "since": "v24",
+          "given": "a booking is held, and the plugin later reads the account's alerts",
+          "expect": [
+            {
+              "row": "AlertChanged"
+            },
+            {
+              "row": "ListAlerts"
+            }
+          ]
+        },
+        {
+          "name": "reads-whether-orders-may-name-local-records",
+          "since": "v24",
+          "given": "the plugin is about to propose or accept on an instrument whose record is provisional, and shows a person whether the deployment's escape hatch is on",
+          "expect": [
+            {
+              "row": "ReadLocalRecordOrders"
+            }
+          ]
         }
       ]
     },
     {
       "role": "operations",
       "since": "v14",
-      "says": "An operations plugin passing every case reads the account's activity when it reconciles, hears each activity recorded, and offers the activity that explains a break as its candidate cause, linked by value, under the category that fits; it books nothing from activity and confirms nothing without a person. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
+      "says": "An operations plugin passing every case reads the account's activity when it reconciles, hears each activity recorded, and offers the activity that explains a break as its candidate cause, linked by value, under the category that fits; it books nothing from activity and confirms nothing without a person. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it corrects a handed-off booking, names an unsettled allocation as a break's cause, sets a client's allocation instruction where the firm is its custodian, and hears and reads bookings and a held booking's alert. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
       "cases": [
         {
           "name": "income-reinvested-explains-a-quantity-gained",
@@ -3288,13 +3842,115 @@
               "row": "ListOutcomes"
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "corrects-a-handed-off-booking",
+          "since": "v24",
+          "given": "a handed-off booking must change, a client having reneged on its allocation",
+          "expect": [
+            {
+              "row": "CorrectBooking",
+              "fields": {
+                "booking_id": "<set>",
+                "allocations": "<set>",
+                "reason": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "names-an-unsettled-allocation-as-a-breaks-cause",
+          "since": "v24",
+          "given": "a handed-off allocation the custodian has not shown by its intended settlement date",
+          "expect": [
+            {
+              "row": "ListBookings"
+            },
+            {
+              "row": "RecordBreak",
+              "fields": {
+                "candidate_causes": [
+                  {
+                    "book_entry": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "sets-a-clients-allocation-instruction",
+          "since": "v24",
+          "given": "the firm is the client's custodian, and the client's allocation arrives after the trade",
+          "expect": [
+            {
+              "row": "SetAllocationInstruction",
+              "fields": {
+                "order_id": "<set>",
+                "allocation_instruction": "<set>",
+                "reason": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-booking-handed-off",
+          "since": "v24",
+          "given": "the oms hands a booking off to the firm's operations",
+          "expect": [
+            {
+              "row": "BookingUpdated"
+            }
+          ]
+        },
+        {
+          "name": "hears-and-reads-a-held-bookings-alert",
+          "since": "v24",
+          "given": "a booking is held against the affirmation deadline the plugin declares",
+          "expect": [
+            {
+              "row": "AlertChanged"
+            },
+            {
+              "row": "ListAlerts"
+            }
+          ]
         }
       ]
     },
     {
       "role": "portfolio",
       "since": "v18",
-      "says": "A portfolio plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
+      "says": "A portfolio plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it amends an order's allocation instruction and hears and reads bookings. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -3504,13 +4160,210 @@
               "row": "ListOutcomes"
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "amends-an-allocation-instruction",
+          "since": "v24",
+          "given": "the PM revises how a released order splits across accounts, for what is not yet booked",
+          "expect": [
+            {
+              "row": "SetAllocationInstruction",
+              "fields": {
+                "order_id": "<set>",
+                "allocation_instruction": "<set>",
+                "reason": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-and-reads-bookings",
+          "since": "v24",
+          "given": "an order the PM proposed is booked to its accounts",
+          "expect": [
+            {
+              "row": "BookingUpdated"
+            },
+            {
+              "row": "ListBookings"
+            }
+          ]
+        },
+        {
+          "name": "reads-whether-orders-may-name-local-records",
+          "since": "v24",
+          "given": "the plugin is about to propose or accept on an instrument whose record is provisional, and shows a person whether the deployment's escape hatch is on",
+          "expect": [
+            {
+              "row": "ReadLocalRecordOrders"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "reference",
+      "since": "v24",
+      "says": "A reference plugin passing every case fills a security's template from the sources it reconciles, offering each value with its provenance and itself the source; keeps a value from a licensed vendor's feed as an offer that never leaves the deployment; never overwrites a value a person set or accepted; never asks for a mint; reads the template catalogue; and hears and catches up on replacements. A case about calendars or settlement dates (`about`) a plugin whose work never uses them marks not presented, with why.\n",
+      "cases": [
+        {
+          "name": "fills-a-template",
+          "given": "a security the deployment holds lacks the terms its template names, and the plugin's sources state them",
+          "expect": [
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>",
+                "template_version": "<set>"
+              }
+            },
+            {
+              "row": "OfferTemplateFields",
+              "fields": {
+                "instrument_id": "<set>",
+                "template_id": "<set>",
+                "template_version": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "licensed-vendor-value-stays",
+          "given": "a term the plugin reconciled came only from a licensed vendor's feed",
+          "expect": [
+            {
+              "row": "OfferTemplateFields",
+              "fields": {
+                "instrument_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "offers-never-overwrite-a-person",
+          "given": "a person already set a value the plugin's sources state differently",
+          "expect": [
+            {
+              "row": "OfferTemplateFields",
+              "fields": {
+                "instrument_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "given": "a record the plugin offered fields for is replaced, and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "given": "the plugin starts and lists the templates for the classes it serves",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            }
+          ]
+        },
+        {
+          "name": "reads-a-calendar",
+          "about": "calendars",
+          "given": "the plugin needs a settlement calendar's days over a date range",
+          "expect": [
+            {
+              "row": "ReadCalendar",
+              "fields": {
+                "calendar_id": "<set>",
+                "from_date": "<set>",
+                "to_date": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "asks-for-a-settlement-date",
+          "about": "settlement dates",
+          "given": "the plugin needs an instrument's settlement date from a trade date, by its market's rule",
+          "expect": [
+            {
+              "row": "ComputeDate",
+              "fields": {
+                "settlement": {
+                  "instrument_id": "<set>",
+                  "trade_date": "<set>"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-the-record-it-fills",
+          "since": "v24",
+          "given": "the plugin is about to offer fields for a record the deployment holds, and reads its values and offers first",
+          "expect": [
+            {
+              "row": "ResolveInstrument",
+              "fields": {
+                "instrument_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "resolves-a-security-it-reconciles",
+          "since": "v24",
+          "given": "the plugin's sources name a security by an open identifier, and it finds the deployment's record, read-only",
+          "expect": [
+            {
+              "row": "ResolveIdentifier",
+              "fields": {
+                "identifiers": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "reporting",
       "since": "v18",
-      "says": "A reporting plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. From v19 it names an instrument by an identifier, such as its reporting currency by its ISO 4217 code, and has it resolved to the deployment's record, which mints nothing. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
+      "says": "A reporting plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. From v19 it names an instrument by an identifier, such as its reporting currency by its ISO 4217 code, and has it resolved to the deployment's record, which mints nothing. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears and reads bookings and alerts. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -3676,13 +4529,68 @@
               "row": "ListOutcomes"
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-and-reads-bookings",
+          "since": "v24",
+          "given": "an order is booked to its accounts, and the plugin reports each allocation",
+          "expect": [
+            {
+              "row": "BookingUpdated"
+            },
+            {
+              "row": "ListBookings"
+            }
+          ]
+        },
+        {
+          "name": "hears-and-reads-alerts",
+          "since": "v24",
+          "given": "an error-account booking raises an alert, and a person's report lists them",
+          "expect": [
+            {
+              "row": "AlertChanged"
+            },
+            {
+              "row": "ListAlerts"
+            }
+          ]
         }
       ]
     },
     {
       "role": "servicing",
       "since": "v22",
-      "says": "A servicing plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
+      "says": "A servicing plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
       "cases": [
         {
           "name": "reads-a-calendar",
@@ -3711,6 +4619,35 @@
                   "instrument_id": "<set>",
                   "trade_date": "<set>"
                 }
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
               }
             }
           ]
@@ -3720,7 +4657,7 @@
     {
       "role": "settlement",
       "since": "v22",
-      "says": "A settlement plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
+      "says": "A settlement plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
       "cases": [
         {
           "name": "reads-a-calendar",
@@ -3752,13 +4689,42 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "signal",
       "since": "v18",
-      "says": "A signal plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; from v19 it reads trades over a range and the latest quotes, hears every trade and the latest quotes recorded after, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why.\n",
+      "says": "A signal plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; from v19 it reads trades over a range and the latest quotes, hears every trade and the latest quotes recorded after, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -3923,6 +4889,35 @@
             },
             {
               "row": "ListOutcomes"
+            }
+          ]
+        },
+        {
+          "name": "hears-and-reads-a-replacement",
+          "since": "v24",
+          "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
+          "expect": [
+            {
+              "row": "ReplaceMergedInstrument"
+            },
+            {
+              "row": "ListReplacements"
+            }
+          ]
+        },
+        {
+          "name": "reads-the-template-catalogue",
+          "since": "v24",
+          "given": "the plugin needs the fields and match rule of the template a security is minted against",
+          "expect": [
+            {
+              "row": "ListTemplates"
+            },
+            {
+              "row": "ReadTemplate",
+              "fields": {
+                "template_id": "<set>"
+              }
             }
           ]
         }
