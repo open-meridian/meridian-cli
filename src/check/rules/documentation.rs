@@ -389,7 +389,7 @@ static SCREEN: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
         ("role marker", r"(?:^|[^a-z0-9_])(?:system|assistant|developer|user|human)\s*:"),
         (
             "chat markup",
-            r"<\||\|>|\[/?inst\]|<</?sys>>|<\s*/?\s*(?:system|assistant|user|instructions?)\s*>",
+            r"<\||\|>|\[/?inst\]|<</?sys>>|</|<\s*/?\s*(?:system|assistant|user|instructions?)\s*>",
         ),
         ("instruction words", r"\binstructions?\b|\bfrom now on\b|\bhenceforth\b"),
         (
@@ -403,7 +403,7 @@ static SCREEN: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
         ("tool name", r"\b[a-z][a-z0-9-]*__[a-z][a-z0-9_]*\b"),
         (
             "answer-shaped",
-            r"^(?:refused|error|outcome)\s*:|\b(?:jsonrpc|structuredcontent|iserror|tools/call)\b",
+            r#"^(?:refused|error|outcome)\s*:|["']\s*[}\]]\s*[}\]]|\b(?:jsonrpc|structuredcontent|iserror|tools/call)\b"#,
         ),
         (
             "prompt talk",

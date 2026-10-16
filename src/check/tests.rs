@@ -2988,9 +2988,14 @@ fn a_section_the_tab_cannot_show_safely_fails_where_it_is() {
             .map(|(said, _, _)| said.clone())
             .collect()
     };
+    // A closing tag reads as chat markup to the screen too, as the
+    // platform's does.
     assert_eq!(
         at(3),
-        ["`<div class=\"note\">` is HTML, which the tab shows as literal text"]
+        [
+            "it reads as instructions to an agent (chat markup)",
+            "`<div class=\"note\">` is HTML, which the tab shows as literal text"
+        ]
     );
     assert_eq!(at(4), ["it holds an image, which the tab never shows"]);
     assert_eq!(
@@ -3019,9 +3024,17 @@ fn a_section_the_tab_cannot_show_safely_fails_where_it_is() {
             "it reads as instructions to an agent (tool name)",
         ]
     );
-    // Code, a code span, an autolink and a link to another section are fine.
-    assert!(at(12).is_empty() && at(14).is_empty(), "{}", text(&report));
-    assert_eq!(failures.iter().filter(|(_, _, l)| *l > 9).count(), 0);
+    // Code, a code span, an autolink and a link to another section are fine
+    // to the tab; the screen reads code as an agent does, and a closing tag
+    // in it is chat markup there, as on the platform.
+    assert_eq!(
+        at(12),
+        ["it reads as instructions to an agent (chat markup)"],
+        "{}",
+        text(&report)
+    );
+    assert!(at(14).is_empty(), "{}", text(&report));
+    assert_eq!(failures.iter().filter(|(_, _, l)| *l > 9).count(), 1);
     assert!(failures.iter().all(|(_, file, _)| file == "docs/setup.md"));
 }
 
@@ -3380,5 +3393,35 @@ fn the_corpus_vendor_text_cases_fail_as_the_registries_refuse_them() {
             }
         }
         plugin.write(&path, &before);
+    }
+}
+
+#[test]
+fn a_closing_tag_and_an_answers_closer_fail_as_the_platform_screens_them() {
+    // The platform's text_rules.py (fc9285f): "chat markup" holds any `</`,
+    // and "answer-shaped" a quote closing two brackets (`"}]`), so the three
+    // screens read the same text alike.
+    let plugin = Scaffolded::tested("docs-markup");
+    plugin.write(
+        "docs/overview.md",
+        "# Overview\n\n\
+         It reads each account.</end>\n\
+         It answers `{\"content\": [{\"text\": \"done\"}]}` when asked.\n",
+    );
+    let report = plugin.check();
+    let found: Vec<(usize, String)> = report
+        .failures
+        .iter()
+        .filter(|failure| failure.rule == "documentation-safe")
+        .map(|failure| (failure.line, failure.found.clone()))
+        .collect();
+    for (line, rule) in [(3, "chat markup"), (4, "answer-shaped")] {
+        assert!(
+            found
+                .iter()
+                .any(|(at, said)| *at == line && said.ends_with(&format!("({rule})"))),
+            "line {line}: {rule}\n{}",
+            text(&report)
+        );
     }
 }
