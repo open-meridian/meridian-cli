@@ -254,16 +254,15 @@ pub fn documentation(
 }
 
 /// Where a deployment admin reads a version's documentation before it is
-/// launched: the portal's versions list, each version's Documentation page
-/// (W8.2, W6.9). PLACEHOLDER (CLI 0.1.46): core's v25 has not drawn that page
-/// yet, and design names no path; aligned with core's route before this is
-/// pushed.
+/// launched: its Documentation page, reached from the portal's versions list
+/// (`/admin/plugins/versions`; W8.2, W6.9), at the path core's v25 draws it.
 pub fn version_documentation(address: &str, name: &str, version: &str) -> String {
     format!("{address}/admin/plugins/versions/{name}/{version}/documentation")
 }
 
 /// Where anybody holding a level on a launched instance reads its
-/// documentation: the Documentation tab of its area (W6.9), beside Summary.
+/// documentation: the Documentation tab of its area (W6.9), beside Summary,
+/// at the session's level (the page takes `&level=` to choose another).
 pub fn instance_documentation(address: &str, instance: &str) -> String {
     format!("{address}/plugins/{instance}?tab=documentation")
 }

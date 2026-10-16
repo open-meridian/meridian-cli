@@ -646,3 +646,16 @@ fn the_documentation_is_said_where_it_is_read() {
     )));
     assert!(!said.contains("older/0.1.0"));
 }
+
+#[test]
+fn the_documentation_pages_are_at_the_paths_core_draws_them() {
+    // Core's v25 routes, as it fixed them (2026-10-16).
+    assert_eq!(
+        version_documentation("https://meridian.localhost", "snaptrade", "0.18.0"),
+        "https://meridian.localhost/admin/plugins/versions/snaptrade/0.18.0/documentation"
+    );
+    assert_eq!(
+        instance_documentation("https://meridian.localhost", "snaptrade-1"),
+        "https://meridian.localhost/plugins/snaptrade-1?tab=documentation"
+    );
+}
