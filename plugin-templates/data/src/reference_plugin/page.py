@@ -29,7 +29,6 @@ from meridian.roles import data
 from meridian.v1 import sidecar_pb2
 
 from .convert import Converter
-from .declaration import DECLARATION
 
 TITLE = "Reference prices"
 
@@ -70,6 +69,10 @@ def _mode(mode: int) -> str:
 
 def datasets_read(converter: Converter) -> data.DatasetsRead:
     """Datasets' record: the role's common fields."""
+    # Imported here rather than above: the declaration imports these pages,
+    # for the interface it declares.
+    from .declaration import DECLARATION
+
     instance = converter.plugin.identity.instance_id
     served = [
         data.Served(

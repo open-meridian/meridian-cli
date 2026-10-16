@@ -8,15 +8,14 @@ are sent for it.
 
 import asyncio
 import logging
-import os
 import signal
 
 import meridian
 from meridian.roles import custody
 
 from .custodian import Custodian
-from .declaration import DECLARATION, Config
-from .page import TITLE, pages, use
+from .declaration import DECLARATION, PORT, Config
+from .page import pages, use
 
 log = logging.getLogger("reference_plugin")
 
@@ -27,12 +26,7 @@ async def run() -> None:
     for stop in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(stop, stopped.set)
 
-    port = int(os.environ.get("REFERENCE_PAGE_PORT", "8000"))
-    async with await meridian.connect(
-        interface=meridian.Interface(port=port, title=TITLE, pages=pages),
-        declaration=DECLARATION,
-        reads_external_accounts=True,
-    ) as plugin:
+    async with await meridian.connect(declaration=DECLARATION) as plugin:
         log.info("registered as %s", plugin.identity.instance_id)
         custodian = Custodian()
         config = await plugin.first_settings(Config)
@@ -48,7 +42,7 @@ async def run() -> None:
         plugin.figures = custody.figures(
             connections=1, accounts_reached=len(custodian.accounts), last_read="Not yet"
         )
-        served = pages.serve(plugin, port)
+        served = pages.serve(plugin, PORT)
         await plugin.report(healthy=True, detail="started")
         await stopped.wait()
         following.cancel()

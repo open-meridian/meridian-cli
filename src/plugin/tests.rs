@@ -421,3 +421,54 @@ fn plugin_dev_sends_none_of_the_agents_files() {
     // Nor the pre-push hook, which `.dockerignore` keeps out of the image.
     assert!(!sent.keys().any(|path| path.starts_with("hooks")));
 }
+
+#[test]
+fn every_template_writes_docs_and_a_ci_check_on_this_meridian() {
+    // The v25 plan, step 6: each template ships docs/, and check.yaml's
+    // MERIDIAN_VERSION tracks the CLI that wrote the plugin.
+    for role in [
+        None,
+        Some("custody"),
+        Some("data"),
+        Some("operations"),
+        Some("reporting"),
+    ] {
+        let scratch = Scratch::new("docs");
+        let into = scratch.0.join("venue-desk");
+        scaffold("venue-desk", &into, role).expect("written");
+        for section in ["overview", "setup", "troubleshooting", "terms", "pages"] {
+            assert!(
+                into.join("docs").join(format!("{section}.md")).is_file(),
+                "{role:?}: docs/{section}.md"
+            );
+        }
+        let workflow = std::fs::read_to_string(into.join(".github/workflows/check.yaml"))
+            .expect("the workflow");
+        assert!(
+            workflow.contains(&format!(
+                "  MERIDIAN_VERSION: {}\n",
+                crate::release::VERSION
+            )),
+            "{role:?}: {workflow}"
+        );
+        let pyproject = std::fs::read_to_string(into.join("pyproject.toml")).expect("pyproject");
+        assert!(
+            pyproject.contains("declaration = \"venue_desk.declaration:DECLARATION\""),
+            "{role:?}: every template names its declaration"
+        );
+    }
+}
+
+#[test]
+fn only_the_version_line_of_the_workflow_moves() {
+    let workflow =
+        "env:\n  # a comment naming MERIDIAN_VERSION\n  MERIDIAN_VERSION: 0.1.15\njobs: {}\n";
+    let tracked = tracking_this_cli(workflow);
+    assert_eq!(
+        tracked,
+        format!(
+            "env:\n  # a comment naming MERIDIAN_VERSION\n  MERIDIAN_VERSION: {}\njobs: {{}}\n",
+            crate::release::VERSION
+        )
+    );
+}

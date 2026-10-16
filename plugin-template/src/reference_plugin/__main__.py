@@ -14,12 +14,12 @@ reaches the bus -- and keep it that way.
 
 import asyncio
 import logging
-import os
 import signal
 
 import meridian
 
-from .page import REACHES, TITLE, pages, reports
+from .declaration import DECLARATION, PORT
+from .page import REACHES, pages, reports
 
 log = logging.getLogger("reference_plugin")
 
@@ -36,10 +36,7 @@ async def run() -> None:
     # Where the pages listen, on loopback beside the sidecar, which forwards
     # people's requests to them. Each page is declared with the levels it
     # serves, and the dashboard shows it under those buttons.
-    port = int(os.environ.get("REFERENCE_PAGE_PORT", "8000"))
-    async with await meridian.connect(
-        interface=meridian.Interface(port=port, title=TITLE, pages=pages)
-    ) as plugin:
+    async with await meridian.connect(declaration=DECLARATION) as plugin:
         log.info(
             "registered as %s, roles %s",
             plugin.identity.instance_id,
@@ -56,8 +53,8 @@ async def run() -> None:
         if reports(plugin):
             await plugin.report_external_accounts(accounts=REACHES)
             log.info("reported %d external account(s) to link", len(REACHES))
-        served = pages.serve(plugin, port)
-        log.info("serving its pages on 127.0.0.1:%d", port)
+        served = pages.serve(plugin, PORT)
+        log.info("serving its pages on 127.0.0.1:%d", PORT)
         await plugin.report(healthy=True, detail="started")
         await stopped.wait()
         log.info("stopping")

@@ -18,10 +18,17 @@ use regex::Regex;
 
 use super::{Failure, Plugin, Rule, Source};
 
+mod documentation;
+use documentation::{
+    documentation_safe, documentation_safe_advice, documentation_sections,
+    documentation_sections_advice,
+};
+pub use documentation::{BUNDLE_BYTES, SECTIONS, SECTION_BYTES};
+
 /// The rules, in the order they are reported: what the project is, what it
 /// declares, its pages, its settings, how it reaches the deployment, and its
 /// tests. Running the tests is `TESTS_PASS`, which only `--run-tests` asks.
-pub const RULES: [Rule; 17] = [
+pub const RULES: [Rule; 19] = [
     Rule {
         id: "template-shape",
         holds: "the project keeps the template's shape",
@@ -36,6 +43,19 @@ pub const RULES: [Rule; 17] = [
         id: "edge-storage",
         holds: "only a plugin at the edge asks for storage in its declaration",
         check: edge_storage,
+    },
+    Rule {
+        id: "documentation-sections",
+        holds:
+            "docs/ holds overview.md and setup.md, named by the declaration (troubleshooting.md \
+                and terms.md prompted, and required of a verified plugin)",
+        check: documentation_sections,
+    },
+    Rule {
+        id: "documentation-safe",
+        holds: "each section of docs/ shows as written: UTF-8 within its bounds, and no HTML, \
+                image, script link, hidden character or text that reads as instructions",
+        check: documentation_safe,
     },
     Rule {
         id: "role-suite",
@@ -184,6 +204,16 @@ pub const ADVISED: [&str; 1] = ["role-pages"];
 /// one, so it can update what it keeps (spec/the-platform-master-mints-every-
 /// instrument-from-a-template, requirement 11).
 pub const WARNED: [&str; 1] = ["replaced-ids-followed"];
+
+/// What a rule advises beside what it fails, said as advice and failing
+/// nothing, in every mode (the plan's non-failing tier, contract v25): the
+/// documentation's prompted sections and files not uploaded, and a
+/// heading's text past one screen or a link shown as plain text.
+pub type Advising = fn(&Plugin) -> Vec<Failure>;
+pub const ADVISING: [(&str, Advising); 2] = [
+    ("documentation-sections", documentation_sections_advice),
+    ("documentation-safe", documentation_safe_advice),
+];
 
 // ── Which files ──────────────────────────────────────────────────────────
 

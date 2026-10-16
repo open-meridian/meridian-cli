@@ -14,13 +14,13 @@ come from how the deployment launched it.
 
 import asyncio
 import logging
-import os
 import signal
 
 import meridian
 from meridian.roles import reporting
 
-from .page import TITLE, last_close, pages, use
+from .declaration import DECLARATION, PORT
+from .page import last_close, pages, use
 from .report import Report
 
 log = logging.getLogger("reference_plugin")
@@ -35,13 +35,7 @@ async def run() -> None:
     for stop in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(stop, stopped.set)
 
-    port = int(os.environ.get("REFERENCE_PAGE_PORT", "8000"))
-    async with await meridian.connect(
-        interface=meridian.Interface(port=port, title=TITLE, pages=pages),
-        # The reporting role's common setting (spec/plugin-pages-follow-
-        # their-role): every reporting plugin values in a currency.
-        settings=[reporting.reporting_currency()],
-    ) as plugin:
+    async with await meridian.connect(declaration=DECLARATION) as plugin:
         log.info(
             "registered as %s, roles %s",
             plugin.identity.instance_id,
@@ -66,8 +60,8 @@ async def run() -> None:
                     prices_recorded=report.on_price, bars_recorded=report.on_bar, subjects=held
                 )
             )
-        served = pages.serve(plugin, port)
-        log.info("serving its pages on 127.0.0.1:%d", port)
+        served = pages.serve(plugin, PORT)
+        log.info("serving its pages on 127.0.0.1:%d", PORT)
         await plugin.report(healthy=True, detail="started")
         await stopped.wait()
         log.info("stopping")

@@ -14,6 +14,9 @@ class Account:
     name: str
     detail: str
     as_of: str
+    # The custodian's own type for the account, in its words, which the
+    # account map shows beside the name.
+    account_type: str = ""
 
 
 @dataclass
@@ -26,8 +29,12 @@ class Custodian:
     accounts: tuple[Account, ...] = field(
         default_factory=lambda: (
             Account(
-                "REF-1001", "Individual brokerage", "Reference custodian · Margin", "2026-10-09"
+                "REF-1001",
+                "Individual brokerage",
+                "Reference custodian",
+                "2026-10-09",
+                "Margin",
             ),
-            Account("REF-1002", "Roth IRA", "Reference custodian · IRA", "2026-10-09"),
+            Account("REF-1002", "Roth IRA", "Reference custodian", "2026-10-09", "Roth IRA"),
         )
     )

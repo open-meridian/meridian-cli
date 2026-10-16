@@ -36,10 +36,12 @@ meridian -- bringing a Meridian deployment up
                              with --role custody, data, operations or reporting,
                              that role's template
   meridian plugin check      hold the plugin here to the framework's rules: its pages,
-                             settings, SDK use, [tool.meridian], tests and shape
+                             settings, SDK use, [tool.meridian], documentation (docs/),
+                             tests and shape
   meridian plugin migrate    move the plugin here to a newer release of its SDK: its pins,
                              each release's rewrite of its code, then plugin check
-  meridian plugin upload     build the plugin here and put it in the deployment's catalogue
+  meridian plugin upload     build the plugin here and put it in the deployment's catalogue,
+                             its documentation (docs/) with it
   meridian plugin list       the catalogue: versions uploaded, and what is launched
   meridian plugin launch <name> <version> --instance <id>
                              run a version, once you approve the roles it asks for
@@ -137,7 +139,10 @@ plugin new:
 
 plugin check: needs no deployment. Exits 0 when every rule holds, 1 when one does
 not, each failure with its file, line and what to write instead. A warning
-(replaced-ids-followed: an instrument ID kept in the code) fails nothing
+(replaced-ids-followed: an instrument ID kept in the code) fails nothing, and
+neither does advice: a prompted section of docs/ missing (troubleshooting.md,
+terms.md), a file there that is not uploaded, a heading's text past one screen
+of the Documentation tab, or a link it shows as plain text
       --dir <dir>           the plugin's directory (default: .)
       --run-tests           run its tests too, with pytest
       --verified            hold it as a verified plugin is: every changing route
@@ -641,13 +646,20 @@ async fn catalogue_command(arguments: &Arguments, words: &[&str]) -> i32 {
     let done = match words {
         ["upload"] => {
             let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
-            catalogue::upload(address, session, &dir)
-                .await
-                .map(|digest| format!("Uploaded to {address}, as {digest}.\n"))
+            catalogue::upload(address, session, &dir).await.map(|made| {
+                let mut said = format!("Uploaded to {address}, as {}.\n", made.digest);
+                if made.documented {
+                    said.push_str(&format!(
+                        "Its documentation, readable before it is launched: {}\n",
+                        catalogue::version_documentation(address, &made.name, &made.version)
+                    ));
+                }
+                said
+            })
         }
         ["list"] => catalogue::catalogue(address, session)
             .await
-            .map(|held| catalogue::listed(&held)),
+            .map(|held| catalogue::listed(&held, address)),
         ["launch", name, version] => {
             let Some(instance) = arguments.value("--instance", "--instance") else {
                 eprintln!("meridian plugin launch: --instance <id> names what it runs as");
@@ -733,7 +745,9 @@ async fn launched(
     // A deployment admin opens any plugin's page; anybody else, one they
     // hold access on (spec/deployment-dashboard-and-access, ruling 19).
     Ok(format!(
-        "Launched {instance}: {name} {version}.\nIts page, if it serves one: {address}/plugins/{instance}\n"
+        "Launched {instance}: {name} {version}.\nIts page, if it serves one: {address}/plugins/{instance}\n\
+         Its documentation: {}\n",
+        catalogue::instance_documentation(address, instance)
     ))
 }
 
@@ -969,18 +983,18 @@ async fn release(
         .map_err(|failed| format!("{} has no pyproject.toml: {failed}", dir.display()))?;
     let metadata = catalogue::metadata(&pyproject)?;
     let (name, version) = (metadata.name.as_str(), metadata.version.as_str());
-    let digest =
-        catalogue::upload(address, session, &dir)
-            .await
-            .map_err(|failed| match failed {
-                live::Failed::Refused(said) if said.contains("recorded already") => {
-                    live::Failed::Refused(format!(
-                        "{name} {version} is recorded already, and a version is never replaced: \
+    let digest = catalogue::upload(address, session, &dir)
+        .await
+        .map_err(|failed| match failed {
+            live::Failed::Refused(said) if said.contains("recorded already") => {
+                live::Failed::Refused(format!(
+                    "{name} {version} is recorded already, and a version is never replaced: \
                      raise the version in pyproject.toml, then release again"
-                    ))
-                }
-                other => other,
-            })?;
+                ))
+            }
+            other => other,
+        })?
+        .digest;
     let roles = approval(arguments, address, session, name, version, instance, false).await?;
     let held = catalogue::catalogue(address, session).await?;
     let running = held["launches"]
