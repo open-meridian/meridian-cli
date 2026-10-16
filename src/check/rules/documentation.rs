@@ -17,15 +17,18 @@
 //! - **`documentation-safe`**: each section is UTF-8 within its bounds (64 KiB
 //!   a section, 256 KiB in all), and holds no raw HTML, no image, no link to a
 //!   script, data or a file, no link whose text names one host and whose
-//!   target another, no character that hides text, and no text that reads as
-//!   instructions to an agent or makes a claim the registries refuse -- the
-//!   screen's rules, named as core and the platform name them (endorsement,
-//!   verification, regulatory readiness, posing as Open Meridian and acting
-//!   for the reader among them). A level-two heading's text past what one screen of
-//!   the tab shows, a link the tab will show as plain text, and text the
-//!   screen holds as "addressed to the reader" -- which ordinary setup
-//!   wording matches, and which the deployment and the platform show to
-//!   people and withhold only from agents -- are advice.
+//!   target another, no character that hides text, and no text the screen
+//!   refuses -- its rules named as core and the platform name them: override,
+//!   acts for the reader, the four claims (endorsement, verification,
+//!   regulatory readiness, posing as Open Meridian), exfiltration,
+//!   concealment and claims authority (ruling 176, 2026-10-16, and its
+//!   addendum; the platform's REFUSES). A level-two heading's text past what
+//!   one screen of the tab shows, a link the tab will show as plain text, and
+//!   text matching the screen's shape rules -- chat markup, answer-shaped,
+//!   instruction words, addressed to the reader, tool name, role marker,
+//!   prompt talk (the platform's WITHHOLDS), which the platform and the
+//!   deployment show to people marked "Screened" and withhold from agents,
+//!   never refusing it -- are advice.
 //!
 //! A plugin on an SDK before 0.29.0 cannot declare its documentation yet, so
 //! what these find on one is advice, failing nothing.
@@ -69,21 +72,35 @@ const OTHER_INSTEAD: &str = "nothing, if it is the repository's own (a README in
 const SAFE_INSTEAD: &str = "plain Markdown the Documentation tab shows as written: headings, \
     paragraphs, emphasis, code, lists, tables, block quotes and https:, http: or mailto: links, \
     or a link to another section (setup.md); no HTML and no images";
-const SCREEN_INSTEAD: &str = "write for the person reading, in plain words: nothing addressed to \
-    an agent or a model, nothing claiming to speak for Open Meridian or the deployment, and no \
-    tool's name; the deployment withholds such text from agents, and the registries refuse it";
+const SCREEN_INSTEAD: &str = "write for the person reading, in plain words: nothing telling an \
+    agent or a model to set aside its rules or act unasked, nothing claiming to speak for Open \
+    Meridian or the deployment, nothing sending or hiding what it reads; the registries and the \
+    deployment's upload refuse such text";
 const CLAIM_INSTEAD: &str = "say only what is so and what was done: no endorsement, \
     certification or approval by Open Meridian or the platform, no verification or audit beyond \
     the platform's own, no regulatory readiness, and nothing written as from Open Meridian's \
     staff; the registries refuse such text";
-/// The screen's rule that ordinary instructions to a person match too, said
-/// as advice (the coordinator's ruling on Q7, 2026-10-16, agreement A).
-const ADDRESSED: &str = "addressed to the reader";
-const ADDRESSED_INSTEAD: &str = "nothing, if it is written for the person setting the plugin up: \
-    the deployment and the platform show this section to people as written, and withhold it \
-    only from agents, who are told a person can read it on the Documentation tab; it is never \
-    refused. Write it without `you must`, `you should` or `you need to` if agents should read \
-    it too";
+/// The screen's shape rules, which ordinary documentation can match: said as
+/// advice, since the platform and the deployment show such a section to
+/// people marked "Screened" and withhold it from agents, never refusing it
+/// (ruling 176, 2026-10-16, and its addendum: the platform's WITHHOLDS in
+/// registry_text.py, less "registry tool name", which the CLI leaves to
+/// "tool name"). Every other rule of the screen fails (its REFUSES).
+const SHAPES: [&str; 7] = [
+    "chat markup",
+    "answer-shaped",
+    "instruction words",
+    "addressed to the reader",
+    "tool name",
+    "role marker",
+    "prompt talk",
+];
+const SHAPE_INSTEAD: &str = "nothing, if it is written for the person reading: the platform \
+    and the deployment show this section to people as written, marked \"Screened\", and \
+    withhold it from agents, who are told a person can read it on the Documentation tab; it is \
+    never refused. Write it otherwise -- no `you must`, no markup or `system:` label, no \
+    tool's name, no talk of an agent's prompt, no `instructions` beyond the contract's terms -- \
+    if agents should read it too";
 const HIDDEN_INSTEAD: &str = "remove the character: text a person cannot see is text an agent \
     reads and a reviewer does not";
 const HEADING_INSTEAD: &str = "split it under more level-two headings (`## ...`): the tab shows \
@@ -554,16 +571,16 @@ fn safe_findings(section: &Section) -> (Vec<Failure>, Vec<Failure>) {
             if !pattern.is_match(read) {
                 continue;
             }
-            if *rule == ADDRESSED {
-                // Ordinary setup wording ("you need to create a key") reads
-                // so too; the deployment and the platform show the section to
-                // people and withhold it only from agents, never refusing it.
+            if SHAPES.contains(rule) {
+                // Ordinary wording ("you need to create a key") matches a
+                // shape too; the section is shown to people marked
+                // "Screened" and withheld from agents, never refused.
                 advice.push(failure(
                     SAFE_ID,
                     path,
                     n + 1,
-                    format!("it reads as addressed to the reader ({rule})"),
-                    ADDRESSED_INSTEAD,
+                    format!("the screen withholds it from agents ({rule})"),
+                    SHAPE_INSTEAD,
                 ));
                 continue;
             }

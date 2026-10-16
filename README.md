@@ -607,15 +607,18 @@ which it prompts for as advice and requires of a verified plugin, and
 written: UTF-8, 64 KiB a section and 256 KiB in all, no HTML, no image, no
 `javascript:`, `vbscript:`, `data:` or `file:` link, no link whose text names
 one host and whose target another, no character that hides text, and nothing
-that reads as instructions to an agent or makes a claim the registries refuse
--- endorsement, verification, regulatory readiness, posing as Open Meridian,
-acting for the reader (the screen's rules, as core and the platform name
-them). A heading's text past one screen of the tab, a link
-shown as plain text, a file in `docs/` that is not a section, and text the
-screen holds as "addressed to the reader" (`you need to ...`, which setup
-steps often say) are advice, failing nothing: the deployment and the
-platform show such a section to people as written and withhold it only from
-agents, never refusing it. A plugin on an SDK before 0.29.0 is advised, never
+the screen refuses: override, acting for the reader, a claim of endorsement,
+verification or regulatory readiness, posing as Open Meridian,
+exfiltration, concealment, and claiming authority (as core and the platform
+name them; ruling 176 and its addendum). A heading's text past one screen of the tab, a link shown as plain
+text, a file in `docs/` that is not a section, and text matching the
+screen's shape rules -- chat markup, answer-shaped, instruction words
+(beyond the contract's allocation, trading, settlement, execution and
+handling instructions), addressed to the reader (`you need to ...`, which
+setup steps often say), a tool's name, a role marker (`system:`), talk of
+an agent's prompt -- are advice, failing nothing: the
+platform and the deployment show such a section to people marked
+"Screened" and withhold it from agents, never refusing it. A plugin on an SDK before 0.29.0 is advised, never
 failed. `plugin upload` sends the texts with the declaration, each held to
 the digest the declaration names, and says where the version's
 documentation is read; `plugin new` writes a prompt for each section, and
