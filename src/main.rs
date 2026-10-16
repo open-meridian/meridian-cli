@@ -43,8 +43,9 @@ meridian -- bringing a Meridian deployment up
   meridian plugin check      hold the plugin here to the framework's rules: its pages,
                              settings, SDK use, [tool.meridian], documentation (docs/),
                              tests and shape
-  meridian plugin migrate    move the plugin here to a newer release of its SDK: its pins,
-                             each release's rewrite of its code, then plugin check
+  meridian plugin migrate    move the plugin here to a newer release of its SDK: its pins
+                             and its CI's meridian, each release's rewrite of its code,
+                             then plugin check
   meridian plugin upload     build the plugin here and put it in the deployment's catalogue,
                              its documentation (docs/) with it
   meridian plugin list       the catalogue: versions uploaded, and what is launched

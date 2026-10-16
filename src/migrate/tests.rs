@@ -652,6 +652,13 @@ async fn a_custody_plugin_on_0_27_0_takes_the_one_id_rewrites_of_0_28_0() {
         "tests/test_held.py",
         "def test_resolved():\n    assert \"LCL-suite-1\"\n",
     );
+    // Its CI checked with an older meridian, which migrate moves to this one.
+    let workflow = plugin.read(CHECK_WORKFLOW).replace(
+        &format!("MERIDIAN_VERSION: {}", crate::release::VERSION),
+        "MERIDIAN_VERSION: 0.1.15",
+    );
+    assert!(workflow.contains("MERIDIAN_VERSION: 0.1.15"));
+    plugin.write(CHECK_WORKFLOW, &workflow);
 
     // The SDK's 0.27.0 to 0.28.0 step, as it answers (its migration.toml's
     // rules): the prefix test read as the record's provisional mark, the
@@ -730,12 +737,23 @@ async fn a_custody_plugin_on_0_27_0_takes_the_one_id_rewrites_of_0_28_0() {
     assert_eq!(
         report.wrote,
         [
+            ".github/workflows/check.yaml",
             "Dockerfile",
             "pyproject.toml",
             "src/migrated_plugin/held.py",
             "tests/test_held.py"
         ]
     );
+    assert!(plugin.read(CHECK_WORKFLOW).contains(&format!(
+        "  MERIDIAN_VERSION: {}\n",
+        crate::release::VERSION
+    )));
+    let ci = report
+        .pins
+        .iter()
+        .find(|moved| moved.file == CHECK_WORKFLOW)
+        .expect("the CI's meridian, said as moved");
+    assert_eq!(ci.was, "MERIDIAN_VERSION: 0.1.15");
     assert!(!report.steps[0].breaking);
 
     // Left by hand: the prefix with no record at hand, with its step.
@@ -780,4 +798,28 @@ async fn a_custody_plugin_on_0_27_0_takes_the_one_id_rewrites_of_0_28_0() {
         "replaced-ids-followed"
     );
     assert_eq!(json["by_hand"][0]["to"], "0.28.0");
+}
+
+#[test]
+fn the_ci_moves_to_this_meridian_and_never_back() {
+    // The SDK's templates say migrate moves check.yaml's MERIDIAN_VERSION
+    // with the SDK's pin: to this meridian, from an older one only.
+    let older = "env:\n  MERIDIAN_VERSION: 0.1.15\njobs: {}\n";
+    let (moved, said) = ci_moved(older).expect("moved");
+    assert_eq!(
+        moved,
+        format!(
+            "env:\n  MERIDIAN_VERSION: {}\njobs: {{}}\n",
+            crate::release::VERSION
+        )
+    );
+    assert_eq!((said.file.as_str(), said.line), (CHECK_WORKFLOW, 2));
+    let same = format!("env:\n  MERIDIAN_VERSION: {}\n", crate::release::VERSION);
+    assert!(ci_moved(&same).is_none());
+    assert!(
+        ci_moved("env:\n  MERIDIAN_VERSION: 9.0.0\n").is_none(),
+        "never back"
+    );
+    assert!(ci_moved("env:\n  MERIDIAN_VERSION: latest\n").is_none());
+    assert!(ci_moved("jobs: {}\n").is_none());
 }

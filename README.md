@@ -674,8 +674,9 @@ meridian plugin migrate --to 0.7.0 --run-tests
 Each release of the SDK that changes what a plugin calls carries a migration
 from the release before it (decisions/025). `plugin migrate` moves the
 plugin's two pins, `open-meridian==` in `pyproject.toml` and the Dockerfile's
-`plugin-python:`, runs each step between in the SDK's image, then `plugin
-check`, and says what is left by hand with its rule, file and line. The
+`plugin-python:`, and `.github/workflows/check.yaml`'s `MERIDIAN_VERSION` to
+this meridian's own where it names an older one, runs each step between in
+the SDK's image, then `plugin check`, and says what is left by hand with its rule, file and line. The
 steps run in docker, cut off from the network and given the plugin's files
 on stdin; this binary alone writes the plugin's directory, once every step
 has run. It refuses changes git does not hold yet, unless `--force`, and it
