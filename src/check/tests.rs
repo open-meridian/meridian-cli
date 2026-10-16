@@ -587,6 +587,9 @@ fn only_the_connectivity_suites_marked_cases_may_be_named_not_presented() {
         "reports-a-charge",
         "reports-a-bust",
         "reports-a-value-date-roll",
+        // Contract v25: the give-up's answer, `about: give-ups` (decision 12),
+        // which a venue that takes no give-ups never presents.
+        "reports-a-give-up-rejected",
     ];
     for (case, may) in &cases {
         assert_eq!(*may, marked.contains(&case.as_str()), "{case}");

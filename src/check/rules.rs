@@ -969,7 +969,7 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at a6a0af7 (contract v24), byte
+/// meridian-schema's boundaries/suites.json at 3983435 (contract v25), byte
 /// for byte: each role's suite and its cases, every role's v24 cases on a
 /// replacement and the template catalogue among them. role-suite reads a
 /// case's name and its markers alone, never what it expects, so an
@@ -2582,7 +2582,7 @@ fn runs_as_checked(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at a6a0af7 (contract v24), byte
+/// meridian-schema's boundaries/roles.json at 3983435 (contract v25), byte
 /// for byte: its `operations` say which roles hold each command, v24's
 /// booking (the oms's), the allocation instruction, the give-up, the alert and
 /// the reference role's template offer among them.

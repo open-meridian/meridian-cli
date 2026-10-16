@@ -461,6 +461,7 @@
         {
           "name": "reports-a-give-up-rejected",
           "since": "v24",
+          "about": "give-ups",
           "given": "the prime broker a trade was given up to rejects it",
           "expect": [
             {
@@ -1008,6 +1009,7 @@
         {
           "name": "reports-a-give-up-rejected",
           "since": "v24",
+          "about": "give-ups",
           "given": "the prime broker a trade was given up to rejects it",
           "expect": [
             {
@@ -1016,16 +1018,6 @@
                 "execution_id": "<set>",
                 "reason": "<set>"
               }
-            }
-          ]
-        },
-        {
-          "name": "reads-whether-orders-may-name-local-records",
-          "since": "v24",
-          "given": "the plugin is about to propose or accept on an instrument whose record is provisional, and shows a person whether the deployment's escape hatch is on",
-          "expect": [
-            {
-              "row": "ReadLocalRecordOrders"
             }
           ]
         }
