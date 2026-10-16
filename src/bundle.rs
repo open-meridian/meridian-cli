@@ -49,8 +49,7 @@ pub const LISTING: &str = "https://open-meridian.dev/attestation/plugin-listing/
 /// The builder's provenance, SLSA's.
 pub const PROVENANCE: &str = "https://slsa.dev/provenance/v1";
 /// The image's metadata the builder attests: its PluginMetadata and the
-/// documentation's texts. The platform's build names it, not yet approved:
-/// `<NAME?:https://open-meridian.dev/attestation/plugin-metadata/v1>`.
+/// documentation's texts (approved after the freeze, item 153).
 pub const METADATA: &str = "https://open-meridian.dev/attestation/plugin-metadata/v1";
 /// DSSE's payload type for an in-toto statement.
 pub const IN_TOTO: &str = "application/vnd.in-toto+json";

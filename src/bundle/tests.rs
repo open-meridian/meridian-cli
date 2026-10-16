@@ -301,7 +301,10 @@ fn a_listing_is_organisation_plugin_at_version() {
 
 /// The platform and its registry, standing in together: a resolution, the
 /// key status, and the image and its referrers behind an anonymous token.
-async fn stand_in(listed: &Listed) -> (String, crate::fake_http::Kept) {
+async fn stand_in(
+    listed: &Listed,
+    statement: Option<serde_json::Value>,
+) -> (String, crate::fake_http::Kept) {
     let blobs = listed.bundle.blobs.clone();
     let digest = listed.bundle.image_digest.clone();
     let referrers = listed.bundle.referrers.clone();
@@ -321,11 +324,16 @@ async fn stand_in(listed: &Listed) -> (String, crate::fake_http::Kept) {
         }
         match path {
             "/token" => Reply::json(200, serde_json::json!({"token": "anonymous"})),
-            "/api/v1/registry/listings/acme/venue-desk/versions/0.1.0/resolve" => Reply::json(
-                200,
-                serde_json::json!({"image_digest": digest,
-                                   "pull_from": format!("{host}/open-meridian/plugins/acme/venue-desk")}),
-            ),
+            "/api/v1/registry/listings/acme/venue-desk/versions/0.1.0/resolve" => {
+                let mut reply = serde_json::json!({"image_digest": digest,
+                                   "pull_from": format!("{host}/open-meridian/plugins/acme/venue-desk")});
+                // DownloadListedVersionReply.listing_statement, a DSSE envelope
+                // as JSON (the coordinator's ruling on Q1, 2026-10-16).
+                if let Some(statement) = &statement {
+                    reply["listing_statement"] = canonical(statement).into();
+                }
+                Reply::json(200, reply)
+            }
             "/api/v1/registry/signing-keys" => Reply::json(200, key_status.clone()),
             p if p.starts_with(name) => {
                 let rest = &p[name.len()..];
@@ -354,7 +362,7 @@ async fn stand_in(listed: &Listed) -> (String, crate::fake_http::Kept) {
 #[tokio::test]
 async fn a_download_resolves_pulls_verifies_and_writes_the_bundle() {
     let listed = listed("0.1.0", false);
-    let (address, kept) = stand_in(&listed).await;
+    let (address, kept) = stand_in(&listed, None).await;
     // A sign-in already kept for the stand-in platform, so no browser opens.
     let scratch = Scratch::new("download");
     let within = scratch.0.join("platform");
@@ -515,4 +523,73 @@ fn the_listing_statement_may_come_as_the_listed_versions_rather_than_a_referrer(
     let mut back = read(&file).unwrap();
     assert_eq!(back.listing_statement, Some(envelope));
     verify(&mut back, &[platform.pem()]).unwrap();
+}
+
+/// The listed version's envelope for the listing statement, taken out of
+/// its referrers, as a platform that attaches no such referrer leaves it.
+fn without_the_listing_referrer(listed: &mut Listed) -> serde_json::Value {
+    let bundle = &mut listed.bundle;
+    let at = bundle
+        .referrers
+        .iter()
+        .position(|(digest, _)| {
+            let manifest: serde_json::Value =
+                serde_json::from_slice(&bundle.blobs[digest]).unwrap();
+            let layer = manifest["layers"][0]["digest"].as_str().unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&bundle.blobs[layer]).unwrap();
+            predicate_of(&envelope) == LISTING
+        })
+        .unwrap();
+    let (digest, _) = bundle.referrers.remove(at);
+    let manifest: serde_json::Value = serde_json::from_slice(&bundle.blobs[&digest]).unwrap();
+    let layer = manifest["layers"][0]["digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    serde_json::from_slice(&bundle.blobs[&layer]).unwrap()
+}
+
+#[tokio::test]
+async fn a_download_takes_the_listing_statement_from_the_reply_when_no_referrer_holds_it() {
+    let mut listed = listed("0.1.0", false);
+    let envelope = without_the_listing_referrer(&mut listed);
+    let scratch = Scratch::new("download-statement");
+    let within = scratch.0.join("platform");
+    for (statement, verifies) in [(None, false), (Some(envelope.clone()), true)] {
+        let (address, _) = stand_in(&listed, statement).await;
+        crate::sessions::write(
+            &within,
+            &crate::sessions::Held {
+                address: address.clone(),
+                client_id: crate::registry::CLIENT_ID.into(),
+                access_token: "A-1".into(),
+                access_expires_at_s: crate::credential::now_s() + 600,
+                refresh_token: "R-1".into(),
+                expires_at_s: crate::credential::now_s() + 86_400,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let signed_in =
+            crate::registry::SignedIn::within(within.clone(), &address, Box::new(|_: &str| {}))
+                .await
+                .unwrap();
+        let to = scratch.0.join(format!("bundle-{verifies}.tar"));
+        let asked = Download {
+            organisation: "acme".into(),
+            plugin: "venue-desk".into(),
+            version: "0.1.0".into(),
+            registry: "community".into(),
+            to: to.clone(),
+        };
+        let done = download(&asked, &signed_in, &[listed.platform.pem()]).await;
+        if verifies {
+            let held = done.unwrap();
+            assert_eq!(held.listing_statement, Some(envelope.clone()));
+            assert_eq!(read(&to).unwrap().listing_statement, Some(envelope.clone()));
+        } else {
+            assert!(done.unwrap_err().contains("no listing statement"));
+            assert!(!to.exists(), "nothing written");
+        }
+    }
 }
