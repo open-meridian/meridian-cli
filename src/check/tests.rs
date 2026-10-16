@@ -3114,3 +3114,46 @@ fn a_plugin_on_an_older_sdk_is_advised_rather_than_failed() {
         ]
     );
 }
+
+#[test]
+fn text_addressed_to_the_reader_is_advice_saying_people_still_read_it() {
+    // The coordinator's ruling on Q7 (2026-10-16): the deployment and the
+    // platform show such a section to people and withhold it only from
+    // agents, so the check advises and never fails it.
+    let plugin = Scaffolded::tested("docs-addressed");
+    plugin.write(
+        "docs/setup.md",
+        "# Setup\n\nYou need to create an API key in the vendor's console first.\n",
+    );
+    let report = plugin.check();
+    assert!(report.passed(), "{}", text(&report));
+    let advice: Vec<&Failure> = report
+        .advice
+        .iter()
+        .filter(|advice| advice.rule == "documentation-safe")
+        .collect();
+    assert_eq!(advice.len(), 1, "{}", text(&report));
+    assert_eq!(
+        (
+            advice[0].file.as_str(),
+            advice[0].line,
+            advice[0].found.as_str()
+        ),
+        (
+            "docs/setup.md",
+            3,
+            "it reads as addressed to the reader (addressed to the reader)"
+        )
+    );
+    assert!(advice[0]
+        .instead
+        .contains("show this section to people as written"));
+    assert!(advice[0].instead.contains("withhold it only from agents"));
+    assert!(advice[0].instead.contains("never refused"));
+    // Verified, the same: advice.
+    assert!(plugin
+        .check_verified()
+        .failures
+        .iter()
+        .all(|f| f.rule != "documentation-safe"));
+}

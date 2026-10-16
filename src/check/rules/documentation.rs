@@ -18,9 +18,12 @@
 //!   a section, 256 KiB in all), and holds no raw HTML, no image, no link to a
 //!   script, data or a file, no link whose text names one host and whose
 //!   target another, no character that hides text, and no text that reads as
-//!   instructions to an agent -- the screen's eleven rules, named as core and
-//!   the platform name them. A level-two heading's text past what one screen
-//!   of the tab shows, and a link the tab will show as plain text, are advice.
+//!   instructions to an agent -- the screen's rules, named as core and the
+//!   platform name them. A level-two heading's text past what one screen of
+//!   the tab shows, a link the tab will show as plain text, and text the
+//!   screen holds as "addressed to the reader" -- which ordinary setup
+//!   wording matches, and which the deployment and the platform show to
+//!   people and withhold only from agents -- are advice.
 //!
 //! A plugin on an SDK before 0.29.0 cannot declare its documentation yet, so
 //! what these find on one is advice, failing nothing.
@@ -67,6 +70,14 @@ const SAFE_INSTEAD: &str = "plain Markdown the Documentation tab shows as writte
 const SCREEN_INSTEAD: &str = "write for the person reading, in plain words: nothing addressed to \
     an agent or a model, nothing claiming to speak for Open Meridian or the deployment, and no \
     tool's name; the deployment withholds such text from agents, and the registries refuse it";
+/// The screen's rule that ordinary instructions to a person match too, said
+/// as advice (the coordinator's ruling on Q7, 2026-10-16, agreement A).
+const ADDRESSED: &str = "addressed to the reader";
+const ADDRESSED_INSTEAD: &str = "nothing, if it is written for the person setting the plugin up: \
+    the deployment and the platform show this section to people as written, and withhold it \
+    only from agents, who are told a person can read it on the Documentation tab; it is never \
+    refused. Write it without `you must`, `you should` or `you need to` if agents should read \
+    it too";
 const HIDDEN_INSTEAD: &str = "remove the character: text a person cannot see is text an agent \
     reads and a reviewer does not";
 const HEADING_INSTEAD: &str = "split it under more level-two headings (`## ...`): the tab shows \
@@ -478,13 +489,27 @@ fn safe_findings(section: &Section) -> (Vec<Failure>, Vec<Failure>) {
         }
         let screened = screened_form(line);
         for (rule, pattern) in SCREEN.iter() {
-            if pattern.is_match(&screened) {
-                failures.push(fail(
-                    n + 1,
-                    format!("it reads as instructions to an agent ({rule})"),
-                    SCREEN_INSTEAD,
-                ));
+            if !pattern.is_match(&screened) {
+                continue;
             }
+            if *rule == ADDRESSED {
+                // Ordinary setup wording ("you need to create a key") reads
+                // so too; the deployment and the platform show the section to
+                // people and withhold it only from agents, never refusing it.
+                advice.push(failure(
+                    SAFE_ID,
+                    path,
+                    n + 1,
+                    format!("it reads as addressed to the reader ({rule})"),
+                    ADDRESSED_INSTEAD,
+                ));
+                continue;
+            }
+            failures.push(fail(
+                n + 1,
+                format!("it reads as instructions to an agent ({rule})"),
+                SCREEN_INSTEAD,
+            ));
         }
     }
 
