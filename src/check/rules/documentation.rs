@@ -418,9 +418,10 @@ static SCREEN: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
 });
 
 /// The contract's terms the rule "instruction words" leaves alone: exactly
-/// these three, singular or plural (the data dictionary's).
-static TERMS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b(?:allocation|trading|settlement) instructions?\b").unwrap());
+/// these five, singular or plural (the data dictionary's).
+static TERMS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(?:allocation|trading|settlement|execution|handling) instructions?\b").unwrap()
+});
 
 /// A line as the screen reads it: full-width letters as themselves, lower
 /// case, its whitespace collapsed.
@@ -494,8 +495,9 @@ fn safe_findings(section: &Section) -> (Vec<Failure>, Vec<Failure>) {
         }
         let screened = screened_form(line);
         // The contract's own terms, which "instruction words" would read as
-        // an instruction to an agent: the dictionary's allocation, trading
-        // and settlement instructions, exempt from that rule alone, as core
+        // an instruction to an agent: the dictionary's allocation, trading,
+        // settlement, execution and handling instructions, exempt from that
+        // rule alone, as core
         // and the platform exempt them (agreement A, 2026-10-16).
         let without_terms = TERMS.replace_all(&screened, " ");
         for (rule, pattern) in SCREEN.iter() {
