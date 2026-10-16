@@ -10,8 +10,9 @@
 //! uses against its limit, where the cluster serves its metrics. Then **book
 //! health**, a section of it (item 122): per account, the replay length since
 //! the account's last snapshot -- the journal's entries the book replays to
-//! answer it -- and when that snapshot was taken (W9.10), read from core's
-//! row ReadBookHealth (item 155) on the session `meridian connect` keeps.
+//! answer it -- and when that snapshot was taken (W9.10), read from the row
+//! ReadBookHealthFromTerminal (item 155) on the session `meridian connect`
+//! keeps.
 //! Read-only: it changes nothing.
 //!
 //! **`meridian logs <component> [--since <duration>]`** prints what a
@@ -223,77 +224,110 @@ pub fn components(
     found
 }
 
-/// One account's book health: how long its replay is, and its last
-/// snapshot's time where it has one.
+/// One account's book health (AccountBookHealth): its journal's entries,
+/// the entries since its last snapshot -- what the book replays to answer it
+/// -- and that snapshot's time where it has one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Account {
     pub account_id: String,
+    pub journal_entries: u64,
     pub replay: u64,
     pub snapshot_at_ns: Option<u64>,
 }
 
-/// Where `meridian status` reads book health: core's row `ReadBookHealth`
-/// (the product owner, 2026-10-16, item 155), through the dashboard's
-/// terminal surface as the CLI reads the catalogue, on the delegation
-/// `meridian connect` keeps; its tool is `dashboard__read_book_health`.
-///
-/// SEAM, PLACEHOLDER (CLI 0.1.46): design is adding the row; its path, its
-/// message names and its fixture replace this path and [`accounts_from`]
-/// when they land. Until a deployment answers it, book health says it is not
-/// read, and why.
-pub const BOOK_HEALTH_PATH: &str = "/terminal/book/health";
+/// Where `meridian status` reads book health: the row
+/// `ReadBookHealthFromTerminal` (DESIGN25 amendment 2, 081f95f; item 155),
+/// W9.10's query through the dashboard's terminal surface, on the delegation
+/// `meridian connect` keeps, as the CLI reads the catalogue.
+pub const BOOK_HEALTH_PATH: &str = "/terminal/book-health";
 
-/// The row's answer as accounts: per account, the replay length since its
-/// last snapshot and that snapshot's time. SEAM: the field names are taken
-/// as DESIGN25's text says them (an account, its replay length, its
-/// snapshot's time in nanoseconds) and are aligned with the fixture.
-pub fn accounts_from(answer: &serde_json::Value) -> Vec<Account> {
-    answer["accounts"]
+/// How many accounts a page of the answer asks for, and the most pages read.
+pub const BOOK_HEALTH_PAGE: u32 = 500;
+const BOOK_HEALTH_PAGES: usize = 1_000;
+
+/// A count or nanoseconds as JSON carries it: a number, or a decimal string
+/// (a 64-bit integer's JSON).
+fn count(value: &serde_json::Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+}
+
+/// A page of the answer (ReadBookHealthReply): its accounts, and the cursor
+/// of the next page, empty on the last.
+pub fn accounts_from(answer: &serde_json::Value) -> (Vec<Account>, String) {
+    let accounts = answer["accounts"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|held| {
-            let account_id = held["account_id"].as_str()?.to_string();
-            let replay = held["replay_length"]
-                .as_u64()
-                .or_else(|| held["replay_length"].as_str()?.parse().ok())?;
-            let at = held["snapshot_at_ns"]
-                .as_u64()
-                .or_else(|| held["snapshot_at_ns"].as_str()?.parse().ok())
-                .unwrap_or(0);
+            let at = count(&held["last_snapshot_at_ns"]).unwrap_or(0);
             Some(Account {
-                account_id,
-                replay,
+                account_id: held["account_id"].as_str()?.to_string(),
+                journal_entries: count(&held["journal_entries"]).unwrap_or(0),
+                replay: count(&held["entries_since_snapshot"])?,
                 snapshot_at_ns: (at > 0).then_some(at),
             })
         })
-        .collect()
+        .collect();
+    let next = answer["next_cursor"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    (accounts, next)
 }
 
-/// Book health from the deployment: ReadBookHealth through the dashboard.
+/// Book health from the deployment, every page of it. A deployment that does
+/// not answer the row, or a book it cannot reach (503), is said as not read,
+/// never as healthy.
 pub async fn book_health(
     address: &str,
     session: &crate::credential::Credential,
 ) -> Result<Vec<Account>, String> {
     let http = crate::catalogue::http().map_err(|failed| failed.said().to_string())?;
-    let (status, body, _) = session
-        .send(|bearer| {
-            http.get(format!("{address}{BOOK_HEALTH_PATH}"))
-                .bearer_auth(bearer)
-        })
-        .await
-        .map_err(|failed| failed.said().to_string())?;
-    if status == reqwest::StatusCode::NOT_FOUND {
-        return Err(format!(
-            "{address} does not answer ReadBookHealth yet: its core is older than this CLI"
-        ));
+    let mut found = Vec::new();
+    let mut cursor = String::new();
+    for _ in 0..BOOK_HEALTH_PAGES {
+        let mut url = reqwest::Url::parse(&format!("{address}{BOOK_HEALTH_PATH}"))
+            .map_err(|failed| failed.to_string())?;
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("page_size", &BOOK_HEALTH_PAGE.to_string());
+            if !cursor.is_empty() {
+                query.append_pair("cursor", &cursor);
+            }
+        }
+        let (status, body, _) = session
+            .send(|bearer| http.get(url.clone()).bearer_auth(bearer))
+            .await
+            .map_err(|failed| failed.said().to_string())?;
+        match status.as_u16() {
+            404 => {
+                return Err(format!(
+                    "{address} does not answer ReadBookHealthFromTerminal: its core is older than \
+                     this CLI"
+                ))
+            }
+            403 => return Err("reading it takes a deployment admin".into()),
+            503 => return Err(format!("{address} cannot reach the book now")),
+            _ if !status.is_success() => {
+                return Err(format!("{address} refused ({status}): {}", body.trim()))
+            }
+            _ => {}
+        }
+        let answer: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|failed| format!("{address} answered with something unreadable: {failed}"))?;
+        let (accounts, next) = accounts_from(&answer);
+        found.extend(accounts);
+        if next.is_empty() || next == cursor {
+            return Ok(found);
+        }
+        cursor = next;
     }
-    if !status.is_success() {
-        return Err(format!("{address} refused ({status}): {}", body.trim()));
-    }
-    let answer: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|failed| format!("{address} answered with something unreadable: {failed}"))?;
-    Ok(accounts_from(&answer))
+    Err(format!(
+        "{address} answered more than {BOOK_HEALTH_PAGES} pages of accounts; book health is not \
+         said in part"
+    ))
 }
 
 /// Everything `status` reads.
@@ -428,8 +462,8 @@ pub fn said(status: &Status, now_ns: u64) -> String {
                     None => "no snapshot yet: its whole journal".into(),
                 };
                 out.push_str(&format!(
-                    "  {:width$}  replays {} entries, {snapshot}\n",
-                    account.account_id, account.replay
+                    "  {:width$}  replays {} of its {} entries, {snapshot}\n",
+                    account.account_id, account.replay, account.journal_entries
                 ));
             }
         }
@@ -460,8 +494,8 @@ pub fn json_of(status: &Status) -> serde_json::Value {
         "metrics": status.no_metrics.is_none(),
         "book_health": match &status.accounts {
             Ok(accounts) => serde_json::json!(accounts.iter().map(|a| serde_json::json!({
-                "account_id": a.account_id, "replay_entries": a.replay,
-                "snapshot_at_ns": a.snapshot_at_ns,
+                "account_id": a.account_id, "journal_entries": a.journal_entries,
+                "entries_since_snapshot": a.replay, "last_snapshot_at_ns": a.snapshot_at_ns,
             })).collect::<Vec<_>>()),
             Err(why) => serde_json::json!({ "not_read": why }),
         },

@@ -103,41 +103,6 @@ fn memory_quantities_read_as_bytes() {
 }
 
 #[tokio::test]
-async fn status_says_each_component_and_the_books_health() {
-    let fake = Fake::new();
-    let mut held = status(&fake, &asked()).await.unwrap();
-    held.accounts = Ok(accounts_from(&serde_json::json!({"accounts": [
-        {"account_id": "ACC-01SNAP", "replay_length": 1200, "snapshot_at_ns": "1792108800000000000"},
-        {"account_id": "ACC-02FRESH", "replay_length": 12},
-    ]})));
-    let names: Vec<&str> = held.components.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, ["bor", "dashboard", "database"]);
-    let bor = &held.components[0];
-    assert_eq!((bor.ready, bor.wanted, bor.restarts), (1, 1, 3));
-    assert_eq!(bor.last_reason, "OOMKilled");
-    assert_eq!(bor.memory, Some(429_496_320));
-    assert_eq!(bor.limit, Some(536_870_912));
-    let said = said(&held, 1_792_195_200_000_000_000);
-    assert!(said.contains("bor        1/1 ready  3 restart(s), the last OOMKilled at 2026-10-15T09:12:00Z  memory 410 MiB of 512 MiB (79%)  ghcr.io/open-meridian/meridian-runtime@sha256:6eb6"), "{said}");
-    assert!(
-        said.contains("dashboard  1/2 ready  no restarts  no limit"),
-        "{said}"
-    );
-    assert!(said.contains("ACC-01SNAP   replays 1200 entries, since its snapshot of 2026-10-16T00:00:00Z (24h ago)"), "{said}");
-    assert!(
-        said.contains("ACC-02FRESH  replays 12 entries, no snapshot yet: its whole journal"),
-        "{said}"
-    );
-    let json = json_of(&held);
-    assert_eq!(json["components"][0]["last_restart_reason"], "OOMKilled");
-    assert_eq!(json["book_health"][0]["replay_entries"], 1200);
-    // Read-only: nothing but get and get --raw.
-    for call in fake.asked.lock().unwrap().iter() {
-        assert_eq!(call[0], "get", "{call:?}");
-    }
-}
-
-#[tokio::test]
 async fn without_metrics_it_says_so_and_book_health_not_read_says_why() {
     let fake = Fake {
         metrics: false,
@@ -158,45 +123,6 @@ async fn without_metrics_it_says_so_and_book_health_not_read_says_why() {
         ),
         "{said}"
     );
-}
-
-#[tokio::test]
-async fn book_health_is_the_deployments_answer_to_read_book_health() {
-    use crate::fake_http::{serve, Asked, Reply};
-    let (address, kept) = serve(|asked: &Asked| {
-        if asked.path == BOOK_HEALTH_PATH {
-            Reply::json(
-                200,
-                serde_json::json!({"accounts": [
-                    {"account_id": "ACC-01", "replay_length": 40, "snapshot_at_ns": 1792108800000000000u64},
-                ]}),
-            )
-        } else {
-            Reply::json(404, serde_json::json!({"error": "no such route"}))
-        }
-    })
-    .await;
-    let session = crate::credential::Credential::terminal_session(&address, "a-session");
-    let accounts = book_health(&address, &session).await.unwrap();
-    assert_eq!(
-        accounts,
-        [Account {
-            account_id: "ACC-01".into(),
-            replay: 40,
-            snapshot_at_ns: Some(1_792_108_800_000_000_000)
-        }]
-    );
-    assert_eq!(
-        kept.lock().unwrap()[0].header("authorization"),
-        Some("Bearer a-session")
-    );
-
-    let (older, _) = serve(|_: &Asked| Reply::json(404, serde_json::json!({}))).await;
-    let session = crate::credential::Credential::terminal_session(&older, "a-session");
-    assert!(book_health(&older, &session)
-        .await
-        .unwrap_err()
-        .contains("does not answer ReadBookHealth yet"));
 }
 
 #[tokio::test]
@@ -230,4 +156,117 @@ async fn logs_are_a_known_components_and_since_takes_a_span() {
         .contains("--since takes a span"));
     assert!(is_since("30s") && is_since("2h") && is_since("1d"));
     assert!(!is_since("h") && !is_since("10") && !is_since("1h30m"));
+}
+
+#[tokio::test]
+async fn status_says_each_component_and_the_books_health() {
+    let fake = Fake::new();
+    let mut held = status(&fake, &asked()).await.unwrap();
+    let (accounts, next) = accounts_from(&serde_json::json!({"accounts": [
+        {"account_id": "ACC-01SNAP", "journal_entries": 23114, "entries_since_snapshot": 1200,
+         "last_snapshot_at_ns": "1792108800000000000"},
+        {"account_id": "ACC-02FRESH", "journal_entries": 12, "entries_since_snapshot": 12},
+    ]}));
+    assert!(next.is_empty());
+    held.accounts = Ok(accounts);
+    let names: Vec<&str> = held.components.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["bor", "dashboard", "database"]);
+    let bor = &held.components[0];
+    assert_eq!((bor.ready, bor.wanted, bor.restarts), (1, 1, 3));
+    assert_eq!(bor.last_reason, "OOMKilled");
+    assert_eq!(bor.memory, Some(429_496_320));
+    assert_eq!(bor.limit, Some(536_870_912));
+    let said = said(&held, 1_792_195_200_000_000_000);
+    assert!(said.contains("bor        1/1 ready  3 restart(s), the last OOMKilled at 2026-10-15T09:12:00Z  memory 410 MiB of 512 MiB (79%)  ghcr.io/open-meridian/meridian-runtime@sha256:6eb6"), "{said}");
+    assert!(
+        said.contains("dashboard  1/2 ready  no restarts  no limit"),
+        "{said}"
+    );
+    assert!(said.contains("ACC-01SNAP   replays 1200 of its 23114 entries, since its snapshot of 2026-10-16T00:00:00Z (24h ago)"), "{said}");
+    assert!(
+        said.contains(
+            "ACC-02FRESH  replays 12 of its 12 entries, no snapshot yet: its whole journal"
+        ),
+        "{said}"
+    );
+    let json = json_of(&held);
+    assert_eq!(json["components"][0]["last_restart_reason"], "OOMKilled");
+    assert_eq!(json["book_health"][0]["entries_since_snapshot"], 1200);
+    assert_eq!(json["book_health"][0]["journal_entries"], 23114);
+    // Read-only: nothing but get and get --raw.
+    for call in fake.asked.lock().unwrap().iter() {
+        assert_eq!(call[0], "get", "{call:?}");
+    }
+}
+
+/// design's fixture for the row, fixtures/config/read-book-health-from-terminal.yaml
+/// (DESIGN25 amendment 2, 081f95f): its reply, as the deployment answers it.
+const FIXTURE_REPLY: &str = r#"{"accounts": [{"account_id": "ACC-01J9N6E3B70000000000001", "journal_entries": 23114, "entries_since_snapshot": 114, "last_snapshot_at_ns": "1792195200000000000"}]}"#;
+
+#[tokio::test]
+async fn book_health_is_the_deployments_answer_page_by_page() {
+    use crate::fake_http::{serve, Asked, Reply};
+    let (address, kept) = serve(|asked: &Asked| {
+        let (path, query) = asked
+            .path
+            .split_once('?')
+            .unwrap_or((asked.path.as_str(), ""));
+        if path != BOOK_HEALTH_PATH {
+            return Reply::json(404, serde_json::json!({"error": "no such route"}));
+        }
+        if query.contains("cursor=page-2") {
+            return Reply::json(200, serde_json::from_str(FIXTURE_REPLY).unwrap());
+        }
+        Reply::json(
+            200,
+            serde_json::json!({"accounts": [
+                {"account_id": "ACC-00FIRST", "journal_entries": 5, "entries_since_snapshot": 5},
+            ], "next_cursor": "page-2"}),
+        )
+    })
+    .await;
+    let session = crate::credential::Credential::terminal_session(&address, "a-session");
+    let accounts = book_health(&address, &session).await.unwrap();
+    assert_eq!(
+        accounts,
+        [
+            Account {
+                account_id: "ACC-00FIRST".into(),
+                journal_entries: 5,
+                replay: 5,
+                snapshot_at_ns: None,
+            },
+            Account {
+                account_id: "ACC-01J9N6E3B70000000000001".into(),
+                journal_entries: 23_114,
+                replay: 114,
+                snapshot_at_ns: Some(1_792_195_200_000_000_000),
+            },
+        ]
+    );
+    let asked: Vec<Asked> = kept.lock().unwrap().clone();
+    assert_eq!(asked.len(), 2);
+    assert_eq!(
+        asked[0].path,
+        format!("{BOOK_HEALTH_PATH}?page_size={BOOK_HEALTH_PAGE}")
+    );
+    assert_eq!(
+        asked[1].path,
+        format!("{BOOK_HEALTH_PATH}?page_size={BOOK_HEALTH_PAGE}&cursor=page-2")
+    );
+    assert_eq!(asked[0].header("authorization"), Some("Bearer a-session"));
+
+    // The fixture's cases: not a deployment admin (403); the book
+    // unreachable (503), said as not read, never as healthy; an older core.
+    for (status, said) in [
+        (403, "takes a deployment admin"),
+        (503, "cannot reach the book now"),
+        (404, "does not answer ReadBookHealthFromTerminal"),
+    ] {
+        let (refusing, _) =
+            serve(move |_: &Asked| Reply::json(status, serde_json::json!({}))).await;
+        let session = crate::credential::Credential::terminal_session(&refusing, "a-session");
+        let refused = book_health(&refusing, &session).await.unwrap_err();
+        assert!(refused.contains(said), "{status}: {refused}");
+    }
 }

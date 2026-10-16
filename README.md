@@ -661,7 +661,7 @@ serves metrics. Its book health says, per account, how many journal entries
 the book replays since the account's last snapshot, and when that was taken.
 `logs` prints what a component's pods printed. The components and logs are
 read through kubectl, and book health is the deployment's own answer (core's
-`ReadBookHealth`, on the session `meridian connect` keeps); nothing is
+`ReadBookHealthFromTerminal`, on the session `meridian connect` keeps); nothing is
 changed, and a deployment admin never runs kubectl or helm by hand.
 
 ## Moving a plugin to a newer SDK
