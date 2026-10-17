@@ -18,10 +18,17 @@ use regex::Regex;
 
 use super::{Failure, Plugin, Rule, Source};
 
+mod documentation;
+use documentation::{
+    documentation_safe, documentation_safe_advice, documentation_sections,
+    documentation_sections_advice,
+};
+pub use documentation::{BUNDLE_BYTES, SECTIONS, SECTION_BYTES};
+
 /// The rules, in the order they are reported: what the project is, what it
 /// declares, its pages, its settings, how it reaches the deployment, and its
 /// tests. Running the tests is `TESTS_PASS`, which only `--run-tests` asks.
-pub const RULES: [Rule; 17] = [
+pub const RULES: [Rule; 19] = [
     Rule {
         id: "template-shape",
         holds: "the project keeps the template's shape",
@@ -36,6 +43,19 @@ pub const RULES: [Rule; 17] = [
         id: "edge-storage",
         holds: "only a plugin at the edge asks for storage in its declaration",
         check: edge_storage,
+    },
+    Rule {
+        id: "documentation-sections",
+        holds:
+            "docs/ holds overview.md and setup.md, named by the declaration (troubleshooting.md \
+                and terms.md prompted, and required of a verified plugin)",
+        check: documentation_sections,
+    },
+    Rule {
+        id: "documentation-safe",
+        holds: "each section of docs/ shows as written: UTF-8 within its bounds, and no HTML, \
+                image, script link, hidden character or text that reads as instructions",
+        check: documentation_safe,
     },
     Rule {
         id: "role-suite",
@@ -184,6 +204,16 @@ pub const ADVISED: [&str; 1] = ["role-pages"];
 /// one, so it can update what it keeps (spec/the-platform-master-mints-every-
 /// instrument-from-a-template, requirement 11).
 pub const WARNED: [&str; 1] = ["replaced-ids-followed"];
+
+/// What a rule advises beside what it fails, said as advice and failing
+/// nothing, in every mode (the plan's non-failing tier, contract v25): the
+/// documentation's prompted sections and files not uploaded, and a
+/// heading's text past one screen or a link shown as plain text.
+pub type Advising = fn(&Plugin) -> Vec<Failure>;
+pub const ADVISING: [(&str, Advising); 2] = [
+    ("documentation-sections", documentation_sections_advice),
+    ("documentation-safe", documentation_safe_advice),
+];
 
 // ── Which files ──────────────────────────────────────────────────────────
 
@@ -939,7 +969,7 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at a6a0af7 (contract v24), byte
+/// meridian-schema's boundaries/suites.json at 3983435 (contract v25), byte
 /// for byte: each role's suite and its cases, every role's v24 cases on a
 /// replacement and the template catalogue among them. role-suite reads a
 /// case's name and its markers alone, never what it expects, so an
@@ -2552,7 +2582,7 @@ fn runs_as_checked(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at a6a0af7 (contract v24), byte
+/// meridian-schema's boundaries/roles.json at 3983435 (contract v25), byte
 /// for byte: its `operations` say which roles hold each command, v24's
 /// booking (the oms's), the allocation instruction, the give-up, the alert and
 /// the reference role's template offer among them.
@@ -2635,10 +2665,32 @@ impl Declaration<'_> {
     }
 }
 
+/// A view's body as declarations hold it: from the `def` the regex matched,
+/// every line indented past it, and the line the body starts on.
+fn view_body(text: &str, def: &regex::Captures) -> (usize, String) {
+    let indent = def[1].len();
+    let start = def.get(0).expect("matched").start();
+    let first = line_at(text, start) + 1;
+    let lines: Vec<&str> = text[start..]
+        .lines()
+        .skip(1)
+        .take_while(|line| line.trim().is_empty() || line.len() - line.trim_start().len() > indent)
+        .collect();
+    (first, lines.join("\n"))
+}
+
 fn declarations(plugin: &Plugin) -> Vec<Declaration<'_>> {
     static DECORATOR: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"@\s*[A-Za-z_][A-Za-z0-9_.]*\.(page|route|tool)\s*\(").unwrap()
     });
+    // The same declaration called rather than decorating:
+    // `reconciliations = pages.page(...)(_reconciliations)`, the view the
+    // name in the second call.
+    static CALLED: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(@\s*)?\b[A-Za-z_][A-Za-z0-9_.]*\.(page|route|tool)\s*\(").unwrap()
+    });
+    static APPLIED: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\)\s*\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)").unwrap());
     static SETTING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bSetting\s*\(").unwrap());
     static DEF: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?m)^([ \t]*)(?:async[ \t]+)?def[ \t]+([A-Za-z_][A-Za-z0-9_]*)").unwrap()
@@ -2676,6 +2728,41 @@ fn declarations(plugin: &Plugin) -> Vec<Declaration<'_>> {
                 arguments,
                 body,
                 view,
+            });
+        }
+        for call in CALLED.captures_iter(&text) {
+            if call.get(1).is_some() {
+                continue; // a decorator, read above
+            }
+            let whole = call.get(0).expect("matched");
+            let arguments = enclosed(&text[whole.end()..]);
+            let after = &text[whole.end() + arguments.len()..];
+            let Some(applied) = APPLIED.captures(after) else {
+                continue; // a call that declares nothing until applied
+            };
+            let view = applied[1]
+                .rsplit('.')
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            let named = Regex::new(&format!(
+                r"(?m)^([ \t]*)(?:async[ \t]+)?def[ \t]+{}\b",
+                regex::escape(&view)
+            ))
+            .expect("an identifier's pattern");
+            let body = named.captures(&text).map(|def| view_body(&text, &def));
+            let kind = match &call[2] {
+                "page" => "page",
+                "route" => "route",
+                _ => "tool",
+            };
+            found.push(Declaration {
+                source,
+                kind,
+                line: line_at(&text, whole.start()),
+                arguments: arguments.to_string(),
+                body,
+                view: Some(view),
             });
         }
         for call in SETTING.find_iter(&text) {

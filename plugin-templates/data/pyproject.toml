@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 # The SDK and nothing else of Meridian's, pinned exactly: the sidecar this runs
 # beside speaks one version of the contract, and a range would let a rebuild
 # pick up another.
-dependencies = ["open-meridian==0.28.0"]
+dependencies = ["open-meridian==0.29.0"]
 
 [project.scripts]
 reference-plugin = "reference_plugin.__main__:main"
@@ -32,6 +32,7 @@ reference_plugin = ["templates/*.html"]
 roles = ["data"]
 # Whether it serves a page through its sidecar.
 interface = true
-# Its declaration: the catalogue of datasets it serves the lake (contract
-# v18). Upload reads it from the built image with `meridian-declaration`.
+# Its declaration: its settings, the catalogue of datasets it serves the lake
+# (contract v18), its pages and tools, and its documentation in docs/.
+# Upload reads it from the built image with `meridian-declaration`.
 declaration = "reference_plugin.declaration:DECLARATION"

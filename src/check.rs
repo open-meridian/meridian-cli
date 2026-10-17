@@ -23,7 +23,7 @@ mod rules;
 #[cfg(test)]
 mod tests;
 
-pub use rules::{EDGE_ROLES, ROLES, RULES};
+pub use rules::{BUNDLE_BYTES, EDGE_ROLES, ROLES, RULES, SECTIONS, SECTION_BYTES};
 
 /// One of the plugin's files, as text. `path` is relative to the plugin's
 /// directory, with `/` between its parts on every system.
@@ -99,7 +99,8 @@ pub struct Report {
     pub outcomes: Vec<(&'static str, &'static str, Outcome)>,
     pub failures: Vec<Failure>,
     /// What a rule only `--verified` holds found on a plugin not checked as
-    /// verified, said as advice and failing nothing (`rules::ADVISED`).
+    /// verified (`rules::ADVISED`), and what a rule advises beside what it
+    /// fails (`rules::ADVISING`): said as advice, failing nothing.
     pub advice: Vec<Failure>,
     /// What a warning rule found (`rules::WARNED`): failing nothing, in
     /// every mode, since what it warns of the deployment accepts.
@@ -232,6 +233,9 @@ pub fn check_as(dir: &Path, run_tests: bool, verified: bool) -> Result<Report, S
             continue;
         }
         let failures = (rule.check)(&plugin);
+        if let Some((_, advising)) = rules::ADVISING.iter().find(|(id, _)| *id == rule.id) {
+            report.advice.extend(advising(&plugin));
+        }
         let outcome = match (failures.is_empty(), rules::WARNED.contains(&rule.id)) {
             (true, _) => Outcome::Passed,
             (false, true) => Outcome::Warned,
@@ -331,10 +335,18 @@ pub fn text(report: &Report) -> String {
         .filter(|(_, _, outcome)| *outcome == Outcome::Failed)
         .count();
     if !report.advice.is_empty() {
+        let held_verified = report
+            .advice
+            .iter()
+            .any(|advice| rules::ADVISED.contains(&advice.rule));
         out.push_str(&format!(
-            "\nAdvice, {} place(s), failing nothing: a verified plugin is held to it \
-             (--verified).\n",
-            report.advice.len()
+            "\nAdvice, {} place(s), failing nothing{}.\n",
+            report.advice.len(),
+            if held_verified {
+                ": a verified plugin is held to some of it (--verified)"
+            } else {
+                ""
+            }
         ));
     }
     if !report.warnings.is_empty() {
@@ -371,6 +383,13 @@ pub fn json(report: &Report) -> serde_json::Value {
             "line": if failure.line == 0 { serde_json::Value::Null } else { failure.line.into() },
             "found": failure.found,
             "instead": failure.instead,
+        })).collect::<Vec<_>>(),
+        "advice": report.advice.iter().map(|advice| serde_json::json!({
+            "rule": advice.rule,
+            "file": advice.file,
+            "line": if advice.line == 0 { serde_json::Value::Null } else { advice.line.into() },
+            "found": advice.found,
+            "instead": advice.instead,
         })).collect::<Vec<_>>(),
         "warnings": report.warnings.iter().map(|warning| serde_json::json!({
             "rule": warning.rule,

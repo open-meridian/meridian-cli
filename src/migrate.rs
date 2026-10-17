@@ -51,7 +51,7 @@ pub const PYTHON: Sdk = Sdk {
     releases: "https://pypi.org/pypi/open-meridian/json",
     runner: &["python", "-m", "meridian.migrations"],
     extensions: &["py"],
-    named: &["pyproject.toml"],
+    named: &["pyproject.toml", "Dockerfile"],
 };
 
 /// What the migrations run in: the SDK's image with its `migrate` extra. It
@@ -326,6 +326,37 @@ fn moved(sdk: &Sdk, pins: &Pins, to: &str) -> (String, String, Vec<Moved>) {
     (pyproject, dockerfile, said)
 }
 
+/// The plugin's CI workflow, whose `MERIDIAN_VERSION` names the meridian its
+/// check runs (the SDK's templates from 0.29.0: it tracks the CLI).
+pub const CHECK_WORKFLOW: &str = ".github/workflows/check.yaml";
+
+fn numbers(version: &str) -> Option<Vec<u64>> {
+    version.split('.').map(|part| part.parse().ok()).collect()
+}
+
+/// The workflow with `MERIDIAN_VERSION` moved to this meridian's own
+/// version, and where it was, where it names an older one. A newer one, or
+/// one that is not a version, is left as the author set it.
+pub fn ci_moved(workflow: &str) -> Option<(String, Moved)> {
+    let ours = numbers(crate::release::VERSION)?;
+    let (index, was) = workflow.lines().enumerate().find_map(|(index, line)| {
+        let value = line.trim_start().strip_prefix("MERIDIAN_VERSION:")?;
+        Some((index, value.trim().trim_matches(['"', '\'']).to_string()))
+    })?;
+    if numbers(&was)? >= ours {
+        return None;
+    }
+    Some((
+        crate::plugin::tracking_this_cli(workflow),
+        Moved {
+            file: CHECK_WORKFLOW.into(),
+            line: index + 1,
+            was: format!("MERIDIAN_VERSION: {was}"),
+            now: format!("MERIDIAN_VERSION: {}", crate::release::VERSION),
+        },
+    ))
+}
+
 // ── The plugin's files ───────────────────────────────────────────────────
 
 /// Every regular file in the plugin, text or not, as `/`-separated paths,
@@ -556,8 +587,9 @@ pub async fn migrate(host: &dyn Host, sdk: &Sdk, asked: &Asked) -> Migrated {
         format!("{}:{latest}", sdk.image)
     });
 
-    // What the steps are given: the plugin's code, and pyproject.toml with
-    // its pin moved, as it will be written.
+    // What the steps are given: the plugin's code, and pyproject.toml and
+    // the Dockerfile with their pins moved, as they will be written (0.29.0's
+    // step reads whether the image holds the documentation).
     let (pyproject, dockerfile, pins_moved) = moved(sdk, &pins, &to);
     let mut sent = std::collections::BTreeMap::new();
     let mut by_hand = Vec::new();
@@ -571,6 +603,10 @@ pub async fn migrate(host: &dyn Host, sdk: &Sdk, asked: &Asked) -> Migrated {
         }
         if relative == "pyproject.toml" {
             sent.insert(relative, pyproject.clone());
+            continue;
+        }
+        if relative == "Dockerfile" {
+            sent.insert(relative, dockerfile.clone());
             continue;
         }
         match std::fs::read(&path).map(String::from_utf8) {
@@ -663,7 +699,19 @@ pub async fn migrate(host: &dyn Host, sdk: &Sdk, asked: &Asked) -> Migrated {
     if !writes.iter().any(|(path, _)| path == "pyproject.toml") {
         writes.push(("pyproject.toml".into(), pyproject));
     }
-    writes.push(("Dockerfile".into(), dockerfile));
+    if !writes.iter().any(|(path, _)| path == "Dockerfile") {
+        writes.push(("Dockerfile".into(), dockerfile));
+    }
+    // The CI's meridian, moved to this one (it tracks the CLI).
+    let mut pins_moved = pins_moved;
+    if let Some((workflow, said)) = std::fs::read_to_string(dir.join(CHECK_WORKFLOW))
+        .ok()
+        .and_then(|text| ci_moved(&text))
+    {
+        writes.retain(|(path, _)| path != CHECK_WORKFLOW);
+        writes.push((CHECK_WORKFLOW.into(), workflow));
+        pins_moved.push(said);
+    }
     let mut wrote = Vec::new();
     for (path, text) in writes {
         let target = dir.join(&path);

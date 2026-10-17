@@ -61,6 +61,13 @@ def test_account_links_say_no_account_is_granted_until_one_is() -> None:
     assert "No accounts granted yet" not in page and "Individual brokerage" in page
 
 
+def test_the_account_map_shows_the_custodians_type_for_each_account() -> None:
+    granted = Sidecar(granted=[ops.AccountRecord(account_id="ACC-1", name="Main")])
+    page = client(granted).get("/links", "admin").text
+    assert '"account_type": "Margin"' in page and '"account_type": "Roth IRA"' in page
+    assert "Reference custodian, Margin" in page
+
+
 def test_statements_show_the_linked_accounts_the_person_may_read() -> None:
     page = client().get("/statements", "read").text
     assert "<strong>Main</strong>" in page and "Roth IRA" not in page

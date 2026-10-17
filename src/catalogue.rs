@@ -17,6 +17,13 @@
 //! conductor records the version. What a plugin may
 //! do is its roles', from that metadata; nothing here writes a grant.
 //!
+//! From contract v25 the declaration is the whole of what the version says
+//! about itself, and names each section of the vendor's documentation, its
+//! `docs/`, by digest and size; upload runs `meridian-declaration
+//! --documentation` in the same image, holds each text to its digest and the
+//! bounds, sends the texts with the metadata, and says where the version's
+//! documentation is read (W8.1, W8.2).
+//!
 //! Launch shows the roles a version declares and asks before sending them as
 //! approved: the approval is the person's (W8.3). A plugin declares no tags
 //! (decisions/026), and a pyproject.toml that still does is refused here,
@@ -174,6 +181,92 @@ pub fn declaration(printed: &str, roles: &[String]) -> Result<serde_json::Value,
     Ok(declared)
 }
 
+/// The documentation's texts the image printed (`meridian-declaration
+/// --documentation`), held to what its declaration names before anything is
+/// sent: each a section of the fixed set, its text's digest and size the
+/// declaration's, within the bounds the conductor holds them to. None where
+/// the declaration names no documentation.
+pub fn documentation(
+    printed: &str,
+    declared: &serde_json::Value,
+) -> Result<Option<serde_json::Value>, String> {
+    let named = declared["documentation"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if named.is_empty() {
+        return Ok(None);
+    }
+    let texts: Vec<serde_json::Value> = serde_json::from_str(printed.trim()).map_err(|failed| {
+        format!("the documentation the image printed is not a JSON list: {failed}")
+    })?;
+    if texts.len() != named.len() {
+        return Err(format!(
+            "the declaration names {} section(s), and the image printed {}",
+            named.len(),
+            texts.len()
+        ));
+    }
+    let mut total = 0;
+    for (text, held) in texts.iter().zip(&named) {
+        let section = text["section"].as_str().unwrap_or_default();
+        let markdown = text["markdown"].as_str().unwrap_or_default();
+        if !crate::check::SECTIONS.contains(&section) {
+            return Err(format!(
+                "`{section}` is not a section: overview, setup, troubleshooting, terms or pages"
+            ));
+        }
+        if held["name"].as_str() != Some(section) {
+            return Err(format!(
+                "the declaration names {} where the image printed {section}",
+                held["name"]
+            ));
+        }
+        let bytes = markdown.len();
+        let digest = format!("sha256:{:x}", Sha256::digest(markdown.as_bytes()));
+        if held["digest"].as_str() != Some(digest.as_str())
+            || held["bytes"].as_u64() != Some(bytes as u64)
+        {
+            return Err(format!(
+                "docs/{section}.md is not what the declaration names: {digest}, {bytes} bytes"
+            ));
+        }
+        if bytes == 0 || bytes > crate::check::SECTION_BYTES {
+            return Err(format!(
+                "docs/{section}.md is {bytes} bytes, and a section is 1 to {}",
+                crate::check::SECTION_BYTES
+            ));
+        }
+        total += bytes;
+    }
+    if total > crate::check::BUNDLE_BYTES {
+        return Err(format!(
+            "the sections hold {total} bytes together, and the most is {}",
+            crate::check::BUNDLE_BYTES
+        ));
+    }
+    Ok(Some(serde_json::Value::Array(
+        texts
+            .into_iter()
+            .map(|text| serde_json::json!({ "section": text["section"], "markdown": text["markdown"] }))
+            .collect(),
+    )))
+}
+
+/// Where a deployment admin reads a version's documentation before it is
+/// launched: its Documentation page, reached from the portal's versions list
+/// (`/admin/plugins/versions`; W8.2, W6.9), at the path core's v25 draws it.
+pub fn version_documentation(address: &str, name: &str, version: &str) -> String {
+    format!("{address}/admin/plugins/versions/{name}/{version}/documentation")
+}
+
+/// Where anybody holding a level on a launched instance reads its
+/// documentation: the Documentation tab of its area (W6.9), beside Summary,
+/// at the session's level (the page takes `&level=` to choose another).
+pub fn instance_documentation(address: &str, instance: &str) -> String {
+    format!("{address}/plugins/{instance}?tab=documentation")
+}
+
 /// An image's manifest and the blobs it names, from an OCI image layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
@@ -281,6 +374,135 @@ fn client() -> Result<reqwest::Client, Failed> {
         .map_err(|failed| Failed::Refused(failed.to_string()))
 }
 
+/// The client upload and a bundle's upload send with.
+pub(crate) fn http() -> Result<reqwest::Client, Failed> {
+    client()
+}
+
+/// One blob into a repository of the deployment's registry, through the
+/// dashboard, unless it holds it already.
+pub(crate) async fn send_blob(
+    http: &reqwest::Client,
+    address: &str,
+    session: &Credential,
+    repository: &str,
+    digest: &str,
+    bytes: Vec<u8>,
+) -> Result<(), Failed> {
+    let held = http
+        .head(format!("{repository}/blobs/{digest}"))
+        .bearer_auth(session.bearer().await?)
+        .send()
+        .await
+        .map_err(|failed| unreachable(address, failed))?;
+    if held.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(refused(address, "", held.status(), ""));
+    }
+    if held.status().is_success() {
+        eprintln!("  {digest}: already there");
+        return Ok(());
+    }
+    let started = http
+        .post(format!("{repository}/blobs/uploads/"))
+        .bearer_auth(session.bearer().await?)
+        .send()
+        .await
+        .map_err(|failed| unreachable(address, failed))?;
+    let status = started.status();
+    let location = started
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+    let Some(location) = location.filter(|_| status.is_success()) else {
+        return Err(refused(
+            address,
+            "the registry did not start an upload",
+            status,
+            &started.text().await.unwrap_or_default(),
+        ));
+    };
+    let size = bytes.len();
+    let sent = http
+        .put(upload_url(address, &location, digest))
+        .bearer_auth(session.bearer().await?)
+        .header("content-type", "application/octet-stream")
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|failed| unreachable(address, failed))?;
+    let status = sent.status();
+    if !status.is_success() {
+        return Err(refused(
+            address,
+            &format!("{digest} was not taken"),
+            status,
+            &sent.text().await.unwrap_or_default(),
+        ));
+    }
+    eprintln!("  {digest}: sent, {size} bytes");
+    Ok(())
+}
+
+/// One manifest into a repository of the deployment's registry, under
+/// `reference`: a version, a digest, or the referrers' tag.
+pub(crate) async fn send_manifest(
+    http: &reqwest::Client,
+    address: &str,
+    session: &Credential,
+    repository: &str,
+    reference: &str,
+    media_type: &str,
+    bytes: Vec<u8>,
+) -> Result<(), Failed> {
+    let named = http
+        .put(format!("{repository}/manifests/{reference}"))
+        .bearer_auth(session.bearer().await?)
+        .header("content-type", media_type)
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|failed| unreachable(address, failed))?;
+    let status = named.status();
+    if !status.is_success() {
+        return Err(refused(
+            address,
+            &format!("the manifest {reference} was not taken"),
+            status,
+            &named.text().await.unwrap_or_default(),
+        ));
+    }
+    Ok(())
+}
+
+/// Record a version with the body given: a bundle's, its listing and source
+/// registry among it (UploadPlugin takes a bundle, W8.14).
+pub(crate) async fn record_json(
+    address: &str,
+    session: &Credential,
+    body: &serde_json::Value,
+) -> Result<(), Failed> {
+    let http = client()?;
+    let body = body.to_string();
+    let (status, text, _) = session
+        .send(|bearer| {
+            http.post(format!("{address}/terminal/plugins"))
+                .bearer_auth(bearer)
+                .header("content-type", "application/json")
+                .body(body.clone())
+        })
+        .await?;
+    if !status.is_success() {
+        return Err(refused(
+            address,
+            "the version was not recorded",
+            status,
+            &text,
+        ));
+    }
+    Ok(())
+}
+
 /// What the dashboard refused, said as live.rs says it: a missing or lapsed
 /// session (401, on any `/terminal/` path, the registry's included) apart
 /// from everything else, and anything else after what was being done.
@@ -325,8 +547,17 @@ async fn docker(args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-/// Build, push and record: the version's digest once recorded.
-pub async fn upload(address: &str, session: &Credential, dir: &Path) -> Result<String, Failed> {
+/// What an upload recorded: the image's digest, and whether the version
+/// carried its vendor's documentation.
+pub struct Uploaded {
+    pub digest: String,
+    pub documented: bool,
+    pub name: String,
+    pub version: String,
+}
+
+/// Build, push and record: the version once recorded.
+pub async fn upload(address: &str, session: &Credential, dir: &Path) -> Result<Uploaded, Failed> {
     let pyproject = std::fs::read_to_string(dir.join("pyproject.toml"))
         .map_err(|failed| format!("{} has no pyproject.toml: {failed}", dir.display()))?;
     let metadata = metadata(&pyproject)?;
@@ -349,6 +580,28 @@ pub async fn upload(address: &str, session: &Credential, dir: &Path) -> Result<S
             .await?;
             Some(declaration(&printed, &metadata.roles)?)
         }
+    };
+    let texts = match (&metadata.declaration, &declared) {
+        (Some(named), Some(held))
+            if held["documentation"]
+                .as_array()
+                .is_some_and(|d| !d.is_empty()) =>
+        {
+            let printed = docker_output(&[
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--entrypoint",
+                "meridian-declaration",
+                &tag,
+                "--documentation",
+                named,
+            ])
+            .await?;
+            documentation(&printed, held)?
+        }
+        _ => None,
     };
 
     let scratch = std::env::temp_dir().join(format!("meridian-upload-{}", std::process::id()));
@@ -374,8 +627,21 @@ pub async fn upload(address: &str, session: &Credential, dir: &Path) -> Result<S
     let pushed = push(address, session, &metadata, &image(&scratch)?).await;
     let _ = std::fs::remove_dir_all(&scratch);
     let digest = pushed?;
-    record(address, session, &metadata, declared.as_ref(), &digest).await?;
-    Ok(digest)
+    record(
+        address,
+        session,
+        &metadata,
+        declared.as_ref(),
+        texts.as_ref(),
+        &digest,
+    )
+    .await?;
+    Ok(Uploaded {
+        digest,
+        documented: texts.is_some(),
+        name: metadata.name,
+        version: metadata.version,
+    })
 }
 
 async fn push(
@@ -515,10 +781,13 @@ pub fn mount_url(repository: &str, digest: &str, other: &str) -> String {
 /// declaration as the image printed it, whole. Every key the SDK writes is
 /// carried as written -- from contract v22 `algorithms`, which SDK 0.26.0
 /// writes only for a version declaring one -- so a key the deployment reads
-/// needs no release of this binary to reach it.
+/// needs no release of this binary to reach it. From contract v25 the
+/// documentation's texts beside it (`documentation`, each a section and its
+/// Markdown: RecordPluginUploadRequest.documentation's DocumentationText).
 pub fn record_body(
     metadata: &Metadata,
     declaration: Option<&serde_json::Value>,
+    texts: Option<&serde_json::Value>,
     digest: &str,
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
@@ -529,6 +798,9 @@ pub fn record_body(
     if let Some(declaration) = declaration {
         body["declaration"] = declaration.clone();
     }
+    if let Some(texts) = texts {
+        body["documentation"] = texts.clone();
+    }
     body
 }
 
@@ -537,10 +809,11 @@ async fn record(
     session: &Credential,
     metadata: &Metadata,
     declaration: Option<&serde_json::Value>,
+    texts: Option<&serde_json::Value>,
     digest: &str,
 ) -> Result<(), Failed> {
     let http = client()?;
-    let body = record_body(metadata, declaration, digest).to_string();
+    let body = record_body(metadata, declaration, texts, digest).to_string();
     let (status, body, _) = session
         .send(|bearer| {
             http.post(format!("{address}/terminal/plugins"))
@@ -575,8 +848,9 @@ pub async fn catalogue(address: &str, session: &Credential) -> Result<serde_json
     serde_json::from_str(&body).map_err(|failed| Failed::Refused(failed.to_string()))
 }
 
-/// The catalogue, for a person to read.
-pub fn listed(catalogue: &serde_json::Value) -> String {
+/// The catalogue, for a person to read: from contract v25 each version
+/// carrying its vendor's documentation with where it is read.
+pub fn listed(catalogue: &serde_json::Value, address: &str) -> String {
     let names = |value: &serde_json::Value| {
         let held: Vec<&str> = value
             .as_array()
@@ -611,6 +885,19 @@ pub fn listed(catalogue: &serde_json::Value) -> String {
             },
             v["sdk_version"].as_str().unwrap_or_default(),
         ));
+        if v["declaration"]["documentation"]
+            .as_array()
+            .is_some_and(|sections| !sections.is_empty())
+        {
+            out.push_str(&format!(
+                "    documentation: {}\n",
+                version_documentation(
+                    address,
+                    v["name"].as_str().unwrap_or_default(),
+                    v["version"].as_str().unwrap_or_default()
+                )
+            ));
+        }
     }
     out.push_str("Launches:\n");
     let launches = catalogue["launches"]

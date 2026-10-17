@@ -19,10 +19,13 @@ concurrency:
 
 env:
   # The meridian whose rules the plugin is held to: the rules are compiled
-  # into it. 0.1.15 is the first with `plugin check`. Move it deliberately, as
-  # the SDK's pin is moved, since a newer one may hold a rule this plugin does
-  # not keep yet.
-  MERIDIAN_VERSION: 0.1.15
+  # into it. It tracks the meridian that wrote the plugin -- `meridian plugin
+  # new` writes its own version here, and `meridian plugin migrate` moves it
+  # with the SDK's pin -- so the check in CI is the one the author ran.
+  # 0.1.46 is the first to check `docs/` (documentation-sections,
+  # documentation-safe). Move it deliberately, since a newer one may hold a
+  # rule this plugin does not keep yet.
+  MERIDIAN_VERSION: 0.1.46
 
 jobs:
   check:

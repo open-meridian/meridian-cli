@@ -22,7 +22,7 @@ mod tests;
 
 /// The template, file by file, as it sits in `plugin-template/`. A test fails
 /// if a file there is missing from this list, so a new one cannot be dropped.
-const TEMPLATE: [(&str, &str); 16] = [
+const TEMPLATE: [(&str, &str); 22] = [
     ("AGENTS.md", include_str!("../plugin-template/AGENTS.md")),
     (
         ".claude/skills/develop-live/SKILL.md",
@@ -65,6 +65,30 @@ const TEMPLATE: [(&str, &str); 16] = [
         include_str!("../plugin-template/tests/test_page.py"),
     ),
     (
+        "docs/overview.md",
+        include_str!("../plugin-template/docs/overview.md"),
+    ),
+    (
+        "docs/setup.md",
+        include_str!("../plugin-template/docs/setup.md"),
+    ),
+    (
+        "docs/troubleshooting.md",
+        include_str!("../plugin-template/docs/troubleshooting.md"),
+    ),
+    (
+        "docs/terms.md",
+        include_str!("../plugin-template/docs/terms.md"),
+    ),
+    (
+        "docs/pages.md",
+        include_str!("../plugin-template/docs/pages.md"),
+    ),
+    (
+        "src/reference_plugin/declaration.py",
+        include_str!("../plugin-template/src/reference_plugin/declaration.py"),
+    ),
+    (
         ".github/workflows/check.yaml",
         include_str!("../plugin-template/.github/workflows/check.yaml"),
     ),
@@ -78,7 +102,7 @@ const TEMPLATE: [(&str, &str); 16] = [
 /// prices put into the lake, its catalogue declared, the data role's common
 /// pages, Connection and Datasets, with their read tools, and its tests
 /// running the suite.
-const DATA: [(&str, &str); 20] = [
+const DATA: [(&str, &str); 25] = [
     (
         "AGENTS.md",
         include_str!("../plugin-templates/data/AGENTS.md"),
@@ -152,6 +176,26 @@ const DATA: [(&str, &str); 20] = [
         include_str!("../plugin-templates/data/tests/test_suite.py"),
     ),
     (
+        "docs/overview.md",
+        include_str!("../plugin-templates/data/docs/overview.md"),
+    ),
+    (
+        "docs/setup.md",
+        include_str!("../plugin-templates/data/docs/setup.md"),
+    ),
+    (
+        "docs/troubleshooting.md",
+        include_str!("../plugin-templates/data/docs/troubleshooting.md"),
+    ),
+    (
+        "docs/terms.md",
+        include_str!("../plugin-templates/data/docs/terms.md"),
+    ),
+    (
+        "docs/pages.md",
+        include_str!("../plugin-templates/data/docs/pages.md"),
+    ),
+    (
         ".github/workflows/check.yaml",
         include_str!("../plugin-templates/data/.github/workflows/check.yaml"),
     ),
@@ -164,7 +208,7 @@ const DATA: [(&str, &str); 20] = [
 /// The `custody` template, as it sits in `plugin-templates/custody/`: a
 /// custodian's accounts and statements brought in, on the custody role's
 /// common pages with their tools, and its tests running the suite.
-const CUSTODY: [(&str, &str); 22] = [
+const CUSTODY: [(&str, &str); 27] = [
     (
         "AGENTS.md",
         include_str!("../plugin-templates/custody/AGENTS.md"),
@@ -248,6 +292,26 @@ const CUSTODY: [(&str, &str); 22] = [
         include_str!("../plugin-templates/custody/tests/test_suite.py"),
     ),
     (
+        "docs/overview.md",
+        include_str!("../plugin-templates/custody/docs/overview.md"),
+    ),
+    (
+        "docs/setup.md",
+        include_str!("../plugin-templates/custody/docs/setup.md"),
+    ),
+    (
+        "docs/troubleshooting.md",
+        include_str!("../plugin-templates/custody/docs/troubleshooting.md"),
+    ),
+    (
+        "docs/terms.md",
+        include_str!("../plugin-templates/custody/docs/terms.md"),
+    ),
+    (
+        "docs/pages.md",
+        include_str!("../plugin-templates/custody/docs/pages.md"),
+    ),
+    (
         ".github/workflows/check.yaml",
         include_str!("../plugin-templates/custody/.github/workflows/check.yaml"),
     ),
@@ -261,7 +325,7 @@ const CUSTODY: [(&str, &str); 22] = [
 /// the operations role's common pages, Breaks, Reconciliations and Opening
 /// balances, with their tools, an opening balance's confirmation checked so
 /// an agent may prepare it.
-const OPERATIONS: [(&str, &str); 18] = [
+const OPERATIONS: [(&str, &str); 23] = [
     (
         "AGENTS.md",
         include_str!("../plugin-templates/operations/AGENTS.md"),
@@ -331,6 +395,26 @@ const OPERATIONS: [(&str, &str); 18] = [
         include_str!("../plugin-templates/operations/tests/test_page.py"),
     ),
     (
+        "docs/overview.md",
+        include_str!("../plugin-templates/operations/docs/overview.md"),
+    ),
+    (
+        "docs/setup.md",
+        include_str!("../plugin-templates/operations/docs/setup.md"),
+    ),
+    (
+        "docs/troubleshooting.md",
+        include_str!("../plugin-templates/operations/docs/troubleshooting.md"),
+    ),
+    (
+        "docs/terms.md",
+        include_str!("../plugin-templates/operations/docs/terms.md"),
+    ),
+    (
+        "docs/pages.md",
+        include_str!("../plugin-templates/operations/docs/pages.md"),
+    ),
+    (
         ".github/workflows/check.yaml",
         include_str!("../plugin-templates/operations/.github/workflows/check.yaml"),
     ),
@@ -343,7 +427,7 @@ const OPERATIONS: [(&str, &str); 18] = [
 /// The `reporting` template, as it sits in `plugin-templates/reporting/`: the
 /// book's positions valued at the close from the lake, its Datasets page, its
 /// tests running the suite.
-const REPORTING: [(&str, &str); 18] = [
+const REPORTING: [(&str, &str); 24] = [
     (
         "AGENTS.md",
         include_str!("../plugin-templates/reporting/AGENTS.md"),
@@ -407,6 +491,30 @@ const REPORTING: [(&str, &str); 18] = [
     (
         "tests/test_suite.py",
         include_str!("../plugin-templates/reporting/tests/test_suite.py"),
+    ),
+    (
+        "docs/overview.md",
+        include_str!("../plugin-templates/reporting/docs/overview.md"),
+    ),
+    (
+        "docs/setup.md",
+        include_str!("../plugin-templates/reporting/docs/setup.md"),
+    ),
+    (
+        "docs/troubleshooting.md",
+        include_str!("../plugin-templates/reporting/docs/troubleshooting.md"),
+    ),
+    (
+        "docs/terms.md",
+        include_str!("../plugin-templates/reporting/docs/terms.md"),
+    ),
+    (
+        "docs/pages.md",
+        include_str!("../plugin-templates/reporting/docs/pages.md"),
+    ),
+    (
+        "src/reference_plugin/declaration.py",
+        include_str!("../plugin-templates/reporting/src/reference_plugin/declaration.py"),
     ),
     (
         ".github/workflows/check.yaml",
@@ -519,14 +627,41 @@ pub fn scaffold(name: &str, into: &Path, role: Option<&str>) -> Result<Vec<PathB
             std::fs::create_dir_all(parent)
                 .map_err(|failed| format!("{}: {failed}", parent.display()))?;
         }
-        std::fs::write(&path, renamed(contents, name, &module))
-            .map_err(|failed| format!("{}: {failed}", path.display()))?;
+        let mut written = renamed(contents, name, &module);
+        if *held == CHECK_WORKFLOW {
+            written = tracking_this_cli(&written);
+        }
+        std::fs::write(&path, written).map_err(|failed| format!("{}: {failed}", path.display()))?;
         if EXECUTABLE.contains(held) {
             executable(&path)?;
         }
         wrote.push(path);
     }
     Ok(wrote)
+}
+
+/// The plugin's CI workflow, whose `MERIDIAN_VERSION` names the meridian it
+/// is checked with.
+const CHECK_WORKFLOW: &str = ".github/workflows/check.yaml";
+
+/// The workflow with `MERIDIAN_VERSION` set to this meridian's version: the
+/// check the plugin's CI runs is the one of the meridian that wrote it, and
+/// moves when its author moves it (the v25 plan, step 6: it tracks the CLI).
+pub fn tracking_this_cli(workflow: &str) -> String {
+    let mut out = String::with_capacity(workflow.len());
+    for line in workflow.split_inclusive('\n') {
+        let indent = &line[..line.len() - line.trim_start().len()];
+        if line.trim_start().starts_with("MERIDIAN_VERSION:") {
+            let end = if line.ends_with('\n') { "\n" } else { "" };
+            out.push_str(&format!(
+                "{indent}MERIDIAN_VERSION: {}{end}",
+                crate::release::VERSION
+            ));
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
 }
 
 /// Readable by all and executable, as git checks the template's copy out
@@ -588,6 +723,10 @@ pub fn next_steps(name: &str, into: &Path, role: Option<&str>) -> String {
          \n\
          \x20 meridian plugin dev --instance {name}\n\
          {suite}\
+         \n\
+         Its docs/ is what a deployment admin reads on its Documentation tab before\n\
+         launching it: replace each section's prompt with the plugin's own words.\n\
+         `meridian plugin check` requires overview.md and setup.md.\n\
          \n\
          AGENTS.md teaches your coding agent that loop, whichever agent it is;\n\
          CLAUDE.md and the develop-live skill lead Claude Code to it. Commit them\n\

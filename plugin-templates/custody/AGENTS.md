@@ -312,6 +312,49 @@ What the check cannot decide stays advice, below: which component fits, the
 page's layout, custom properties the kit does not define, figures as strings,
 and names.
 
+## Its declaration and its documentation
+
+**The declaration is the whole of what a version says about itself**
+(contract v25): `src/reference_plugin/declaration.py`'s `DECLARATION` --
+its settings, its interface (its pages, and the tools their typed routes
+make), whether it reads external accounts, and its documentation. `meridian
+plugin upload` reads it from the built image, and the deployment holds the
+running plugin to it: a version registering anything its upload did not
+declare is refused, naming the difference. So:
+
+- declare everything in `Declaration(...)` and call
+  `meridian.connect(declaration=DECLARATION)` alone;
+- keep the interface's port fixed (`PORT`), never read from the
+  environment;
+- keep `declaration.py` importing every module that declares a page or a
+  route, so its tools are all of them;
+- a change to any of it is a new version, which a person approves.
+
+**`docs/` is the documentation a deployment admin reads** on the plugin's
+Documentation tab, before launching it, and an agent reads through the
+deployment's tools. One Markdown file per section, each name fixed:
+
+- `overview.md` (required): what the plugin does, for whom, and what it
+  does not do;
+- `setup.md` (required): what to arrange with the vendor first, and the
+  steps after launching;
+- `troubleshooting.md` (prompted): one heading per problem, in the words
+  its Summary or pages show, and how a person puts it right;
+- `terms.md` (prompted): the vendor's terms a deployment accepts by using
+  it, linked, or that it calls no vendor;
+- `pages.md` (optional): a sentence per page, who opens it and why.
+
+Write them for the person reading, in plain words: headings, paragraphs,
+lists, tables, links. No HTML and no images, which the tab never shows; at
+most 64 KiB a section. Do not restate what the Reference beside them already
+lists from the declaration (every setting, page and tool): say why, not
+what. The text is shown as the vendor's words and screened, so write
+nothing that addresses an agent or tells it to act, and claim no
+endorsement, verification or regulatory readiness. Any other file in
+`docs/` is the repository's own and is not uploaded. `meridian plugin
+check` fails a plugin without `overview.md` or `setup.md`, or with a
+section it cannot show safely, and advises on the rest.
+
 ## Building its pages: the kit
 
 Build every page with Open Meridian's plugin UI kit, and nothing else for its

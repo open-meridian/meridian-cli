@@ -28,7 +28,6 @@ from typing import Any
 import meridian
 from meridian.plugin.v1 import operations_pb2 as ops
 
-from .declaration import DAILY
 from .vendor import FIAT, Vendor
 
 #: How the vendor is named on what this plugin reports: its identifiers'
@@ -86,6 +85,10 @@ class Converter:
     @property
     def dataset(self) -> str:
         """The dataset its rows name: the instance, a colon and the key."""
+        # Imported here rather than above: the declaration imports the pages,
+        # which hold a converter.
+        from .declaration import DAILY
+
         return f"{self.plugin.identity.instance_id}:{DAILY.key}"
 
     async def read_licences(self) -> None:

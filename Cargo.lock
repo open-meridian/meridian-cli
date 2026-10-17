@@ -1435,10 +1435,11 @@ dependencies = [
 
 [[package]]
 name = "meridian-cli"
-version = "0.1.45"
+version = "0.1.46"
 dependencies = [
  "age",
  "async-trait",
+ "aws-lc-rs",
  "base64 0.22.1",
  "meridian-conductor",
  "rand 0.8.8",

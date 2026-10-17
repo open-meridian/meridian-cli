@@ -86,7 +86,9 @@ async def _links_read(request: meridian.Request) -> custody.AccountLinksRead:
     granted = await request.plugin.read_accounts_for_linking(acting_for=request.caller.header)
     return custody.AccountLinksRead(
         external_accounts=[
-            custody.ExternalAccountRead(each.external_account_id, each.name, each.detail)
+            custody.ExternalAccountRead(
+                each.external_account_id, each.name, each.detail, each.account_type
+            )
             for each in _custodian().accounts
         ],
         accounts=[custody.AccountRead(each.account_id, each.name) for each in granted.accounts],

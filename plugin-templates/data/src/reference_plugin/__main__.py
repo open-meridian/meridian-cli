@@ -17,7 +17,6 @@ secret setting where the vendor needs one.
 
 import asyncio
 import logging
-import os
 import signal
 import time
 
@@ -25,8 +24,8 @@ import meridian
 from meridian.roles import data
 
 from .convert import Converter
-from .declaration import DECLARATION, Config
-from .page import TITLE, pages, use
+from .declaration import DECLARATION, PORT, Config
+from .page import pages, use
 
 log = logging.getLogger("reference_plugin")
 
@@ -40,11 +39,7 @@ async def run() -> None:
     for stop in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(stop, stopped.set)
 
-    port = int(os.environ.get("REFERENCE_PAGE_PORT", "8000"))
-    async with await meridian.connect(
-        interface=meridian.Interface(port=port, title=TITLE, pages=pages),
-        declaration=DECLARATION,
-    ) as plugin:
+    async with await meridian.connect(declaration=DECLARATION) as plugin:
         log.info(
             "registered as %s, roles %s",
             plugin.identity.instance_id,
@@ -75,8 +70,8 @@ async def run() -> None:
                 observations_wanted=converter.on_want, want_withdrawn=converter.on_withdrawn
             )
         )
-        served = pages.serve(plugin, port)
-        log.info("serving its pages on 127.0.0.1:%d", port)
+        served = pages.serve(plugin, PORT)
+        log.info("serving its pages on 127.0.0.1:%d", PORT)
         await plugin.report(healthy=True, detail="started")
         await stopped.wait()
         log.info("stopping")

@@ -81,7 +81,6 @@
           "ListAccountAttributes",
           "ListTradingInstructions",
           "ListOrders",
-          "ReadLocalRecordOrders",
           "ResolveVenue",
           "ReadCalendar",
           "ComputeDate",
@@ -2049,7 +2048,6 @@
       "roles": {
         "reads": [
           "compliance",
-          "connectivity",
           "ems",
           "oms",
           "portfolio"

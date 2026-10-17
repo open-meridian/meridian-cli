@@ -13,25 +13,22 @@ fn the_templates_pyproject_is_metadata() {
             version: "0.1.0".into(),
             roles: vec![],
             interface: true,
-            sdk_version: "0.28.0".into(),
-            declaration: None,
+            sdk_version: "0.29.0".into(),
+            // From SDK 0.29.0 every template names its declaration.
+            declaration: Some("reference_plugin.declaration:DECLARATION".into()),
         }
     );
 }
 
 #[test]
 fn a_declaration_is_named_by_module_and_attribute() {
-    let with = TEMPLATE.replace(
-        "[tool.meridian]\n",
-        "[tool.meridian]\ndeclaration = \"reference_plugin.declaration:DECLARATION\"\n",
-    );
     assert_eq!(
-        metadata(&with).unwrap().declaration.as_deref(),
+        metadata(TEMPLATE).unwrap().declaration.as_deref(),
         Some("reference_plugin.declaration:DECLARATION")
     );
     let refused = metadata(&TEMPLATE.replace(
-        "[tool.meridian]\n",
-        "[tool.meridian]\ndeclaration = \"reference_plugin.declaration\"\n",
+        "declaration = \"reference_plugin.declaration:DECLARATION\"",
+        "declaration = \"reference_plugin.declaration\"",
     ))
     .unwrap_err();
     assert!(refused.contains("<module>:<attribute>"), "{refused}");
@@ -63,7 +60,7 @@ fn the_declarations_algorithms_are_sent_as_the_image_printed_them() {
                                       "description": "Time-weighted slices over the order's window."}]}"#;
     let held = declaration(printed, &ems).unwrap();
     let metadata = metadata(TEMPLATE).unwrap();
-    let body = record_body(&metadata, Some(&held), "sha256:abc");
+    let body = record_body(&metadata, Some(&held), None, "sha256:abc");
     assert_eq!(
         body["declaration"]["algorithms"],
         serde_json::json!([{
@@ -75,10 +72,10 @@ fn the_declarations_algorithms_are_sent_as_the_image_printed_them() {
 
     // A version declaring none: the key is absent, as the SDK left it.
     let none = declaration(r#"{"not_carried": [], "secret_settings": []}"#, &ems).unwrap();
-    let body = record_body(&metadata, Some(&none), "sha256:abc");
+    let body = record_body(&metadata, Some(&none), None, "sha256:abc");
     assert!(body["declaration"].get("algorithms").is_none(), "{body}");
     // And no declaration named: none sent.
-    assert!(record_body(&metadata, None, "sha256:abc")
+    assert!(record_body(&metadata, None, None, "sha256:abc")
         .get("declaration")
         .is_none());
 }
@@ -131,12 +128,12 @@ fn each_roles_templates_pyproject_names_its_role_and_its_declaration() {
         (
             "reporting",
             include_str!("../../plugin-templates/reporting/pyproject.toml"),
-            false,
+            true,
         ),
     ] {
         let held = metadata(pyproject).unwrap();
         assert_eq!(held.roles, vec![role.to_string()], "{role}");
-        assert_eq!(held.sdk_version, "0.28.0", "{role}");
+        assert_eq!(held.sdk_version, "0.29.0", "{role}");
         assert_eq!(
             held.declaration.as_deref(),
             declaration.then_some("reference_plugin.declaration:DECLARATION"),
@@ -147,7 +144,7 @@ fn each_roles_templates_pyproject_names_its_role_and_its_declaration() {
 
 #[test]
 fn a_pyproject_missing_what_upload_sends_is_refused() {
-    let unpinned = TEMPLATE.replace("open-meridian==0.28.0", "open-meridian>=0.3");
+    let unpinned = TEMPLATE.replace("open-meridian==0.29.0", "open-meridian>=0.3");
     assert!(metadata(&unpinned)
         .unwrap_err()
         .contains("pin open-meridian"));
@@ -317,7 +314,7 @@ fn a_launch_approves_what_the_version_declared() {
         Some(vec!["custody".to_string()])
     );
     assert_eq!(declared(&held, "p", "0.3.0"), None);
-    let said = listed(&held);
+    let said = listed(&held, "https://meridian.localhost");
     assert!(said.contains("p 0.1.0  roles: custody  page: no"), "{said}");
     assert!(said.contains("p 0.2.0  roles: none  page: no"), "{said}");
     assert!(said.contains("p  p 0.1.0  failed: no image"), "{said}");
@@ -495,6 +492,7 @@ async fn every_catalogue_call_says_a_lapsed_session_as_the_session() {
         &Credential::terminal_session(&address, "stale"),
         &a_plugin(),
         None,
+        None,
         "sha256:ab",
     )
     .await
@@ -550,5 +548,114 @@ async fn anything_else_the_registry_refuses_is_a_refusal_after_what_was_being_do
              the registry is not reachable"
                 .into()
         )
+    );
+}
+
+// ── The documentation (contract v25) ─────────────────────────────────────
+
+fn sha(text: &str) -> String {
+    format!("sha256:{:x}", Sha256::digest(text.as_bytes()))
+}
+
+fn declared_with(sections: &[(&str, &str)]) -> serde_json::Value {
+    serde_json::json!({
+        "secret_settings": [], "not_carried": [], "storage": null, "settings": [],
+        "reads_external_accounts": false,
+        "documentation": sections.iter().map(|(name, text)| serde_json::json!({
+            "name": name, "digest": sha(text), "bytes": text.len(),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+#[test]
+fn the_texts_the_image_printed_are_held_to_the_declarations_digests() {
+    let overview = "# Overview\n\nWhat it does.\n";
+    let setup = "# Setup\r\n\r\nWindows line endings, as written.\r\n";
+    let declared = declared_with(&[("overview", overview), ("setup", setup)]);
+    let printed = serde_json::json!([
+        {"section": "overview", "markdown": overview},
+        {"section": "setup", "markdown": setup},
+    ])
+    .to_string();
+    let texts = documentation(&printed, &declared).unwrap().expect("texts");
+    assert_eq!(texts[1]["markdown"], setup);
+
+    let body = record_body(
+        &metadata(TEMPLATE).unwrap(),
+        Some(&declared),
+        Some(&texts),
+        "sha256:abc",
+    );
+    assert_eq!(body["documentation"][0]["section"], "overview");
+    assert_eq!(
+        body["declaration"]["documentation"][1]["bytes"],
+        setup.len()
+    );
+
+    // A text changed since the declaration was printed, a section outside
+    // the set, or a missing one is refused before anything is sent.
+    let changed = serde_json::json!([
+        {"section": "overview", "markdown": "# Overview\n\nSomething else.\n"},
+        {"section": "setup", "markdown": setup},
+    ])
+    .to_string();
+    assert!(documentation(&changed, &declared)
+        .unwrap_err()
+        .contains("docs/overview.md is not what the declaration names"));
+    let stranger = serde_json::json!([
+        {"section": "overview", "markdown": overview},
+        {"section": "readme", "markdown": setup},
+    ])
+    .to_string();
+    assert!(documentation(&stranger, &declared)
+        .unwrap_err()
+        .contains("`readme` is not a section"));
+    let one = serde_json::json!([{"section": "overview", "markdown": overview}]).to_string();
+    assert!(documentation(&one, &declared)
+        .unwrap_err()
+        .contains("names 2 section(s), and the image printed 1"));
+    assert!(documentation("Traceback", &declared)
+        .unwrap_err()
+        .contains("not a JSON list"));
+
+    // A declaration naming none sends none, as before contract v25.
+    assert_eq!(documentation("[]", &declared_with(&[])).unwrap(), None);
+}
+
+#[test]
+fn the_documentation_is_said_where_it_is_read() {
+    let address = "https://meridian.localhost";
+    assert_eq!(
+        instance_documentation(address, "snaptrade-1"),
+        "https://meridian.localhost/plugins/snaptrade-1?tab=documentation"
+    );
+    let held = serde_json::json!({
+        "versions": [
+            {"name": "snaptrade", "version": "0.18.0", "roles": ["custody"], "interface": true,
+             "sdk_version": "0.29.0",
+             "declaration": {"documentation": [{"name": "overview", "digest": "sha256:x", "bytes": 1}]}},
+            {"name": "older", "version": "0.1.0", "roles": [], "interface": false,
+             "sdk_version": "0.28.0", "declaration": {}},
+        ],
+        "launches": [],
+    });
+    let said = listed(&held, address);
+    assert!(said.contains(&format!(
+        "  snaptrade 0.18.0  roles: custody  page: yes  SDK 0.29.0\n    documentation: {}\n",
+        version_documentation(address, "snaptrade", "0.18.0")
+    )));
+    assert!(!said.contains("older/0.1.0"));
+}
+
+#[test]
+fn the_documentation_pages_are_at_the_paths_core_draws_them() {
+    // Core's v25 routes, as it fixed them (2026-10-16).
+    assert_eq!(
+        version_documentation("https://meridian.localhost", "snaptrade", "0.18.0"),
+        "https://meridian.localhost/admin/plugins/versions/snaptrade/0.18.0/documentation"
+    );
+    assert_eq!(
+        instance_documentation("https://meridian.localhost", "snaptrade-1"),
+        "https://meridian.localhost/plugins/snaptrade-1?tab=documentation"
     );
 }

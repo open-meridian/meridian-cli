@@ -373,6 +373,25 @@ async fn a_plugin_on_the_latest_already_is_only_checked() {
 }
 
 #[tokio::test]
+async fn a_dockerfile_a_step_rewrote_is_written_as_the_step_left_it() {
+    // The Dockerfile goes to the steps with its pin moved; one a step
+    // rewrites comes back with the move in it, and is what is written.
+    let plugin = Plugin::at("migrated", "0.6.1");
+    let rewritten = plugin
+        .read("Dockerfile")
+        .replace("plugin-python:0.6.1", "plugin-python:0.7.0")
+        + "COPY docs/ docs/\n";
+    let mut said: serde_json::Value = serde_json::from_str(&answered("")).unwrap();
+    said["files"] = serde_json::json!({ "Dockerfile": rewritten });
+    said["by_hand"] = serde_json::json!([]);
+    said["steps"][0]["rewrote"] = serde_json::json!([]);
+    let fake = Fake::new(&said.to_string());
+    let report = done(migrate(&fake, &PYTHON, &plugin.asked()).await);
+    assert_eq!(plugin.read("Dockerfile"), rewritten);
+    assert_eq!(report.wrote, ["Dockerfile", "pyproject.toml"]);
+}
+
+#[tokio::test]
 async fn the_pins_move_the_steps_run_in_the_latest_image_and_what_they_wrote_is_written() {
     let plugin = Plugin::at("migrated", "0.6.1");
     // A Makefile naming the base too, as meridian-snaptrade's does.
@@ -418,16 +437,22 @@ async fn the_pins_move_the_steps_run_in_the_latest_image_and_what_they_wrote_is_
         .map(String::from)
     ));
 
-    // Given the code and pyproject.toml with its pin moved; not the rest.
+    // Given the code, and pyproject.toml and the Dockerfile with their pins
+    // moved (0.29.0's step reads whether the image holds docs/); not the
+    // rest.
     let given: serde_json::Value = serde_json::from_str(&given).unwrap();
     let files = given["files"].as_object().unwrap();
     assert!(files["pyproject.toml"]
         .as_str()
         .unwrap()
         .contains("open-meridian==0.7.0"));
+    assert!(files["Dockerfile"]
+        .as_str()
+        .unwrap()
+        .contains("plugin-python:0.7.0"));
     assert!(files.contains_key("src/migrated_plugin/page.py"));
     assert!(files.contains_key("tests/test_page.py"));
-    assert!(!files.contains_key("Dockerfile") && !files.contains_key("AGENTS.md"));
+    assert!(!files.contains_key("AGENTS.md"));
 
     // Written: the pins, and the file the steps rewrote.
     assert!(plugin
@@ -652,6 +677,13 @@ async fn a_custody_plugin_on_0_27_0_takes_the_one_id_rewrites_of_0_28_0() {
         "tests/test_held.py",
         "def test_resolved():\n    assert \"LCL-suite-1\"\n",
     );
+    // Its CI checked with an older meridian, which migrate moves to this one.
+    let workflow = plugin.read(CHECK_WORKFLOW).replace(
+        &format!("MERIDIAN_VERSION: {}", crate::release::VERSION),
+        "MERIDIAN_VERSION: 0.1.15",
+    );
+    assert!(workflow.contains("MERIDIAN_VERSION: 0.1.15"));
+    plugin.write(CHECK_WORKFLOW, &workflow);
 
     // The SDK's 0.27.0 to 0.28.0 step, as it answers (its migration.toml's
     // rules): the prefix test read as the record's provisional mark, the
@@ -730,12 +762,23 @@ async fn a_custody_plugin_on_0_27_0_takes_the_one_id_rewrites_of_0_28_0() {
     assert_eq!(
         report.wrote,
         [
+            ".github/workflows/check.yaml",
             "Dockerfile",
             "pyproject.toml",
             "src/migrated_plugin/held.py",
             "tests/test_held.py"
         ]
     );
+    assert!(plugin.read(CHECK_WORKFLOW).contains(&format!(
+        "  MERIDIAN_VERSION: {}\n",
+        crate::release::VERSION
+    )));
+    let ci = report
+        .pins
+        .iter()
+        .find(|moved| moved.file == CHECK_WORKFLOW)
+        .expect("the CI's meridian, said as moved");
+    assert_eq!(ci.was, "MERIDIAN_VERSION: 0.1.15");
     assert!(!report.steps[0].breaking);
 
     // Left by hand: the prefix with no record at hand, with its step.
@@ -780,4 +823,28 @@ async fn a_custody_plugin_on_0_27_0_takes_the_one_id_rewrites_of_0_28_0() {
         "replaced-ids-followed"
     );
     assert_eq!(json["by_hand"][0]["to"], "0.28.0");
+}
+
+#[test]
+fn the_ci_moves_to_this_meridian_and_never_back() {
+    // The SDK's templates say migrate moves check.yaml's MERIDIAN_VERSION
+    // with the SDK's pin: to this meridian, from an older one only.
+    let older = "env:\n  MERIDIAN_VERSION: 0.1.15\njobs: {}\n";
+    let (moved, said) = ci_moved(older).expect("moved");
+    assert_eq!(
+        moved,
+        format!(
+            "env:\n  MERIDIAN_VERSION: {}\njobs: {{}}\n",
+            crate::release::VERSION
+        )
+    );
+    assert_eq!((said.file.as_str(), said.line), (CHECK_WORKFLOW, 2));
+    let same = format!("env:\n  MERIDIAN_VERSION: {}\n", crate::release::VERSION);
+    assert!(ci_moved(&same).is_none());
+    assert!(
+        ci_moved("env:\n  MERIDIAN_VERSION: 9.0.0\n").is_none(),
+        "never back"
+    );
+    assert!(ci_moved("env:\n  MERIDIAN_VERSION: latest\n").is_none());
+    assert!(ci_moved("jobs: {}\n").is_none());
 }
