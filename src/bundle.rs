@@ -59,10 +59,10 @@ pub const KEY_STATUS_TYPE: &str = "application/vnd.open-meridian.signing-key-sta
 pub const RECORD: &str = "meridian-bundle.json";
 
 /// The platform's public keys this release carries, PEM, the current one and
-/// the next. PLACEHOLDER (CLI 0.1.46): the KMS key is created at the
-/// platform's v25 deploy (the v25 plan, step 2, item 143), and its public
-/// half is written here before this release; until then a bundle cannot be
-/// verified, and none is written.
+/// the next. Empty in 0.1.46: the KMS key is created at the platform's v25
+/// deploy (the v25 plan, step 2, item 143), and its public half is written
+/// here in 0.1.47 or a patch release; until then a bundle cannot be verified,
+/// and its download refuses.
 pub const PLATFORM_KEYS: [&str; 0] = [];
 
 const OCI_MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
