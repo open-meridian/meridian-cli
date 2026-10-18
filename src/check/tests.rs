@@ -215,6 +215,26 @@ fn each_roles_template_keeps_every_rule_verified_or_not() {
 }
 
 #[test]
+fn the_connectivity_template_keeps_every_rule_and_is_told_to_run_its_suite_when_verified() {
+    // SDK 0.30.0's template tests its adapter on the SDK's rig; the
+    // connectivity suite is the plugin's to map to its venue.
+    let plugin = Scaffolded::of_role("connectivity", "connectivity");
+    let report = plugin.check();
+    assert!(report.passed(), "{}", text(&report));
+    let verified = plugin.check_verified();
+    assert_eq!(
+        failed_rules(&verified),
+        ["role-suite"],
+        "{}",
+        text(&verified)
+    );
+    assert_eq!(
+        verified.failures[0].found,
+        "it holds `connectivity`, and no test runs the connectivity suite"
+    );
+}
+
+#[test]
 fn a_verified_data_plugin_runs_the_data_suite_in_its_tests() {
     let plugin = Scaffolded::of_role("data-no-suite", "data");
     std::fs::remove_file(plugin.path("tests/test_suite.py")).unwrap();
@@ -229,6 +249,134 @@ fn a_verified_data_plugin_runs_the_data_suite_in_its_tests() {
     assert_eq!(
         verified.failures[0].found,
         "it holds `data`, and no test runs the data suite"
+    );
+}
+
+/// A data plugin's tests as SDK 0.30.0's pairs venues write them: the SDK's
+/// checks subclassed, its venue's cases in a module beside them.
+fn on_the_sdks_checks(label: &str, not_presented: &str) -> Scaffolded {
+    let plugin = Scaffolded::of_role(label, "data");
+    std::fs::remove_file(plugin.path("tests/test_suite.py")).unwrap();
+    plugin.write(
+        "tests/test_data_role.py",
+        "\"\"\"The SDK's checks, run against this plugin's own conversion.\"\"\"\n\n\
+         from meridian.roles.data.testing import PairsChecks\n\nimport venue_cases\n\n\n\
+         class TestPairs(PairsChecks):\n    venue = venue_cases\n",
+    );
+    plugin.write(
+        "tests/venue_cases.py",
+        &format!("VENUE = \"acme\"\n\nNOT_PRESENTED = {{\n{not_presented}}}\n"),
+    );
+    plugin
+}
+
+#[test]
+fn the_sdks_checks_subclassed_are_the_data_suite_run_and_asserted() {
+    // Coinbase and Kraken 0.7.0 kept a second test running the suite only so
+    // 0.1.46's role-suite saw one (LOG 815).
+    let plugin = on_the_sdks_checks(
+        "data-sdk-checks",
+        "    \"the-takers-side-stated\": \"its trades name the maker's side\",\n",
+    );
+    let verified = plugin.check_verified();
+    assert!(
+        !failed_rules(&verified).contains(&"role-suite"),
+        "{}",
+        text(&verified)
+    );
+
+    // Its NOT_PRESENTED is held as a run's not_presented is.
+    let plugin = on_the_sdks_checks(
+        "data-sdk-checks-named",
+        "    \"the-takers-side-stated\": \"its trades name the maker's side\",\n    \"reads-its-datasets-licences\": \"it reads none\",\n",
+    );
+    let verified = plugin.check_verified();
+    let found = suite_failures(&verified);
+    assert_eq!(
+        found,
+        [(
+            "it names `reads-its-datasets-licences` not presented, a case of the data suite every \
+             plugin of the role passes"
+                .to_string(),
+            "tests/venue_cases.py".to_string(),
+            5
+        )],
+        "{}",
+        text(&verified)
+    );
+
+    // An excuse where the checks run fails, as where a run does.
+    let plugin = on_the_sdks_checks("data-sdk-checks-skipped", "");
+    plugin.write(
+        "tests/test_data_role.py",
+        "import pytest\nfrom meridian.roles.data.testing import PairsChecks\n\nimport venue_cases\n\n\n\
+         @pytest.mark.skip(reason=\"later\")\nclass TestPairs(PairsChecks):\n    venue = venue_cases\n",
+    );
+    let found = suite_failures(&plugin.check_verified());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0]
+        .0
+        .starts_with("`skip` in a module that runs the data suite"));
+
+    // Not the SDK's class, or not one pytest collects: no suite.
+    let plugin = on_the_sdks_checks("data-sdk-checks-not", "");
+    plugin.write(
+        "tests/test_data_role.py",
+        "from meridian.roles.data.testing import PairsChecks\n\nimport venue_cases\n\n\n\
+         class Pairs(PairsChecks):\n    venue = venue_cases\n",
+    );
+    let found = suite_failures(&plugin.check_verified());
+    assert_eq!(
+        found[0].0,
+        "it holds `data`, and no test runs the data suite"
+    );
+    assert!(plugin.check_verified().failures.iter().any(
+        |f| f.rule == "role-suite" && f.instead.contains("PairsChecks or EventContractsChecks")
+    ));
+}
+
+#[test]
+fn a_page_answering_the_sdks_record_holds_the_roles_common_fields() {
+    // SDK 0.30.0's venue records extend the role's: data.VenueConnection, and
+    // a plugin's own record extending it.
+    let plugin = Scaffolded::of_role("data-sdk-record", "data");
+    plugin.replace(
+        "src/checked_plugin/page.py",
+        "answers=data.ConnectionRead",
+        "answers=data.VenueConnection",
+    );
+    assert!(
+        plugin.check_verified().passed(),
+        "{}",
+        text(&plugin.check_verified())
+    );
+    plugin.replace(
+        "src/checked_plugin/page.py",
+        "answers=data.VenueConnection",
+        "answers=AcmeConnection",
+    );
+    plugin.add_after(
+        "src/checked_plugin/page.py",
+        "from .convert import Converter\n",
+        "\n\nclass AcmeConnection(data.VenueConnection):\n    stream: str = \"\"\n",
+    );
+    assert!(
+        plugin.check_verified().passed(),
+        "{}",
+        text(&plugin.check_verified())
+    );
+    // A record of the plugin's own that extends neither, missing the fields.
+    plugin.replace(
+        "src/checked_plugin/page.py",
+        "class AcmeConnection(data.VenueConnection):",
+        "class AcmeConnection:",
+    );
+    let verified = plugin.check_verified();
+    assert!(
+        verified.failures.iter().any(|f| f.rule == "role-pages"
+            && f.found.contains("does not hold the role's common fields")),
+        "{}",
+        text(&verified)
     );
 }
 

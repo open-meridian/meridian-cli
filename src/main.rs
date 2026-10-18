@@ -15,6 +15,7 @@ mod doctor;
 mod down;
 #[cfg(test)]
 mod fake_http;
+mod gc;
 mod live;
 mod machine;
 mod migrate;
@@ -22,6 +23,7 @@ mod plugin;
 mod plugin_release;
 mod registry;
 mod release;
+mod rollback;
 mod sessions;
 mod signing;
 mod status;
@@ -46,6 +48,7 @@ meridian -- bringing a Meridian deployment up
                              settings, SDK use, [tool.meridian], documentation (docs/),
                              tests and shape
   meridian plugin migrate    move the plugin here to a newer release of its SDK: its pins
+                             (a base pinned by digest takes the new release's digest)
                              and its CI's meridian, each release's rewrite of its code,
                              then plugin check
   meridian plugin upload     build the plugin here and put it in the deployment's catalogue,
@@ -66,7 +69,8 @@ meridian -- bringing a Meridian deployment up
                              a link to a plugin's page that one browser opens once
   meridian plugin publish --registry community|verified --tag vX.Y.Z
                              ask the platform to build that signed release tag of the
-                             plugin here and list it, after plugin check passes
+                             plugin here and list it, after plugin check passes; its
+                             report a line a check (--details: each check's full text)
   meridian plugin release <version>
                              release the plugin here: checks (on main, clean, up to
                              date, main's CI green, the version higher than the last
@@ -81,6 +85,9 @@ meridian -- bringing a Meridian deployment up
                              half registered on the organisation
   meridian plugin key register <file.pub> | revoke <key-id> | list
                              the organisation's tag-signing keys at the platform
+  meridian plugin gc         collect the deployment's plugin registry's garbage: the layers
+                             retired versions left. Read-only while it runs (pulls go
+                             on, uploads wait), then back; shown, then asked
   meridian plugin download <organisation>/<plugin>@<version>
                              write a plugin bundle of a listed version, verified, for
                              a deployment that reaches nothing
@@ -92,9 +99,18 @@ meridian -- bringing a Meridian deployment up
                              (default: https://meridian.localhost, the local install)
   meridian sign-out [<address>]
                              revoke that delegation, here and at the deployment
-  meridian status            each component: its image, readiness, restarts and why,
-                             memory against its limit; and the book's health per account
-  meridian logs <component>  what a component printed; --since 10m for the last ten minutes
+  meridian status            the release (revision, state, chart; Helm's words where it
+                             is not deployed); each component and each plugin: its
+                             image, readiness, restarts and why, each pod's memory
+                             against its limit; and the book's health per account
+  meridian logs <component>  what a component printed: core's, a plugin's by its instance,
+                             or a Job's (migrate, key, first-run, backup), its newest run;
+                             --since 10m for the last ten minutes, --previous for what
+                             it printed before its last restart
+  meridian rollback-deployment [--to-revision <n>]
+                             return the deployment to an earlier revision of its release:
+                             by default the last one deployed before the newest. The
+                             database is not rolled back with it; shown, then asked
   meridian upgrade           replace this binary with the latest release; not a
                              deployment, which is upgrade-deployment
   meridian authority         this machine's certificate authority, which signs a local
@@ -253,12 +269,19 @@ GITHUB_TOKEN, else the credential git keeps for github.com
       --details             publish: every check's full text, where it prints one line
                             a check that fits the terminal
 
-status, logs: read-only; the components and logs through kubectl, as doctor and backup
-are, and status's book health from the deployment, through the session meridian
-connect keeps (--deployment names one)
+status, logs: read-only; the components and logs through kubectl and the release through
+helm, as doctor and backup read them, and status's book health from the deployment,
+through the session meridian connect keeps (--deployment names one)
       --release <name>      the Helm release (default: meridian)
       --since <span>        logs: only what was printed in the last 30s, 10m, 2h or 1d
+      --previous            logs: what each container printed before its last restart
       --json                status: one JSON object on stdout
+
+plugin gc: through kubectl, as backup is; checks first and changes nothing if one fails
+      --release <name>      the Helm release (default: meridian)
+      --timeout <d>         how long to give the registry each restart (default: 5m)
+      --yes                 collect without being asked. For a script that has read
+                            what it will do
 
 down: nothing is asked, since saying down is the decision
       --release <name>      the Helm release (default: meridian)
@@ -284,6 +307,15 @@ what it will do and asks
                             certificate it wrote is renewed within 30 days of its end
                             with or without this
       --yes                 upgrade without being asked. For a script that has read
+                            what it will do
+
+rollback-deployment: checks first, and changes nothing if a check fails; then shows the
+revision it returns to and asks. Then waits as upgrade-deployment does
+      --release <name>      the Helm release (default: meridian)
+      --to-revision <n>     the revision to return to, as `meridian status` and Helm number
+                            them (default: the last one deployed before the newest)
+      --timeout <d>         how long to wait for every component (default: 10m)
+      --yes                 roll back without being asked. For a script that has read
                             what it will do
 
 upgrade: this binary, not a deployment
@@ -313,9 +345,10 @@ backup key: needs no deployment
 
 restore: only into a namespace without the release and without anything a deployment
 keeps: the backup's Secrets and ConfigMaps, the key's Secret, the database's and the
-registry's claims, and a backup volume a deleted namespace left. Checks first and
-changes nothing if one fails; then shows the backup, the cluster, the namespace, the
-chart and what it will make, and asks. The database's URL is withheld until the
+registry's claims. Checks first and changes nothing if one fails; then shows the
+backup, the cluster, the namespace, the chart and what it will make, and asks. A
+backup volume a deleted namespace left is deleted within that one approval, the
+node's directory with its backups kept. The database's URL is withheld until the
 database is loaded, the brought one or (from a dump of one somebody else runs) an
 empty external one, and every table's row count matches the backup's; then the
 components start
@@ -334,6 +367,85 @@ connect:
   local one. The sign-in opens in your browser; this never takes a password.
 ";
 
+/// `meridian <command> --help`: that command's lines of the list, every
+/// section of flags naming it, and the flags both take; the whole of the
+/// usage for a command it does not know.
+fn help_for(command: &str, words: &[String]) -> String {
+    let with_sub = matches!(command, "plugin" | "backup" | "authority")
+        .then(|| words.first().map(|sub| format!("{command} {sub}")))
+        .flatten();
+    let named = with_sub.clone().unwrap_or_else(|| command.to_string());
+    if command.is_empty() || matches!(command, "help" | "-h" | "--help") {
+        return USAGE.to_string();
+    }
+    let blocks: Vec<&str> = USAGE.split("\n\n").collect();
+    // The list: each `  meridian <named>...` entry with its continuation.
+    let mut listed = String::new();
+    let mut taking = false;
+    for line in blocks.iter().take(2).flat_map(|block| block.lines()) {
+        if let Some(entry) = line.strip_prefix("  meridian ") {
+            let first: Vec<&str> = entry.split_whitespace().collect();
+            let says = |name: &str| {
+                let parts: Vec<&str> = name.split(' ').collect();
+                first.len() >= parts.len() && first[..parts.len()] == parts[..]
+            };
+            taking = says(&named) || (with_sub.is_none() && says(command));
+        } else if !line.starts_with("    ") {
+            taking = false;
+        }
+        if taking {
+            listed.push_str(line);
+            listed.push('\n');
+        }
+    }
+    // The sections: a block whose head, before its first colon, names it.
+    let mut sections = Vec::new();
+    for block in &blocks[1..] {
+        let head = block.lines().next().unwrap_or_default();
+        if head.starts_with(' ') {
+            continue;
+        }
+        let Some((names, _)) = head.split_once(':') else {
+            continue;
+        };
+        let items: Vec<String> = names.split(", ").map(str::trim).map(String::from).collect();
+        let plugin = items
+            .first()
+            .is_some_and(|first| first.starts_with("plugin "));
+        let items: Vec<String> = items
+            .into_iter()
+            .map(|item| {
+                if plugin && !item.starts_with("plugin ") {
+                    format!("plugin {item}")
+                } else {
+                    item
+                }
+            })
+            .collect();
+        if items.iter().any(|item| *item == named || *item == command) {
+            sections.push(*block);
+        }
+    }
+    if listed.is_empty() && sections.is_empty() {
+        return USAGE.to_string();
+    }
+    let both = blocks
+        .iter()
+        .find(|block| block.starts_with("Both:"))
+        .copied()
+        .unwrap_or_default();
+    let mut out = format!("meridian {named}\n\n{listed}");
+    for section in sections {
+        out.push('\n');
+        out.push_str(section);
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(both);
+    out.push('\n');
+    out
+}
+
 struct Arguments {
     command: String,
     /// The words after a command that takes them: `plugin new <name>`.
@@ -343,7 +455,8 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 31] = [
+const TAKES_A_VALUE: [&str; 32] = [
+    "--to-revision",
     "--registry",
     "--tag",
     "--organisation",
@@ -380,7 +493,8 @@ const TAKES_A_VALUE: [&str; 31] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 19] = [
+const SWITCHES: [&str; 20] = [
+    "--previous",
     "--details",
     "--hardware",
     "--no-wait",
@@ -506,7 +620,7 @@ async fn main() {
     }
 
     if arguments.set("-h") || arguments.set("--help") {
-        print!("{USAGE}");
+        print!("{}", help_for(&arguments.command, &arguments.words));
         return;
     }
 
@@ -540,6 +654,9 @@ async fn main() {
         "upgrade-deployment" => {
             std::process::exit(upgrade_deployment_command(&arguments, &intended.namespace).await)
         }
+        "rollback-deployment" => {
+            std::process::exit(rollback_command(&arguments, &intended.namespace).await)
+        }
         "uninstall" => std::process::exit(uninstall_command(&arguments).await),
         "authority" => std::process::exit(authority_command(&arguments)),
         "backup" => std::process::exit(backup_command(&arguments, &intended.namespace).await),
@@ -568,6 +685,9 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
     }
     if words.first() == Some(&"publish") {
         return publish_command(arguments, &words, &platform_of(arguments)).await;
+    }
+    if words.first() == Some(&"gc") {
+        return gc_command(arguments, &words).await;
     }
     if words.first() == Some(&"release") {
         return release_command(arguments, &words, &platform_of(arguments)).await;
@@ -633,6 +753,54 @@ async fn offer_key_setup(into: &std::path::Path, platform: &str) {
     );
     if approved("Set up a signing key now?") {
         set_up_key(into, false, None, platform).await;
+    }
+}
+
+/// `meridian plugin gc` (ruling 166): the in-cluster registry read-only, its
+/// garbage collected, then back; checked, shown and asked first.
+async fn gc_command(arguments: &Arguments, words: &[&str]) -> i32 {
+    if words.len() != 1 {
+        eprintln!("meridian plugin gc: takes no words\n\n{USAGE}");
+        return 2;
+    }
+    let timeout = arguments.value("--timeout", "--timeout").unwrap_or("5m");
+    if upgrade_deployment::duration(timeout).is_none() {
+        eprintln!("meridian plugin gc: --timeout takes a duration: 5m, 90s");
+        return 2;
+    }
+    let asked = gc::Asked {
+        release: arguments
+            .value("--release", "--release")
+            .unwrap_or("meridian")
+            .into(),
+        namespace: arguments
+            .value("--namespace", "-n")
+            .unwrap_or("meridian")
+            .into(),
+        timeout: timeout.into(),
+    };
+    let plan = match gc::check(&machine::ThisMachine, &asked).await {
+        Ok(plan) => plan,
+        Err(refused) => {
+            eprintln!("meridian plugin gc: {refused}. Nothing was changed.");
+            return 1;
+        }
+    };
+    eprintln!("{}", gc::plan_text(&asked, &plan));
+    if !arguments.set("--yes") && !approved("Collect it?") {
+        eprintln!("meridian plugin gc: not approved, so nothing was changed. Where there is no terminal to ask at, --yes approves");
+        return 1;
+    }
+    let mut say = |line: &str| eprintln!("{line}");
+    match gc::apply(&machine::ThisMachine, &asked, &plan, &mut say).await {
+        Ok(done) => {
+            print!("{done}");
+            0
+        }
+        Err(failed) => {
+            eprintln!("meridian plugin gc: {failed}");
+            1
+        }
     }
 }
 
@@ -1824,7 +1992,7 @@ async fn status_command(arguments: &Arguments, namespace: &str) -> i32 {
             } else {
                 print!(
                     "{}",
-                    status::said(&held, credential::now_s() * 1_000_000_000)
+                    status::said(&held, credential::now_s() * 1_000_000_000, namespace)
                 );
             }
             0
@@ -1848,14 +2016,11 @@ async fn logs_command(arguments: &Arguments, namespace: &str) -> i32 {
             .into(),
         namespace: namespace.into(),
     };
-    match status::logs(
-        &status::ThisCluster,
-        &asked,
-        component,
-        arguments.value("--since", "--since"),
-    )
-    .await
-    {
+    let read = status::Read {
+        since: arguments.value("--since", "--since").map(String::from),
+        previous: arguments.set("--previous"),
+    };
+    match status::logs(&status::ThisCluster, &asked, component, &read).await {
         Ok(printed) => {
             print!("{printed}");
             0
@@ -2086,6 +2251,69 @@ async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i
         }
         Err(refusal) => {
             eprintln!("\nmeridian upgrade-deployment: {refusal}");
+            1
+        }
+    }
+}
+
+/// `meridian rollback-deployment [--to-revision <n>]` (audit D4): checks,
+/// shows the revision it returns to and that the database stays, asks, then
+/// rolls back and waits.
+async fn rollback_command(arguments: &Arguments, namespace: &str) -> i32 {
+    if !arguments.words.is_empty() {
+        eprintln!("meridian rollback-deployment: takes no words; --to-revision <n> names a revision\n\n{USAGE}");
+        return 2;
+    }
+    let to_revision = match arguments.value("--to-revision", "--to-revision") {
+        None => None,
+        Some(given) => match given.parse::<u64>() {
+            Ok(revision) if revision > 0 => Some(revision),
+            _ => {
+                eprintln!("meridian rollback-deployment: --to-revision takes a revision's number, as `meridian status` says it");
+                return 2;
+            }
+        },
+    };
+    let timeout = arguments.value("--timeout", "--timeout").unwrap_or("10m");
+    let Some(waited) = upgrade_deployment::duration(timeout) else {
+        eprintln!(
+            "meridian rollback-deployment: --timeout takes a duration as Helm writes one: 10m, 90s, 1h30m"
+        );
+        return 2;
+    };
+    let asked = rollback::Asked {
+        release: arguments
+            .value("--release", "--release")
+            .unwrap_or("meridian")
+            .into(),
+        namespace: namespace.into(),
+        to_revision,
+        timeout: timeout.into(),
+    };
+    let plan = match rollback::check(&machine::ThisMachine, &asked).await {
+        Ok(plan) => plan,
+        Err(refused) => {
+            eprintln!("meridian rollback-deployment: {refused}. Nothing was changed.");
+            return 1;
+        }
+    };
+    eprintln!("{}", rollback::plan_text(&asked, &plan));
+    if !arguments.set("--yes") && !approved("Roll it back?") {
+        eprintln!("meridian rollback-deployment: not approved, so nothing was changed. Where there is no terminal to ask at, --yes approves");
+        return 1;
+    }
+    let pace = rollback::Pace {
+        poll: std::time::Duration::from_secs(2),
+        timeout: waited,
+    };
+    let mut say = |line: &str| eprintln!("{line}");
+    match rollback::apply(&machine::ThisMachine, &asked, &plan, &pace, &mut say).await {
+        Ok(done) => {
+            print!("{done}");
+            0
+        }
+        Err(failed) => {
+            eprintln!("meridian rollback-deployment: {failed}");
             1
         }
     }
@@ -2672,7 +2900,59 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{connect_address, parse};
+    use super::{connect_address, help_for, parse};
+
+    #[test]
+    fn a_commands_help_is_its_own_flags() {
+        // `meridian logs --help` printed the whole usage in 0.1.46.
+        let logs = help_for("logs", &[]);
+        assert!(logs.starts_with("meridian logs\n"), "{logs}");
+        assert!(logs.contains("--previous            logs:"), "{logs}");
+        assert!(logs.contains("--since <span>"), "{logs}");
+        assert!(logs.contains("Both:"), "{logs}");
+        assert!(!logs.contains("--first-run-code"), "{logs}");
+        assert!(!logs.contains("meridian plugin logs"), "{logs}");
+        let release = help_for("plugin", &["release".to_string()]);
+        assert!(
+            release.contains("meridian plugin release <version>"),
+            "{release}"
+        );
+        assert!(release.contains("--no-wait"), "{release}");
+        assert!(!release.contains("--first-run-code"), "{release}");
+        let rollback = help_for("rollback-deployment", &[]);
+        assert!(rollback.contains("--to-revision <n>"), "{rollback}");
+        let key = help_for("plugin", &["key".to_string()]);
+        assert!(
+            key.contains("meridian plugin key setup") && key.contains("--hardware"),
+            "{key}"
+        );
+        let gc = help_for("plugin", &["gc".to_string()]);
+        assert!(gc.contains("meridian plugin gc"), "{gc}");
+        // A command it does not know: the whole usage.
+        assert_eq!(help_for("nonsense", &[]), super::USAGE);
+    }
+
+    #[test]
+    fn the_v0_1_47_commands_parse() {
+        let release = parse(said("plugin release 1.4.0 --no-wait --registry community")).unwrap();
+        assert_eq!(release.words, ["release", "1.4.0"]);
+        assert!(release.set("--no-wait"));
+        let setup = parse(said("plugin key setup --hardware --organisation acme")).unwrap();
+        assert_eq!(setup.words, ["key", "setup"]);
+        assert!(setup.set("--hardware"));
+        let rollback = parse(said("rollback-deployment --to-revision 12 --yes")).unwrap();
+        assert_eq!(rollback.value("--to-revision", "--to-revision"), Some("12"));
+        assert!(rollback.set("--yes"));
+        let previous = parse(said("logs bor --previous")).unwrap();
+        assert!(previous.set("--previous"));
+        let details = parse(said(
+            "plugin publish --registry community --tag v1.0.0 --details",
+        ))
+        .unwrap();
+        assert!(details.set("--details"));
+        let gc = parse(said("plugin gc --yes")).unwrap();
+        assert_eq!(gc.words, ["gc"]);
+    }
 
     fn said(line: &str) -> Vec<String> {
         line.split_whitespace().map(String::from).collect()

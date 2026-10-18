@@ -70,7 +70,8 @@ and opens the wizard, and the deployment's own wizard does the rest.
 
 Answers whether this machine and this cluster can run a deployment, each answer
 naming the fix rather than the symptom: a reachable cluster and the rights to
-install into a namespace, Helm present and recent enough, a storage class for
+install into a namespace, Helm 3.14 or newer (`upgrade-deployment` needs its
+`--reset-then-reuse-values`), a storage class for
 the deployment's key, no node short of disk, the image pullable from here, the
 platform reachable, and the clock within the tolerance a signed assertion
 allows.
@@ -342,6 +343,30 @@ the archive is kept and the plan says so: `Its archive, /mnt/nas/meridian-archiv
 on the cluster's node, is kept`. The same steps from a firm's own pipeline
 -- plain Helm, Flux or Argo CD -- are in the docs' *Upgrade a deployment*.
 
+Where it stops, it says what to run next in `meridian` commands alone: `meridian
+status` for the release's state and Helm's own words, `meridian logs migrate` for
+a migration's log, `meridian logs <component> --previous` for why a container
+restarted, and `meridian rollback-deployment` to return to the revision it was at.
+
+## rollback-deployment
+
+```
+meridian rollback-deployment                    # to the last revision deployed before the newest
+meridian rollback-deployment --to-revision 12
+```
+
+Returns a release Helm holds as `failed` or `pending-...`, or an upgrade that is
+not wanted, to an earlier revision, with your own cluster rights. It checks first
+and changes nothing if a check fails: helm and the cluster are here, and the
+release's revisions are read (`--to-revision` must be one of them, and not the
+newest). Then it shows both revisions, with Helm's words for the newest where it
+is not deployed, and that **the database is not rolled back with it**: what a
+newer revision's migration changed stays, and the older runtime may refuse a
+schema it does not know, so a backup taken before the upgrade is what brings the
+data back. It asks "Roll it back?" (`--yes` for a script), runs `helm rollback`
+and waits, up to `--timeout`, for that revision's migration if it runs one and
+every component on its template.
+
 ## backup and restore
 
 ```
@@ -361,9 +386,10 @@ the backup opens with the identity and every member's hash holds; the
 namespace holds no release of that name and nothing a deployment keeps or
 would take up -- the backup's Secrets and ConfigMaps (the dashboard's public
 keys, `-backup-values`), the key's Secret (`<release>-meridian-runtime-key`),
-the claims the brought database and the registry would mount and find full,
-and a backup volume a deleted namespace left (named with the `kubectl delete
-pv` that removes it; the node's directory and its backups are kept). The
+and the claims the brought database and the registry would mount and find
+full. A backup volume a deleted namespace left is not a refusal: the plan says
+restore deletes it, within the one approval, and its Retain policy keeps the
+node's directory and the backups in it. The
 chart is read at the version the backup was taken on, or `--chart-version`,
 from whatever `--chart` names: one older than the backup's is refused, since
 its database may hold what only a newer runtime serves, and a newer one is
@@ -627,6 +653,9 @@ its CI checks with the meridian that wrote it (`MERIDIAN_VERSION`).
 ## The registries (contract v25)
 
 ```
+meridian plugin key setup                       # git's SSH signing key, or a new one, registered
+meridian plugin release 0.19.0                  # the release PR, its merge, the tag, published
+meridian plugin release 0.19.0 --no-wait        # stop once the PR is open; run again to go on
 meridian plugin key register ~/.ssh/release.pub --organisation acme
 meridian plugin publish --registry community --tag v0.18.0 --organisation acme
 meridian plugin key list --organisation acme
@@ -642,32 +671,83 @@ the plugin to `plugin check` first, and refuses a tag that is not `v` and the
 version pyproject.toml holds, or that is not signed with an SSH key
 (`git -c gpg.format=ssh tag -s v0.18.0`); then it asks the platform to build
 the tag, with a token good for that plugin alone, and follows the build until
-it is listed, queued for review, or refused, saying each check. It builds,
-signs and pushes nothing. `download` writes a plugin bundle -- the image, its
+it is listed, queued for review, or refused: one line a check, cut to the
+terminal's width (`--details` prints each check's full text), the build's log,
+and the listing's address once it is listed. It builds, signs and pushes
+nothing. Its push token is held while the build is followed, and narrowed
+again only within a minute of its end; where the platform will not narrow the
+sign-in's token, the browser is opened for one narrowed sign-in, once a
+publish at most.
+
+`key setup` makes the key release tags are signed with ready in one step:
+git's configured SSH signing key, or one `ssh-keygen` makes (`-t ed25519`, a
+desktop key; `--hardware` makes `-t ed25519-sk`, held on a FIDO security
+key), ssh-keygen asking for its passphrase itself. It sets `gpg.format ssh`
+and `user.signingkey` (in the plugin's repository alone where git signs with
+a GPG key), and registers the public half on the organisation; somebody who
+is not an Owner or Admin is told to ask one, with the line to give them.
+`plugin new` offers it where git has no SSH signing key yet.
+
+`release <version>` releases the plugin here in one command, its merge a
+person's. It checks the checkout is on the default branch, clean and up to
+date with origin, that branch's last CI run green and the version higher
+than the last tag; opens the release PR (`pyproject.toml`'s version and the
+CHANGELOG heading, made in a worktree of its own, so the checkout is never
+switched) and waits for its CI and then its merge. Then it signs
+`v<version>` on the merge commit, pushes it, publishes it as `publish` does
+and prints the listing's address. `--no-wait` stops once the PR is open,
+and running it again resumes from wherever the release is. GitHub is asked
+through its API with your own GitHub sign-in: `GH_TOKEN` or `GITHUB_TOKEN`,
+else the credential git keeps for github.com; nothing else is installed for
+it. `download` writes a plugin bundle -- the image, its
 referrers, its documentation and the platform's signed key status -- only
 once every digest and signature verifies against the platform's keys this
 release carries; `upload --bundle` carries it into a deployment that reaches
-nothing, which verifies it again. `--organisation` defaults to the
-organisation the plugin's git remote names; where that is not known, the
-command says to name it.
+nothing, which verifies it again. This release carries the platform's
+registry-signing key (`meridian-registry/registry-signing`, version 1).
+`--organisation` takes the organisation's namespace and defaults to the one
+the plugin's git remote names; where that is not known, the command says to
+name it.
+
+```
+meridian plugin gc
+```
+
+`plugin gc` collects the deployment's own plugin registry's garbage: the
+layers retired versions left once their manifests were released. It sets the
+in-cluster registry read-only (uploads wait; pulls go on, so running plugins
+and launches are untouched), runs Distribution's `registry garbage-collect`
+in its pod, and sets it back, after showing that and asking. A run stopped
+half-way leaves it read-only, says so, and the next run finishes.
 
 ## status and logs
 
 ```
-meridian status                 # each component, and the book's health per account
+meridian status                 # the release, each component and plugin, the book's health
 meridian status --json
 meridian logs bor --since 10m
+meridian logs bor --previous    # what it printed before its last restart
+meridian logs migrate           # the newest migration Job's log
+meridian logs snaptrade         # a plugin, by its instance
 ```
 
-`status` says each of the deployment's components: its image, how many of
-its pods are ready, how often they restarted and why the last time
-(`OOMKilled`), and the memory it uses against its limit where the cluster
-serves metrics. Its book health says, per account, how many journal entries
-the book replays since the account's last snapshot, and when that was taken.
-`logs` prints what a component's pods printed. The components and logs are
-read through kubectl, and book health is the deployment's own answer (core's
-`ReadBookHealthFromTerminal`, on the session `meridian connect` keeps); nothing is
-changed, and a deployment admin never runs kubectl or helm by hand.
+`status` says the release first -- its revision, state, chart and app version,
+and Helm's own words for why where it is not `deployed`, with the
+`rollback-deployment` that recovers it -- then each of the deployment's
+components and, under Plugins, each plugin instance by its name: its image (a
+plugin's own), how many of its pods are ready, how often they restarted and
+why the last time (`OOMKilled`), and each pod's memory against the limit each
+pod has, where the cluster serves metrics. Its book health says, per account,
+how many journal entries the book replays since the account's last snapshot,
+and when that was taken. `logs` prints what a component's pods printed: core's
+components, a plugin by its instance, and the release's Jobs (`migrate`, `key`,
+`first-run`, `backup`), the newest run of each; `--previous` prints what each
+container printed before its last restart. The components and logs are read
+through kubectl and the release through helm, and book health is the
+deployment's own answer (core's `ReadBookHealthFromTerminal`, on the session
+`meridian connect` keeps); nothing is changed, and a deployment admin never
+runs kubectl or helm by hand. `meridian <command> --help` prints that
+command's own flags.
 
 ## Moving a plugin to a newer SDK
 
@@ -684,7 +764,10 @@ this meridian's own where it names an older one, runs each step between in
 the SDK's image, then `plugin check`, and says what is left by hand with its rule, file and line. The
 steps run in docker, cut off from the network and given the plugin's files
 on stdin; this binary alone writes the plugin's directory, once every step
-has run. It refuses changes git does not hold yet, unless `--force`, and it
+has run. A base pinned by digest (`plugin-python:<v>@sha256:...`) takes the
+new release's digest, read from ghcr.io as any `docker pull` reads it; where
+it cannot be read, the old digest is dropped, never kept under the new tag,
+and that is left by hand. It refuses changes git does not hold yet, unless `--force`, and it
 never goes backwards. `make e2e-migrate` runs it, for real, over the plugins
 meridian-python records its migrations for. From 0.23.0 to 0.24.0 (contract
 v20) the SDK's step rewrites the renamed roles where a plugin names a role:
@@ -808,7 +891,9 @@ custody, data and reporting suites' tests meeting their v22 cases, 0.27.0
 (contract v23) from 0.1.43, and 0.28.0 (contract v24) from 0.1.45, each
 scaffold with the CI-first pre-push hook (`hooks/pre-push`, written
 executable) and the custody and reporting suites' tests meeting their v24
-cases.
+cases, 0.29.0 (contract v25) from 0.1.46, and 0.30.0 (contract v25, the
+SDK's role helpers) from 0.1.47, with the `connectivity` template: a venue
+placed at through the SDK's `Trader`.
 
 ## Licence
 

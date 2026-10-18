@@ -1191,6 +1191,82 @@ fn asserts_passed(text: &str, role: &str) -> bool {
     false
 }
 
+/// The SDK's checks for a role (SDK 0.30.0,
+/// sdk-contract/the-sdk-carries-each-roles-common-logic): a class pytest
+/// collects that subclasses one of them runs the role's suite unchanged
+/// against the plugin's own exchange, and asserts every case passed, the
+/// venue's `NOT_PRESENTED` aside (CLI 0.1.47, decided under A at LOG 815).
+/// Each: the role, the module, its classes.
+const SDK_CHECKS: [(&str, &str, &[&str]); 1] = [(
+    "data",
+    "meridian.roles.data.testing",
+    &["PairsChecks", "EventContractsChecks"],
+)];
+
+/// A test class at the top of a module subclassing one of the SDK's checks
+/// for `role`, imported from the SDK's module: its line, and the module its
+/// `venue = <module>` names, where it names one.
+fn sdk_checks(text: &str, role: &str) -> Option<(usize, Option<String>)> {
+    let (_, module, classes) = SDK_CHECKS.iter().find(|(held, _, _)| *held == role)?;
+    let code = python_uncommented(text);
+    if !code.contains(module) {
+        return None;
+    }
+    static CLASS: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?m)^class[ \t]+(Test\w*)[ \t]*\(([^)]*)\)[ \t]*:").unwrap());
+    static VENUE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^[ \t]+venue[ \t]*(?::[^=\n]*)?=[ \t]*([A-Za-z_]\w*)[ \t]*$").unwrap()
+    });
+    for class in CLASS.captures_iter(&code) {
+        let bases = &class[2];
+        let subclasses = classes.iter().any(|name| {
+            Regex::new(&format!(r"(?:^|[\s.,]){}\s*(?:,|$)", regex::escape(name)))
+                .unwrap()
+                .is_match(bases.trim())
+        });
+        if !subclasses {
+            continue;
+        }
+        let at = class.get(0).expect("matched");
+        let body = &code[at.end()..];
+        let venue = python_statements(body)
+            .into_iter()
+            .take_while(|(_, statement)| {
+                statement.starts_with([' ', '\t']) || statement.trim().is_empty()
+            })
+            .find_map(|(_, statement)| {
+                VENUE
+                    .captures(statement.trim_end())
+                    .map(|found| found[1].to_string())
+            });
+        return Some((line_at(&code, at.start()), venue));
+    }
+    None
+}
+
+/// The keys of a dict bound at the top of a module to `name`
+/// (`NOT_PRESENTED = {...}`), each with its line.
+fn dict_keys_bound(text: &str, name: &str) -> Vec<(usize, String)> {
+    static KEY: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"["']([a-z0-9]+(?:-[a-z0-9]+)*)["']\s*:"#).unwrap());
+    let text = python_uncommented(text);
+    let Some(bound) = Regex::new(&format!(
+        r"(?m)^{}[ \t]*(?::[^=\n]*)?=[ \t]*\{{",
+        regex::escape(name)
+    ))
+    .unwrap()
+    .find(&text) else {
+        return Vec::new();
+    };
+    let at = bound.end();
+    KEY.captures_iter(enclosed(&text[at..]))
+        .map(|key| {
+            let place = at + key.get(0).expect("matched").start();
+            (line_at(&text, place), key[1].to_string())
+        })
+        .collect()
+}
+
 fn role_suite(plugin: &Plugin) -> Vec<Failure> {
     const ID: &str = "role-suite";
     let (roles, _) = declared(plugin);
@@ -1213,7 +1289,15 @@ fn role_suite(plugin: &Plugin) -> Vec<Failure> {
                     && runs.is_match(&source.text)
             })
             .collect();
-        if tests.is_empty() {
+        // The SDK's checks for the role, subclassed in a module pytest
+        // collects, are the suite run unchanged and asserted passed.
+        let checked: Vec<(&Source, Option<String>)> = plugin
+            .files
+            .iter()
+            .filter(|source| collected(&source.path) && is_test(&source.path))
+            .filter_map(|source| sdk_checks(&source.text, role).map(|(_, venue)| (source, venue)))
+            .collect();
+        if tests.is_empty() && checked.is_empty() {
             failures.push(failure(
                 ID,
                 "tests/",
@@ -1222,15 +1306,43 @@ fn role_suite(plugin: &Plugin) -> Vec<Failure> {
                 &format!(
                     "a test that runs `meridian.suites.run(\"{role}\", producers)`: each case of \
                      the suite mapped to the plugin's own exchange with its source, run through \
-                     its own conversion, and the report asserted passed. `--run-tests` then \
+                     its own conversion, and the report asserted passed{}. `--run-tests` then \
                      holds the plugin to every case, as a verified plugin is held \
-                     (spec/vendor-differences-have-a-place-in-the-contract, requirement 18)"
+                     (spec/vendor-differences-have-a-place-in-the-contract, requirement 18)",
+                    SDK_CHECKS
+                        .iter()
+                        .find(|(held, _, _)| held == role)
+                        .map(|(_, module, classes)| format!(
+                            "; or a test class subclassing the SDK's checks, `{module}`'s {}, \
+                             which run the suite unchanged",
+                            classes.join(" or ")
+                        ))
+                        .unwrap_or_default()
                 ),
             ));
             continue;
         }
         let cases = suite_cases(role);
-        for source in &tests {
+        let mut named: Vec<(&Source, usize, String)> = Vec::new();
+        // The venue's NOT_PRESENTED, in the module each class names.
+        for venue in checked.iter().filter_map(|(_, venue)| venue.as_ref()) {
+            let wanted = format!("{venue}.py");
+            for module in plugin
+                .files
+                .iter()
+                .filter(|other| file_name(&other.path) == wanted)
+            {
+                for (line, case) in dict_keys_bound(&module.text, "NOT_PRESENTED") {
+                    named.push((module, line, case));
+                }
+            }
+        }
+        let excusing_modules: Vec<&Source> = tests
+            .iter()
+            .copied()
+            .chain(checked.iter().map(|(source, _)| *source))
+            .collect();
+        for source in &excusing_modules {
             let over = conftests_over(plugin, &source.path);
             for excusing in std::iter::once(*source).chain(over) {
                 for (line, word) in excuses(&excusing.text) {
@@ -1255,23 +1367,30 @@ fn role_suite(plugin: &Plugin) -> Vec<Failure> {
                     ));
                 }
             }
+            if !tests.iter().any(|test| test.path == source.path) {
+                continue;
+            }
             for (line, case) in named_not_presented(&source.text) {
-                let found = match cases.iter().find(|(name, _)| *name == case) {
-                    None => format!(
-                        "it names `{case}` not presented, and the {role} suite has no such case"
-                    ),
-                    Some((_, true)) => continue,
-                    Some((_, false)) => format!(
-                        "it names `{case}` not presented, a case of the {role} suite every plugin \
-                         of the role passes"
-                    ),
-                };
-                failures.push(failure(ID, &source.path, line, found, NOT_PRESENTED));
+                named.push((source, line, case));
             }
         }
-        let asserted = tests
-            .iter()
-            .any(|source| collected(&source.path) && asserts_passed(&source.text, role));
+        for (source, line, case) in named {
+            let found = match cases.iter().find(|(name, _)| *name == case) {
+                None => format!(
+                    "it names `{case}` not presented, and the {role} suite has no such case"
+                ),
+                Some((_, true)) => continue,
+                Some((_, false)) => format!(
+                    "it names `{case}` not presented, a case of the {role} suite every plugin \
+                     of the role passes"
+                ),
+            };
+            failures.push(failure(ID, &source.path, line, found, NOT_PRESENTED));
+        }
+        let asserted = !checked.is_empty()
+            || tests
+                .iter()
+                .any(|source| collected(&source.path) && asserts_passed(&source.text, role));
         if !asserted {
             let first = tests[0];
             let line = runs
@@ -1311,6 +1430,10 @@ struct CommonPage {
     tool: &'static str,
     record: &'static str,
     fields: &'static [&'static str],
+    /// The SDK's own records extending the role's (0.30.0): a page answering
+    /// one, or a record of the plugin's extending one, holds the common
+    /// fields as the role's does.
+    sdk: &'static [&'static str],
 }
 
 /// A role's common part as `role-pages` holds it: its pages in the role's
@@ -1357,6 +1480,7 @@ const COMMON: [CommonPart; 4] = [
                     "last_error",
                     "sessions",
                 ],
+                sdk: &["VenueConnection"],
             },
             CommonPage {
                 title: "Datasets",
@@ -1365,6 +1489,7 @@ const COMMON: [CommonPart; 4] = [
                 tool: "read_datasets",
                 record: "DatasetsRead",
                 fields: &["served", "wants", "reads_instruments"],
+                sdk: &[],
             },
         ],
         candidates: &[],
@@ -1382,6 +1507,7 @@ const COMMON: [CommonPart; 4] = [
                 tool: "read_account_links",
                 record: "AccountLinksRead",
                 fields: &["external_accounts", "accounts", "links"],
+                sdk: &[],
             },
             CommonPage {
                 title: "Statements",
@@ -1390,6 +1516,7 @@ const COMMON: [CommonPart; 4] = [
                 tool: "read_statements",
                 record: "StatementsRead",
                 fields: &["statements"],
+                sdk: &[],
             },
         ],
         candidates: &["Connections", "History", "Raw records"],
@@ -1407,6 +1534,7 @@ const COMMON: [CommonPart; 4] = [
                 tool: "read_breaks",
                 record: "BreaksRead",
                 fields: &["open_breaks", "overdue_breaks"],
+                sdk: &[],
             },
             CommonPage {
                 title: "Reconciliations",
@@ -1415,6 +1543,7 @@ const COMMON: [CommonPart; 4] = [
                 tool: "read_reconciliations",
                 record: "ReconciliationsRead",
                 fields: &["last_reconciliation"],
+                sdk: &[],
             },
             CommonPage {
                 title: "Opening balances",
@@ -1423,6 +1552,7 @@ const COMMON: [CommonPart; 4] = [
                 tool: "read_opening_balances",
                 record: "OpeningBalancesRead",
                 fields: &["awaiting_an_opening_balance"],
+                sdk: &[],
             },
         ],
         candidates: &[],
@@ -1641,7 +1771,15 @@ fn holds_fields(plugin: &Plugin, answers: &str, page: &CommonPage) -> Result<(),
         regex::escape(named)
     ))
     .unwrap();
-    let extends = Regex::new(&format!(r"\b{}\b", regex::escape(page.record))).unwrap();
+    let extends = Regex::new(&format!(
+        r"\b(?:{})\b",
+        std::iter::once(page.record)
+            .chain(page.sdk.iter().copied())
+            .map(regex::escape)
+            .collect::<Vec<_>>()
+            .join("|")
+    ))
+    .unwrap();
     for source in python(plugin) {
         let text = python_uncommented(&source.text);
         let Some(found) = class.captures(&text) else {
@@ -1681,7 +1819,7 @@ fn holds_fields(plugin: &Plugin, answers: &str, page: &CommonPage) -> Result<(),
             ))
         };
     }
-    if named == page.record {
+    if named == page.record || page.sdk.contains(&named) {
         Ok(())
     } else {
         Err(format!(

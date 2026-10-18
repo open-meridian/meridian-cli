@@ -10,8 +10,10 @@ const MANIFEST_TYPES: &str = "application/vnd.oci.image.index.v1+json,\
                               application/vnd.docker.distribution.manifest.list.v2+json,\
                               application/vnd.docker.distribution.manifest.v2+json";
 
-/// The oldest Helm whose behaviour this chart was built against.
-const HELM_MINIMUM: (u32, u32) = (3, 12);
+/// The oldest Helm a deployment is installed and kept with: 3.14, whose
+/// `--reset-then-reuse-values` upgrade-deployment needs (ruling 166), so a
+/// machine doctor passes can upgrade what it installs.
+const HELM_MINIMUM: (u32, u32) = crate::upgrade_deployment::HELM_MINIMUM;
 
 pub async fn helm(machine: &dyn Machine) -> Finding {
     let said = match machine.run("helm", &["version", "--short"]).await {
@@ -37,7 +39,8 @@ pub async fn helm(machine: &dyn Machine) -> Finding {
             what: format!("helm is {major}.{minor}"),
             fix: format!(
                 "Install {}.{} or newer: the chart renders Secrets from what they already hold, \
-                 which older Helm does not keep.",
+                 which Helm before 3.12 does not keep, and `meridian upgrade-deployment` needs \
+                 --reset-then-reuse-values, which came in 3.14.",
                 HELM_MINIMUM.0, HELM_MINIMUM.1
             ),
         },

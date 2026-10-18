@@ -1052,6 +1052,10 @@ pub fn claims_taken(full: &str, values: &serde_yaml::Value) -> Vec<String> {
 
 /// Every kept object of a deployment restore would make or take up, found
 /// already there (gap 7), each with what to do: checked before any change.
+/// The backup volume a deleted namespace left is not among them: restore
+/// offers to delete it within its own confirmation (`Plan::delete_volume`,
+/// audit D6), since its Retain policy keeps the node's directory, backups
+/// and all.
 pub fn left_behind(
     manifest: &Manifest,
     full: &str,
@@ -1085,12 +1089,6 @@ pub fn left_behind(
     {
         found.push(format!(
             "the claim {name}, which the release would mount and find full"
-        ));
-    }
-    if let Ok(Some(volume)) = &present.volume {
-        found.push(format!(
-            "the backup volume {volume}, left by a deleted namespace: `kubectl delete pv \
-             {volume}` removes it, and the node's directory, with its backups, is kept"
         ));
     }
     found
@@ -1223,6 +1221,9 @@ pub struct Plan {
     pub database: DatabasePlan,
     /// Whether the backup volume could be checked for, where it could not.
     pub unchecked: Option<String>,
+    /// The backup volume a deleted namespace left, which the release would
+    /// make again: deleted once approved, its node directory kept.
+    pub delete_volume: Option<String>,
 }
 
 pub fn plan_text(plan: &Plan) -> String {
@@ -1280,6 +1281,13 @@ pub fn plan_text(plan: &Plan) -> String {
             "the backup holds no database: it was taken before first run.\n".to_string()
         }
     });
+    if let Some(volume) = &plan.delete_volume {
+        out.push_str(&format!(
+            "  First it deletes the backup volume {volume}, which a deleted namespace left and \
+             the release makes again. It is kept with Retain, so the node's directory, with its \
+             backups, stays where it is.\n"
+        ));
+    }
     if let Some(unchecked) = &plan.unchecked {
         out.push_str(&format!("  Not checked: {unchecked}.\n"));
     }
@@ -1392,6 +1400,7 @@ pub async fn restore(
             left.join("\n  ")
         ));
     }
+    let delete_volume = present.volume.clone().ok().flatten();
 
     // Restore's own rights, where it loads a database somebody else runs:
     // a container of backup.image in the conductor's pod, which reaches the
@@ -1476,6 +1485,7 @@ pub async fn restore(
         key_generated: manifest.key == "generated",
         database: database.clone(),
         unchecked: present.volume.clone().err(),
+        delete_volume,
     };
     if !approve(&plan_text(&plan)) {
         return Err(
@@ -1483,6 +1493,19 @@ pub async fn restore(
              approves"
                 .into(),
         );
+    }
+
+    // The volume a deleted namespace left, as approved: the object, never
+    // the node's directory, which Retain keeps.
+    if let Some(volume) = &plan.delete_volume {
+        text("kubectl", &["delete", "pv", volume, "--wait=true"])
+            .await
+            .map_err(|failed| {
+                format!("the backup volume {volume} could not be deleted ({failed}): nothing else was changed")
+            })?;
+        step(&format!(
+            "Deleted the backup volume {volume}; the node's directory, with its backups, is kept"
+        ));
     }
 
     if !namespace_exists {
@@ -1939,9 +1962,11 @@ pub async fn restore(
         if !named.is_empty() {
             report.push_str(&format!(
                 "  Launched plugins not running within {}s, for a reason other than their image: \
-                 {}. `kubectl get pods -n {ns} -l {launched}` says why.\n",
+                 {}. `meridian status {scope}` lists each plugin's readiness and restarts, and \
+                 `meridian logs <instance> {scope}` what it printed.\n",
                 wait.as_secs(),
-                named.into_iter().collect::<Vec<_>>().join(", ")
+                named.into_iter().collect::<Vec<_>>().join(", "),
+                scope = crate::status::scope(&release, ns)
             ));
         }
     }

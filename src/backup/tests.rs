@@ -490,12 +490,19 @@ fn what_a_deployment_kept_or_would_take_up_is_found_before_anything_changes() {
         volume: Ok(Some("firm-meridian-meridian-runtime-backup".into())),
     };
     let found = left_behind(&manifest, full, &values, &present);
-    assert_eq!(found.len(), 5, "{found:?}");
+    // The backup volume is not refused: restore offers to delete it within
+    // its own confirmation (Plan::delete_volume).
+    assert_eq!(found.len(), 4, "{found:?}");
     assert_eq!(found[0], format!("the Secret {full}-key"));
     assert_eq!(found[1], format!("the ConfigMap {full}-dashboard-keys"));
     assert_eq!(found[2], format!("the ConfigMap {full}-backup-values"));
     assert!(found[3].starts_with(&format!("the claim data-{full}-database-0")));
-    assert!(found[4].contains("kubectl delete pv firm-meridian-meridian-runtime-backup"));
+    assert!(!found.iter().any(|said| said.contains("kubectl")));
+    let only_the_volume = Present {
+        volume: Ok(Some("firm-meridian-meridian-runtime-backup".into())),
+        ..Present::default()
+    };
+    assert!(left_behind(&manifest, full, &values, &only_the_volume).is_empty());
 
     // No path, no volume to look for; a claim of the operator's names none.
     let claimed: serde_yaml::Value =
@@ -598,7 +605,25 @@ fn a_plan(database: DatabasePlan) -> Plan {
         key_generated: true,
         database,
         unchecked: None,
+        delete_volume: None,
     }
+}
+
+#[test]
+fn the_volume_a_deleted_namespace_left_is_offered_for_deletion_in_the_plan() {
+    let mut plan = a_plan(DatabasePlan::None);
+    assert!(!plan_text(&plan).contains("deletes the backup volume"));
+    plan.delete_volume = Some("firm-meridian-meridian-runtime-backup".into());
+    let text = plan_text(&plan);
+    assert!(
+        text.contains("First it deletes the backup volume firm-meridian-meridian-runtime-backup"),
+        "{text}"
+    );
+    assert!(
+        text.contains("the node's directory, with its backups, stays"),
+        "{text}"
+    );
+    assert!(!text.contains("kubectl"), "{text}");
 }
 
 #[test]

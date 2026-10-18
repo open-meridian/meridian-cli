@@ -691,12 +691,13 @@ pub fn jobs(listed: &str) -> Vec<Job> {
 /// What `helm list` says about the release, as a finding with its recovery.
 pub fn release_finding(asked: &Asked, installed: Option<&Installed>) -> Finding {
     let (release, namespace) = (&asked.release, &asked.namespace);
+    let scope = crate::status::scope(release, namespace);
     let Some(installed) = installed else {
         return Finding::Stops {
             what: format!("there is no release {release} in {namespace}"),
             fix: format!(
-                "`helm list -n {namespace}` lists what is there; --release and -n name another. \
-                 `meridian up` installs one."
+                "`meridian status -n {namespace}` names the releases there; --release and -n \
+                 name another. `meridian up` installs one."
             ),
         };
     };
@@ -709,8 +710,8 @@ pub fn release_finding(asked: &Asked, installed: Option<&Installed>) -> Finding 
         "failed" => Finding::Stops {
             what: format!("{at}, and that revision failed"),
             fix: format!(
-                "`helm history {release} -n {namespace}` says why. Fix the cause and \
-                 `helm rollback {release} -n {namespace}` returns it to its last deployed \
+                "`meridian status {scope}` says why, in Helm's words. Fix the cause and \
+                 `meridian rollback-deployment {scope}` returns it to its last deployed \
                  revision; then upgrade again."
             ),
         },
@@ -718,13 +719,13 @@ pub fn release_finding(asked: &Asked, installed: Option<&Installed>) -> Finding 
             what: format!("{at}, and Helm holds it as {pending}"),
             fix: format!(
                 "Another Helm operation is running on it, or one was interrupted. Let a running \
-                 one finish. If none is running, `helm rollback {release} -n {namespace}` \
+                 one finish. If none is running, `meridian rollback-deployment {scope}` \
                  returns it to its last deployed revision; then upgrade again."
             ),
         },
         other => Finding::Stops {
             what: format!("{at}, and Helm holds it as {other}"),
-            fix: format!("`helm history {release} -n {namespace}` says what happened to it."),
+            fix: format!("`meridian status {scope}` says what happened to it."),
         },
     }
 }
@@ -1202,10 +1203,18 @@ pub fn restarted(
                 (None, Some(code)) => format!("exit {code}"),
                 (None, None) => "no reason given".to_string(),
             };
+            // Named as `meridian logs` names it: a plugin by its instance,
+            // anything else by its component.
+            let named = pod
+                .labels
+                .get("meridian.dev/instance")
+                .or_else(|| pod.labels.get("meridian.dev/component"))
+                .cloned()
+                .unwrap_or_else(|| pod.name.clone());
             said.push(format!(
                 "pod/{} {}: restarted {since} time(s), last {reason}. \
-                 `kubectl logs -n {namespace} pod/{} -c {} --previous` says why",
-                pod.name, container.name, pod.name, container.name
+                 `meridian logs {named} -n {namespace} --previous` says why",
+                pod.name, container.name
             ));
         }
     }
