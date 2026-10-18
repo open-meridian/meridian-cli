@@ -38,8 +38,8 @@ meridian -- bringing a Meridian deployment up
                              move a running deployment to a newer chart, in place,
                              after checking it can; not this binary
   meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>;
-                             with --role custody, data, operations or reporting,
-                             that role's template
+                             with --role connectivity, custody, data, operations or
+                             reporting, that role's template
   meridian plugin check      hold the plugin here to the framework's rules: its pages,
                              settings, SDK use, [tool.meridian], documentation (docs/),
                              tests and shape
@@ -148,7 +148,9 @@ plugin new:
       --into <dir>          where to write it (default: ./<name>). Never somewhere
                             that already exists
       --role <role>         write that role's template, a whole plugin holding it
-                            on the role's common pages and settings: custody (a
+                            on the role's common pages and settings:
+                            connectivity (a venue placed at through the SDK's
+                            Trader, with its Trading page), custody (a
                             custodian's accounts and statements), data (a
                             vendor's prices into the lake, its tests running the
                             suite), operations (opening balances, reconciliation
@@ -214,7 +216,8 @@ the first time and kept 30 days; never a password. The platform is --platform's
                             version (default: community)
       --tag <vX.Y.Z>        publish: the release tag, signed with an SSH key registered on
                             the organisation, of the version pyproject.toml holds
-      --organisation <slug> publish, key: the organisation the listing or the key is its
+      --organisation <namespace>
+                            publish, key: the organisation the listing or the key is its
                             (default: the one the plugin's git remote names); a listing
                             is organisation/plugin
       --reason <text>       key revoke: why, as the revocation records it
@@ -224,6 +227,8 @@ the first time and kept 30 days; never a password. The platform is --platform's
       --to <file>           download: where the bundle goes (default:
                             <organisation>-<plugin>-<version>.plugin-bundle.tar)
       --timeout <d>         publish: how long to follow the build (default: 30m)
+      --details             publish: every check's full text, where it prints one line
+                            a check that fits the terminal
 
 status, logs: read-only; the components and logs through kubectl, as doctor and backup
 are, and status's book health from the deployment, through the session meridian
@@ -352,7 +357,8 @@ const TAKES_A_VALUE: [&str; 31] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 16] = [
+const SWITCHES: [&str; 17] = [
+    "--details",
     "--no-doctor",
     "--force",
     "--run-tests",
@@ -1314,6 +1320,10 @@ async fn publish_command(arguments: &Arguments, words: &[&str], platform: &str) 
         organisation,
         follow_for,
         follow_every: registry::FOLLOW_EVERY,
+        shown: registry::Shown {
+            width: registry::terminal_width(),
+            details: arguments.set("--details"),
+        },
     };
     // The pre-flight first, so a plugin that would fail is told before any
     // browser is opened.
@@ -1330,7 +1340,7 @@ async fn publish_command(arguments: &Arguments, words: &[&str], platform: &str) 
     };
     match registry::publish(&asked, &registry::Git, &session).await {
         Ok(build) => {
-            print!("{}", registry::said(&build));
+            print!("{}", registry::said(&build, platform, &asked.shown));
             match build["state"].as_str() {
                 Some("PLUGIN_BUILD_STATE_REFUSED") => 1,
                 _ => 0,
@@ -1498,13 +1508,6 @@ async fn download_command(arguments: &Arguments, words: &[&str], platform: &str)
         .iter()
         .map(|k| k.to_string())
         .collect();
-    if keys.is_empty() {
-        eprintln!(
-            "meridian plugin download: this meridian carries none of the platform's keys yet, so \
-             nothing it downloads can be verified, and no bundle is written"
-        );
-        return 1;
-    }
     let session = match signed_in(platform).await {
         Ok(session) => session,
         Err(failed) => {

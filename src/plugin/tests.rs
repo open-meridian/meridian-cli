@@ -109,7 +109,12 @@ fn a_roles_template_is_a_plugin_holding_the_role_under_its_own_name() {
                 "{role}"
             );
         } else {
-            assert_eq!(role, "operations", "{role} runs no suite");
+            // Connectivity's tests run its adapter on the SDK's rig; the
+            // connectivity suite is the plugin's to add for its venue.
+            assert!(
+                matches!(role, "operations" | "connectivity"),
+                "{role} runs no suite"
+            );
         }
         for file in every_file(&into) {
             let text = std::fs::read_to_string(into.join(&file)).expect("readable");

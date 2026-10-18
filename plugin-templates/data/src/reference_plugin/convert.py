@@ -12,6 +12,13 @@ changes nothing and the day still forming is restated under the same key,
 its business date the day the dataset's declared day says it is. A price in
 a token with no ISO 4217 code is in the token's own cash instrument.
 
+What every data plugin does the same is the SDK's (`meridian.roles.data`):
+`Wants` hears what the lake wants, answers it with this conversion, declines
+what it does not serve by reason, keeps a standing want until it is
+withdrawn, records rows in the lake's batches and counts them for the
+Datasets page, and reads the datasets' licences; `Venue` resolves a venue
+once. Only the vendor's words are this module's.
+
 `meridian.suites.run("data", producers)` holds this to the role's suite
 (tests/test_suite.py): each case mapped to one of the vendor's responses,
 run through this code, against a recorder standing in for the sidecar.
@@ -27,6 +34,7 @@ from typing import Any
 
 import meridian
 from meridian.plugin.v1 import operations_pb2 as ops
+from meridian.roles import data
 
 from .vendor import FIAT, Vendor
 
@@ -34,8 +42,8 @@ from .vendor import FIAT, Vendor
 #: `source`, and its misses'.
 SOURCE = "reference"
 
-#: The most rows one RecordPrices or RecordBars takes.
-BATCH = 500
+#: Its one dataset's key, as the catalogue declares it (declaration.py).
+KEY = "daily"
 
 NS = 1_000_000_000
 
@@ -71,32 +79,27 @@ class Converter:
     #: which names instruments, is served from. A plugin owning storage keeps
     #: this map there, never a vendor's code as a key in core.
     products: dict[str, str] = field(default_factory=dict)
-    #: The standing wants it keeps current, by want: their subjects.
-    standing: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    #: Its datasets a deployment admin has licensed (contract v20), as read
-    #: on start; and what it recorded and declined since it started.
-    licensed: frozenset[str] = frozenset()
-    recorded: int = 0
-    declined: int = 0
-    last_recorded: str = ""
     #: Whether sample data is on: the stand-in vendor is sample data itself.
     sample_data: bool = False
+    #: What the lake wants of it and what it sent, kept by the SDK: its
+    #: wants and standing wants, its counts and its datasets' licences.
+    wants: data.Wants = field(init=False)
+    #: The venue master's ID for each MIC the vendor names, resolved once.
+    venues: dict[str, data.Venue] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.wants = data.Wants(self.plugin, (KEY,))
 
     @property
     def dataset(self) -> str:
         """The dataset its rows name: the instance, a colon and the key."""
-        # Imported here rather than above: the declaration imports the pages,
-        # which hold a converter.
-        from .declaration import DAILY
-
-        return f"{self.plugin.identity.instance_id}:{DAILY.key}"
+        return self.wants.dataset(KEY)
 
     async def read_licences(self) -> None:
         """Its own declared datasets' licences (contract v20, W10.9): a
         dataset with none is served by its catalogue's default terms until a
         deployment admin licenses it, which the Datasets page says."""
-        answered = await self.plugin.list_datasets()
-        self.licensed = frozenset(licence.dataset for licence in answered.licences)
+        await self.wants.read_licences()
 
     # ── Resolving ───────────────────────────────────────────────────────
 
@@ -116,19 +119,11 @@ class Converter:
         return ""
 
     async def venue(self, mic: str, as_of_ns: int) -> str:
-        """The venue master's ID for the MIC the vendor names; empty, with
-        the miss reported, where the deployment holds no such venue."""
-        named = [meridian.Identifier(scheme="iso10383", value=mic)]
-        found = await self.plugin.resolve_venue(identifiers=named, as_of_ns=as_of_ns)
-        if found.found and found.venue.venue_id:
-            return str(found.venue.venue_id)
-        await self.plugin.report_missing_venue(
-            source=SOURCE,
-            identifiers=named,
-            as_of_ns=as_of_ns,
-            reason=found.miss_reason or ops.MISS_REASON_NOT_FOUND,
-        )
-        return ""
+        """The venue master's ID for the MIC the vendor names, asked once;
+        empty, with the miss reported once, where the deployment holds no
+        such venue."""
+        held = self.venues.setdefault(mic, data.Venue())
+        return await held.resolve(self.plugin, (("iso10383", mic, ""),), SOURCE, as_of_ns)
 
     async def map_products(self, as_of_ns: int) -> None:
         """Resolve each symbol the vendor serves this key, so a want naming
@@ -230,15 +225,10 @@ class Converter:
     async def record(
         self, prices: list[meridian.Price], bars: list[meridian.Bar], want_id: str = ""
     ) -> None:
-        """Rows recorded in batches of at most BATCH, against a want where
-        they answer one."""
-        for at in range(0, len(prices), BATCH):
-            await self.plugin.record_prices(prices=prices[at : at + BATCH], want_id=want_id)
-        for at in range(0, len(bars), BATCH):
-            await self.plugin.record_bars(bars=bars[at : at + BATCH], want_id=want_id)
-        if prices or bars:
-            self.recorded += len(prices) + len(bars)
-            self.last_recorded = datetime.now(UTC).isoformat(timespec="seconds")
+        """Rows recorded in the lake's batches, against a want where they
+        answer one, and counted for the Datasets page."""
+        await self.wants.record("prices", prices, KEY, want_id)
+        await self.wants.record("bars", bars, KEY, want_id)
 
     async def record_daily(self, symbol: str, text: str) -> None:
         """A candle the vendor sent, recorded: the push path."""
@@ -249,32 +239,38 @@ class Converter:
 
     async def on_want(self, heard: meridian.Heard[ops.ObservationsWantedEvent]) -> None:
         """What the lake wants of this plugin's datasets: recorded against,
-        where the vendor serves the subject, and declined where it does not."""
-        want = heard.message
+        where the vendor serves the subject, and declined where it does not
+        (the SDK's `Wants.hear`, answered by `answer`)."""
+        await self.wants.hear(heard, self.answer)
+
+    async def answer(
+        self,
+        want: ops.ObservationsWantedEvent,
+        key: str,
+        subjects: list[str],
+        kinds: tuple[int, ...],
+    ) -> dict[str, str]:
+        """One want answered from the vendor: its rows recorded against it,
+        and each subject it does not serve, with why."""
         prices: list[meridian.Price] = []
         bars: list[meridian.Bar] = []
-        declined = []
+        declined: dict[str, str] = {}
         as_of_ns = _as_of(want)
-        for subject in want.subjects:
-            symbol = await self.symbol_for(subject.entity_id, as_of_ns)
+        for subject in subjects:
+            symbol = await self.symbol_for(subject, as_of_ns)
             text = self.vendor.daily(symbol) if symbol else None
-            if symbol is None or text is None:
-                declined.append(subject)
+            if key != KEY or symbol is None or text is None:
+                declined[subject] = "not_covered"
                 continue
             more_prices, more_bars = await self.convert(symbol, text)
             prices += more_prices
             bars += more_bars
-        if prices or bars:
-            await self.record(prices, bars, want_id=want.want_id)
-        if declined:
-            self.declined += len(declined)
-            await self.plugin.decline_want(
-                want_id=want.want_id, subjects=declined, reason="not_covered"
-            )
+        await self.record(prices, bars, want_id=want.want_id)
         if want.standing:
-            self.standing[want.want_id] = tuple(s.entity_id for s in want.subjects)
+            self.wants.stand(want, subjects, kinds)
+        return declined
 
     async def on_withdrawn(self, heard: meridian.Heard[ops.WantWithdrawnEvent]) -> None:
         """A standing want no reader asked for within the dataset's cadence:
         no longer kept current."""
-        self.standing.pop(heard.message.want_id, None)
+        self.wants.withdraw(heard.message.want_id)

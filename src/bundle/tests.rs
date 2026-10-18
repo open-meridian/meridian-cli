@@ -121,6 +121,35 @@ fn a_signature_verifies_with_the_platforms_key_and_no_other() {
     assert!(!key_status_signed(&forged, &[platform.pem()]));
 }
 
+#[test]
+fn the_pinned_platform_key_is_the_registry_signing_keys_public_half() {
+    // The file the platform's KMS key was exported to, byte for byte.
+    assert_eq!(
+        format!("sha256:{:x}", Sha256::digest(PLATFORM_KEYS[0].as_bytes())),
+        "sha256:69c1961a3e4df9abafd397387a109ebac3d5a96ff7070173b61d78a18f2d4871"
+    );
+    // An uncompressed P-256 point, which the verifier takes.
+    let point = p256_point(PLATFORM_KEYS[0]).expect("an ECDSA P-256 public key");
+    assert_eq!((point.len(), point[0]), (65, 0x04));
+    let keys: Vec<String> = PLATFORM_KEYS.iter().map(|k| k.to_string()).collect();
+    // What the platform did not sign is refused under it: a throwaway key's
+    // signature, which verifies under that key and under no pinned one.
+    let throwaway = Platform::new();
+    let message = pae(KEY_STATUS_TYPE, b"{\"keys\":[]}");
+    let signature = throwaway.sign(&message);
+    assert!(signed_by(&[throwaway.pem()], &message, &signature));
+    assert!(!signed_by(&keys, &message, &signature));
+    assert!(!key_status_signed(&throwaway.key_status(false), &keys));
+    assert!(
+        signed_by(
+            &[keys[0].clone(), throwaway.pem()],
+            &message,
+            &signature
+        ),
+        "beside the pinned key, a next one is taken"
+    );
+}
+
 /// An image, its referrers and the key status, as the platform and its
 /// registry hold them.
 struct Listed {

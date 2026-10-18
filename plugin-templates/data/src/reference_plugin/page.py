@@ -10,7 +10,8 @@ role's order:
 - Connection (/): "Key", "Limits and use" and "Stream", from
   `data.ConnectionRead`;
 - Datasets (/datasets): "Served", "Wants" and "Subjects", from
-  `data.DatasetsRead`, each dataset said "Licensed" or "Not licensed yet".
+  `data.DatasetsRead`, each dataset said "Licensed" or "Not licensed yet",
+  its rows filled from what the SDK kept (`data.served`, `data.want_rows`).
 
 Each page declares the record it renders (`answers=`), so it is also a read
 tool on the deployment's MCP surface, under the role's name:
@@ -26,7 +27,6 @@ from pathlib import Path
 
 import meridian
 from meridian.roles import data
-from meridian.v1 import sidecar_pb2
 
 from .convert import Converter
 
@@ -63,43 +63,19 @@ def connection_read(converter: Converter) -> data.ConnectionRead:
     )
 
 
-def _mode(mode: int) -> str:
-    return sidecar_pb2.ObservationMode.Name(mode).removeprefix("OBSERVATION_MODE_").lower()
-
-
 def datasets_read(converter: Converter) -> data.DatasetsRead:
-    """Datasets' record: the role's common fields."""
+    """Datasets' record: the role's common fields, from what the SDK kept of
+    the plugin's wants (`data.served`, `data.want_rows`)."""
     # Imported here rather than above: the declaration imports these pages,
     # for the interface it declares.
     from .declaration import DECLARATION
 
+    entitled = f"{len(converter.vendor.entitled)} symbols"
     instance = converter.plugin.identity.instance_id
-    served = [
-        data.Served(
-            dataset=f"{instance}:{declared.key}",
-            data=", ".join(declared.data_types),
-            arrives=", ".join(_mode(int(mode)) for mode in declared.modes),
-            day=declared.day_time_zone,
-            default_terms=(
-                "kept"
-                if declared.licence_default is not None and declared.licence_default.kept
-                else "served, not kept"
-            ),
-            entitled_at_vendor=f"{len(converter.vendor.entitled)} symbols",
-            recorded=converter.recorded,
-            declined=converter.declined,
-            last_recorded=converter.last_recorded,
-            licensed=f"{instance}:{declared.key}" in converter.licensed,
-        )
-        for declared in DECLARATION.catalogue
-    ]
-    wants = [
-        data.Want(
-            dataset=converter.dataset, asked=want, subjects=len(subjects), state="Kept current"
-        )
-        for want, subjects in converter.standing.items()
-    ]
-    return data.DatasetsRead(served=served, wants=wants)
+    return data.DatasetsRead(
+        served=data.served(DECLARATION.catalogue, instance, converter.wants, entitled),
+        wants=list(data.want_rows(converter.wants)),
+    )
 
 
 @pages.page(

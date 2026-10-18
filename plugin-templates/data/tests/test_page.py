@@ -13,6 +13,7 @@ level, its common sections in the role's order, and each tool's answer.
 from __future__ import annotations
 
 import meridian
+from meridian.roles import data
 from meridian.testing import PageClient
 
 from reference_plugin.convert import Converter
@@ -95,18 +96,25 @@ def test_the_datasets_page_says_whether_each_dataset_is_licensed() -> None:
         "<h2>Wants</h2>",
         "<h2>Subjects</h2>",
     )
-    converter.licensed = frozenset({"reference-1:daily"})
-    converter.standing["WNT-1"] = ("LCL-1",)
+    converter.wants.licensed = frozenset({"reference-1:daily"})
+    converter.wants.heard.appendleft(
+        data.Heard("WNT-1", "reference-1:daily", "latest", 1, 0, 0, True, 0)
+    )
+    converter.wants.standing["WNT-1"] = data.Standing(
+        "WNT-1", "reference-1:daily", "meridian.v1.Price", ("LCL-1",), (), 0
+    )
     answered = client().call_tool("read_datasets")
     assert answered.data["served"][0]["licensed"] is True
-    assert answered.data["served"][0]["data"] == "meridian.v1.Price, meridian.v1.Bar"
+    assert answered.data["served"][0]["data"] == "Price, Bar"
     assert answered.data["wants"] == [
         {
             "dataset": "reference-1:daily",
-            "asked": "WNT-1",
+            "asked": "latest",
             "subjects": 1,
             "recorded": 0,
             "declined": 0,
             "state": "Kept current",
+            "want_id": "WNT-1",
+            "kept_current": True,
         }
     ]

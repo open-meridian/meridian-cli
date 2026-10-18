@@ -119,6 +119,7 @@ fn asked(dir: &Path, registry: &str, tag: &str) -> Publish {
         organisation: "acme".into(),
         follow_for: Duration::from_secs(5),
         follow_every: Duration::from_millis(10),
+        shown: Shown::default(),
     }
 }
 
@@ -177,9 +178,14 @@ fn the_preflight_refuses_locally_what_the_platform_would() {
 /// A stand-in platform: its authorization redirects straight back with a
 /// code, as a person consenting would; its token endpoint answers as
 /// `tokens` says; its publishing API builds and lists.
+#[derive(Default)]
 struct Platform {
     narrows_on_refresh: bool,
     refused_refresh: bool,
+    /// The narrowed tokens' life, in seconds: short, to be renewed at once.
+    narrowed_expires_in: Option<u64>,
+    /// Whether the narrowed browser sign-in answers no refresh token.
+    narrowed_without_refresh: bool,
 }
 
 fn open_in_a_browser() -> Box<Opener> {
@@ -207,13 +213,30 @@ async fn platform(given: Platform) -> (String, crate::fake_http::Kept) {
             ("POST", "/oauth/token") => match asked.field("grant_type").as_deref() {
                 Some("authorization_code") => {
                     let narrowed = asked.field("code").as_deref() == Some("C-narrowed");
+                    let refresh = match (narrowed, given.narrowed_without_refresh) {
+                        (true, true) => "",
+                        (true, false) => "R-narrowed",
+                        _ => "R-1",
+                    };
+                    Reply::json(
+                        200,
+                        serde_json::json!({
+                            "token_type": "Bearer",
+                            "expires_in": if narrowed { given.narrowed_expires_in.unwrap_or(600) } else { 600 },
+                            "access_token": if narrowed { "A-push" } else { "A-1" },
+                            "refresh_token": refresh,
+                            "scope": if narrowed { "publish:acme/venue-desk" } else { "publish" },
+                        }),
+                    )
+                }
+                // A narrowed sign-in's own refresh keeps its narrow scope.
+                Some("refresh_token") if asked.field("refresh_token").as_deref() == Some("R-narrowed") => {
                     Reply::json(
                         200,
                         serde_json::json!({
                             "token_type": "Bearer", "expires_in": 600,
-                            "access_token": if narrowed { "A-push" } else { "A-1" },
-                            "refresh_token": if narrowed { "R-narrowed" } else { "R-1" },
-                            "scope": if narrowed { "publish:acme/venue-desk" } else { "publish" },
+                            "access_token": "A-push-2", "refresh_token": "R-narrowed-2",
+                            "scope": "publish:acme/venue-desk",
                         }),
                     )
                 }
@@ -233,7 +256,8 @@ async fn platform(given: Platform) -> (String, crate::fake_http::Kept) {
                     Reply::json(
                         200,
                         serde_json::json!({
-                            "token_type": "Bearer", "expires_in": 600,
+                            "token_type": "Bearer",
+                            "expires_in": if push { given.narrowed_expires_in.unwrap_or(600) } else { 600 },
                             "access_token": if push { "A-push" } else { "A-2" },
                             "refresh_token": "R-2", "scope": scope,
                         }),
@@ -310,7 +334,7 @@ async fn platform(given: Platform) -> (String, crate::fake_http::Kept) {
 async fn a_publish_signs_in_narrows_its_token_and_follows_the_build_until_it_is_listed() {
     let (address, kept) = platform(Platform {
         narrows_on_refresh: true,
-        refused_refresh: false,
+        ..Platform::default()
     })
     .await;
     let scratch = Scratch::new("publish");
@@ -323,13 +347,17 @@ async fn a_publish_signs_in_narrows_its_token_and_follows_the_build_until_it_is_
         .await
         .unwrap();
     assert_eq!(build["state"], "PLUGIN_BUILD_STATE_LISTED");
-    let said = said(&build);
+    let said = said(&build, &address, &Shown::default());
     assert!(
         said.contains("acme/venue-desk 0.1.0 (community): listed"),
         "{said}"
     );
     assert!(
         said.contains("warn  vulnerabilities: one medium finding"),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!("listing: {address}/plugins/acme/venue-desk")),
         "{said}"
     );
 
@@ -360,7 +388,8 @@ async fn a_publish_signs_in_narrows_its_token_and_follows_the_build_until_it_is_
     assert!(tokens[0]
         .field("code_verifier")
         .is_some_and(|v| v.len() >= 43));
-    // The push token: a refresh naming the plugin's scope.
+    // The push token: a refresh naming the plugin's scope, once, and held
+    // while the build is followed, never asked again on each poll.
     assert_eq!(
         tokens[1].field("grant_type").as_deref(),
         Some("refresh_token")
@@ -369,6 +398,12 @@ async fn a_publish_signs_in_narrows_its_token_and_follows_the_build_until_it_is_
         tokens[1].field("scope").as_deref(),
         Some("publish:acme/venue-desk")
     );
+    assert_eq!(tokens.len(), 2, "narrowed once for the whole publish");
+    let polls = asked
+        .iter()
+        .filter(|a| a.method == "GET" && a.path.contains("/builds/"))
+        .count();
+    assert!(polls >= 2, "{polls}");
     let published = asked
         .iter()
         .find(|a| a.method == "POST" && a.path.ends_with("/versions"))
@@ -402,10 +437,7 @@ async fn a_publish_signs_in_narrows_its_token_and_follows_the_build_until_it_is_
 
 #[tokio::test]
 async fn a_platform_that_does_not_narrow_on_refresh_is_signed_in_to_for_the_plugin_alone() {
-    let (address, kept) = platform(Platform {
-        narrows_on_refresh: false,
-        refused_refresh: false,
-    })
+    let (address, kept) = platform(Platform::default())
     .await;
     let scratch = Scratch::new("narrowed");
     let signed_in = SignedIn::within(scratch.0.join("platform"), &address, open_in_a_browser())
@@ -426,10 +458,159 @@ async fn a_platform_that_does_not_narrow_on_refresh_is_signed_in_to_for_the_plug
 }
 
 #[tokio::test]
+async fn a_push_token_is_held_for_its_life_and_narrowed_again_only_near_its_end() {
+    // Ten minutes: held, so a second ask sends nothing.
+    let (address, kept) = platform(Platform {
+        narrows_on_refresh: true,
+        ..Platform::default()
+    })
+    .await;
+    let scratch = Scratch::new("held-push");
+    let signed_in = SignedIn::within(scratch.0.join("platform"), &address, open_in_a_browser())
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        assert_eq!(
+            signed_in.push_token("acme", "venue-desk").await.unwrap(),
+            "A-push"
+        );
+    }
+    let refreshes = |kept: &crate::fake_http::Kept| {
+        kept.lock()
+            .unwrap()
+            .iter()
+            .filter(|a| a.field("grant_type").as_deref() == Some("refresh_token"))
+            .count()
+    };
+    assert_eq!(refreshes(&kept), 1);
+
+    // Thirty seconds: within a minute of its end, so narrowed again each time.
+    let (address, kept) = platform(Platform {
+        narrows_on_refresh: true,
+        narrowed_expires_in: Some(30),
+        ..Platform::default()
+    })
+    .await;
+    let scratch = Scratch::new("near-its-end");
+    let signed_in = SignedIn::within(scratch.0.join("platform"), &address, open_in_a_browser())
+        .await
+        .unwrap();
+    signed_in.push_token("acme", "venue-desk").await.unwrap();
+    signed_in.push_token("acme", "venue-desk").await.unwrap();
+    assert_eq!(refreshes(&kept), 2);
+}
+
+#[tokio::test]
+async fn the_browser_is_opened_for_a_narrowed_sign_in_once_a_publish_at_most() {
+    let authorized = |kept: &crate::fake_http::Kept| -> Vec<String> {
+        kept.lock()
+            .unwrap()
+            .iter()
+            .filter(|a| a.path.starts_with("/oauth/authorize"))
+            .filter_map(|a| a.field("scope"))
+            .collect()
+    };
+    // The narrowed sign-in's own refresh token renews it: no second browser.
+    let (address, kept) = platform(Platform {
+        narrowed_expires_in: Some(30),
+        ..Platform::default()
+    })
+    .await;
+    let scratch = Scratch::new("browser-once");
+    let signed_in = SignedIn::within(scratch.0.join("platform"), &address, open_in_a_browser())
+        .await
+        .unwrap();
+    assert_eq!(
+        signed_in.push_token("acme", "venue-desk").await.unwrap(),
+        "A-push"
+    );
+    assert_eq!(
+        signed_in.push_token("acme", "venue-desk").await.unwrap(),
+        "A-push-2"
+    );
+    assert_eq!(authorized(&kept), ["publish", "publish:acme/venue-desk"]);
+
+    // Without one, a second browser is refused rather than opened.
+    let (address, kept) = platform(Platform {
+        narrowed_expires_in: Some(30),
+        narrowed_without_refresh: true,
+        ..Platform::default()
+    })
+    .await;
+    let scratch = Scratch::new("browser-refused");
+    let signed_in = SignedIn::within(scratch.0.join("platform"), &address, open_in_a_browser())
+        .await
+        .unwrap();
+    signed_in.push_token("acme", "venue-desk").await.unwrap();
+    let refused = signed_in
+        .push_token("acme", "venue-desk")
+        .await
+        .unwrap_err();
+    assert!(refused.contains("signed in for it once already"), "{refused}");
+    assert_eq!(authorized(&kept), ["publish", "publish:acme/venue-desk"]);
+}
+
+#[test]
+fn a_build_report_is_one_line_a_check_and_every_full_text_with_details() {
+    let build = serde_json::json!({
+        "listing": "acme/venue-desk", "version": "0.2.0", "registry": "community",
+        "state": "PLUGIN_BUILD_STATE_REFUSED",
+        "findings": [
+            {"check": "licences", "severity": "BUILD_FINDING_SEVERITY_BLOCKED",
+             "detail": "requests 2.31 is GPL-3.0, the plugin Apache-2.0\nrequests 2.31.0 (GPL-3.0-only) conflicts with the plugin's declared licence, Apache-2.0.\n\nReplace it, or relicense the plugin."},
+            {"check": "vulnerabilities", "severity": "BUILD_FINDING_SEVERITY_WARNING",
+             "detail": "an older finding with no newline, which says a great deal more than one terminal line holds at forty"},
+            {"check": "tag signature", "severity": "BUILD_FINDING_SEVERITY_PASSED",
+             "detail": "signed"},
+        ],
+        "log_url": "https://github.com/open-meridian/plugin-builder/actions/runs/9",
+    });
+    let narrow = Shown {
+        width: 70,
+        details: false,
+    };
+    let said = said(&build, "https://open-meridian.com", &narrow);
+    let lines: Vec<&str> = said.lines().collect();
+    assert_eq!(lines[0], "acme/venue-desk 0.2.0 (community): refused");
+    assert_eq!(
+        lines[1],
+        "  FAIL  licences: requests 2.31 is GPL-3.0, the plugin Apache-2.0"
+    );
+    assert!(lines[2].starts_with("  warn  vulnerabilities: an older finding"));
+    assert!(lines[2].ends_with('…') && lines[2].chars().count() == 70, "{}", lines[2]);
+    assert_eq!(lines[3], "  ok    tag signature: signed");
+    assert_eq!(lines[4], "  (--details prints each check's full text)");
+    assert!(!said.contains("Replace it"), "{said}");
+    assert!(!said.contains("listing:"), "only once listed: {said}");
+
+    let detailed = said_with_details(&build);
+    assert!(detailed.contains(
+        "  FAIL  licences: requests 2.31 is GPL-3.0, the plugin Apache-2.0\n          requests 2.31.0 (GPL-3.0-only) conflicts"
+    ), "{detailed}");
+    assert!(detailed.contains("\n\n          Replace it, or relicense the plugin.\n"), "{detailed}");
+    assert!(detailed.contains("at forty\n"), "the older finding whole: {detailed}");
+    assert!(!detailed.contains("--details"), "{detailed}");
+    assert_eq!(detail_parts("one line"), ("one line", "one line"));
+    assert_eq!(fitted("short", 10), "short");
+}
+
+fn said_with_details(build: &serde_json::Value) -> String {
+    said(
+        build,
+        "https://open-meridian.com",
+        &Shown {
+            width: 40,
+            details: true,
+        },
+    )
+}
+
+#[tokio::test]
 async fn a_refused_refresh_ends_the_sign_in_and_says_to_sign_in_again() {
     let (address, _) = platform(Platform {
         narrows_on_refresh: true,
         refused_refresh: true,
+        ..Platform::default()
     })
     .await;
     let scratch = Scratch::new("refused-refresh");
@@ -452,7 +633,7 @@ async fn a_refused_refresh_ends_the_sign_in_and_says_to_sign_in_again() {
 async fn the_keys_are_registered_revoked_and_listed_as_the_rows_say() {
     let (address, kept) = platform(Platform {
         narrows_on_refresh: true,
-        refused_refresh: false,
+        ..Platform::default()
     })
     .await;
     let scratch = Scratch::new("keys");
@@ -518,5 +699,5 @@ fn the_organisation_defaults_to_the_one_the_git_remote_names() {
     assert!(refused.contains("--organisation"), "{refused}");
     assert!(organisation(Some("Not A Slug"), here, &repo())
         .unwrap_err()
-        .contains("not an organisation's slug"));
+        .contains("not an organisation's namespace"));
 }
