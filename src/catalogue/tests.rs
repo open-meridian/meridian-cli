@@ -13,7 +13,7 @@ fn the_templates_pyproject_is_metadata() {
             version: "0.1.0".into(),
             roles: vec![],
             interface: true,
-            sdk_version: "0.29.0".into(),
+            sdk_version: "0.30.0".into(),
             // From SDK 0.29.0 every template names its declaration.
             declaration: Some("reference_plugin.declaration:DECLARATION".into()),
         }
@@ -133,7 +133,7 @@ fn each_roles_templates_pyproject_names_its_role_and_its_declaration() {
     ] {
         let held = metadata(pyproject).unwrap();
         assert_eq!(held.roles, vec![role.to_string()], "{role}");
-        assert_eq!(held.sdk_version, "0.29.0", "{role}");
+        assert_eq!(held.sdk_version, "0.30.0", "{role}");
         assert_eq!(
             held.declaration.as_deref(),
             declaration.then_some("reference_plugin.declaration:DECLARATION"),
@@ -144,7 +144,7 @@ fn each_roles_templates_pyproject_names_its_role_and_its_declaration() {
 
 #[test]
 fn a_pyproject_missing_what_upload_sends_is_refused() {
-    let unpinned = TEMPLATE.replace("open-meridian==0.29.0", "open-meridian>=0.3");
+    let unpinned = TEMPLATE.replace("open-meridian==0.30.0", "open-meridian>=0.3");
     assert!(metadata(&unpinned)
         .unwrap_err()
         .contains("pin open-meridian"));

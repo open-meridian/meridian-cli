@@ -95,7 +95,20 @@ async fn an_old_helm_is_stopped_with_the_version_to_install() {
     let finding = checks::helm(&machine).await;
 
     assert!(finding.stops(), "{finding:?}");
-    assert!(format!("{finding}").contains("3.12"), "{finding}");
+    assert!(format!("{finding}").contains("Install 3.14"), "{finding}");
+}
+
+#[tokio::test]
+async fn helm_3_13_is_stopped_since_upgrade_deployment_needs_3_14() {
+    let machine = Fake::default().running("helm version --short", Ok("v3.13.3+gc8b9489"));
+    let finding = checks::helm(&machine).await;
+    assert!(finding.stops(), "{finding:?}");
+    assert!(
+        format!("{finding}").contains("--reset-then-reuse-values"),
+        "{finding}"
+    );
+    let recent = Fake::default().running("helm version --short", Ok("v3.14.0+g3fc9f4b"));
+    assert!(!checks::helm(&recent).await.stops());
 }
 
 #[tokio::test]

@@ -1,0 +1,50 @@
+# The framework's check, on every push and pull request: `meridian plugin
+# check --run-tests` holds the plugin to the rules every Meridian plugin is
+# built to, and runs its tests. It is the check AGENTS.md has a coding agent
+# run after each change, so a failure here is one that run would have shown.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The meridian whose rules the plugin is held to: the rules are compiled
+  # into it. It tracks the meridian that wrote the plugin -- `meridian plugin
+  # new` writes its own version here, and `meridian plugin migrate` moves it
+  # with the SDK's pin -- so the check in CI is the one the author ran.
+  # 0.1.46 is the first to check `docs/` (documentation-sections,
+  # documentation-safe). Move it deliberately, since a newer one may hold a
+  # rule this plugin does not keep yet.
+  MERIDIAN_VERSION: 0.1.46
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The Python of the SDK's base image, with the plugin and pytest, for
+      # the tests: `--run-tests` runs `python3 -m pytest` here.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the plugin and pytest
+        run: python -m pip install -e . pytest
+      # meridian's own installer, from the same release: it checks the binary
+      # against the checksum published beside it.
+      - name: Install meridian ${{ env.MERIDIAN_VERSION }}
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/open-meridian/meridian-cli/v${MERIDIAN_VERSION}/install.sh" \
+            | MERIDIAN_INSTALL_DIR="$HOME/.local/bin" sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: meridian plugin check --run-tests
+        run: meridian plugin check --run-tests

@@ -21,7 +21,12 @@
 //! the sign-in by a refresh naming the narrower scope (RFC 6749, section 6),
 //! the refresh token keeping the sign-in's own; where the platform answers
 //! anything wider, a sign-in narrowed to the plugin is made for that publish
-//! alone, and kept nowhere.
+//! alone, and kept nowhere. The push token is held for its life, in memory
+//! for the command, and narrowed again only within a minute of its end, so
+//! following a build asks the platform for one about every ten minutes, never
+//! on every poll; and the browser is opened for the narrowed sign-in at most
+//! once a publish, its own refresh token renewing it after that (CLI 0.1.47;
+//! the platform's refresh honours a narrower scope from v25.3).
 //!
 //! **Publishing** asks the platform to build a signed release tag in the
 //! plugin's repository (requirement 12): the CLI runs `meridian plugin check`
@@ -222,6 +227,32 @@ pub struct SignedIn {
     held: tokio::sync::Mutex<Held>,
     platform: String,
     open: Box<Opener>,
+    /// The push token held for the command's life, kept nowhere else.
+    narrowed: tokio::sync::Mutex<Option<Narrowed>>,
+    /// Whether this command opened the browser for a narrowed sign-in:
+    /// once at most.
+    browsed: std::sync::atomic::AtomicBool,
+}
+
+/// A push token: its scope, the token and when it ends, and the refresh
+/// token of the sign-in narrowed in the browser, where it came from one
+/// (never the kept sign-in's, which `held` holds).
+struct Narrowed {
+    scope: String,
+    access_token: String,
+    access_expires_at_s: u64,
+    refresh_token: Option<String>,
+}
+
+impl Narrowed {
+    fn of(scope: &str, issued: &Issued, refresh_token: Option<String>) -> Narrowed {
+        Narrowed {
+            scope: scope.to_string(),
+            access_token: issued.access_token.clone(),
+            access_expires_at_s: crate::credential::now_s() + issued.expires_in,
+            refresh_token,
+        }
+    }
 }
 
 impl SignedIn {
@@ -253,6 +284,8 @@ impl SignedIn {
             held: tokio::sync::Mutex::new(held),
             platform: platform.to_string(),
             open,
+            narrowed: tokio::sync::Mutex::new(None),
+            browsed: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -339,29 +372,87 @@ impl SignedIn {
         Ok(self.refreshed(None).await?.access_token)
     }
 
-    /// A push token: an access token good for one plugin's rows alone.
+    /// A push token: an access token good for one plugin's rows alone. The
+    /// one held while it has more than a minute left; otherwise narrowed
+    /// again: by the browser sign-in's own refresh token where this command
+    /// made one, else by a refresh of the kept sign-in naming the scope, and
+    /// only where the platform answers wider, by the browser -- once.
     pub async fn push_token(&self, organisation: &str, plugin: &str) -> Result<String, String> {
         let wanted = push_scope(organisation, plugin);
+        let mut narrowed = self.narrowed.lock().await;
+        let now = crate::credential::now_s();
+        let browser_refresh = match narrowed.as_ref().filter(|held| held.scope == wanted) {
+            Some(held) if held.access_expires_at_s > now + REFRESH_WITHIN_S => {
+                return Ok(held.access_token.clone());
+            }
+            Some(held) => held.refresh_token.clone(),
+            None => None,
+        };
+        if let Some(refresh_token) = browser_refresh {
+            let issued = token(
+                &self.platform,
+                &[
+                    ("grant_type", "refresh_token"),
+                    ("refresh_token", refresh_token.as_str()),
+                    ("client_id", CLIENT_ID),
+                    ("scope", wanted.as_str()),
+                ],
+            )
+            .await
+            .map_err(|refused| {
+                format!(
+                    "the sign-in narrowed to {organisation}/{plugin} for this publish could not \
+                     be renewed ({}); the build goes on at the platform: run the command again \
+                     to follow it",
+                    refused.said
+                )
+            })?;
+            if issued.scope != wanted {
+                return Err(self.wider(&issued.scope, &wanted));
+            }
+            let kept = if issued.refresh_token.is_empty() {
+                refresh_token
+            } else {
+                issued.refresh_token.clone()
+            };
+            *narrowed = Some(Narrowed::of(&wanted, &issued, Some(kept)));
+            return Ok(issued.access_token);
+        }
         let issued = self.refreshed(Some(&wanted)).await?;
         if issued.scope == wanted {
+            *narrowed = Some(Narrowed::of(&wanted, &issued, None));
             return Ok(issued.access_token);
         }
         // The platform answered a wider token: a sign-in narrowed to this
-        // plugin, for this publish alone.
+        // plugin, for this publish alone, and the browser opened for it once.
+        if self.browsed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Err(format!(
+                "{} did not narrow the sign-in's token to {organisation}/{plugin}, and this \
+                 publish has signed in for it once already; the build goes on at the platform: \
+                 run the command again to follow it",
+                self.platform
+            ));
+        }
         eprintln!(
             "{} did not narrow the sign-in's token to {organisation}/{plugin}; signing in for \
              this publish alone.",
             self.platform
         );
-        let narrowed = sign_in(&self.platform, &wanted, self.open.as_ref()).await?;
-        if narrowed.scope != wanted {
-            return Err(format!(
-                "{} issued a token for `{}`, not `{wanted}`: a publish acts with a token for its \
-                 plugin alone, so nothing was sent",
-                self.platform, narrowed.scope
-            ));
+        let signed = sign_in(&self.platform, &wanted, self.open.as_ref()).await?;
+        if signed.scope != wanted {
+            return Err(self.wider(&signed.scope, &wanted));
         }
-        Ok(narrowed.access_token)
+        let refresh = (!signed.refresh_token.is_empty()).then(|| signed.refresh_token.clone());
+        *narrowed = Some(Narrowed::of(&wanted, &signed, refresh));
+        Ok(signed.access_token)
+    }
+
+    fn wider(&self, given: &str, wanted: &str) -> String {
+        format!(
+            "{} issued a token for `{given}`, not `{wanted}`: a publish acts with a token for its \
+             plugin alone, so nothing was sent",
+            self.platform
+        )
     }
 }
 
@@ -410,7 +501,8 @@ pub async fn call(
         .map_err(|failed| format!("{platform} answered with something unreadable: {failed}"))
 }
 
-/// A listing's organisation part: a slug, lower-case DNS label, at most 39
+/// A listing's organisation part: its namespace (the wire's `slug`, ruling
+/// 259), a lower-case DNS label, at most 39
 /// characters (requirement 6).
 pub fn is_slug(slug: &str) -> bool {
     (1..=39).contains(&slug.len())
@@ -529,10 +621,10 @@ pub fn github_repository(origin: &str) -> Result<String, String> {
 }
 
 /// The organisation a repository is linked to, where `--organisation` names
-/// none (item 154): the slug its GitHub owner is, lower case. The platform
+/// none (item 154): the namespace its GitHub owner is, lower case. The platform
 /// holds the link (the GitHub App, W5.33) and refuses a publish naming an
 /// organisation the repository is not linked to, so a wrong default publishes
-/// nothing. None where the owner is no slug.
+/// nothing. None where the owner is no namespace.
 pub fn organisation_of(repository: &str) -> Option<String> {
     let owner = repository
         .strip_prefix("https://github.com/")?
@@ -554,7 +646,7 @@ pub fn organisation(
             Ok(given.to_string())
         } else {
             Err(format!(
-                "`{given}` is not an organisation's slug: lower-case letters, digits and hyphens, \
+                "`{given}` is not an organisation's namespace: lower-case letters, digits and hyphens, \
                  at most 39"
             ))
         };
@@ -567,7 +659,7 @@ pub fn organisation(
         .ok_or_else(|| {
             format!(
                 "the organisation is not known from {}'s git remote: name it with --organisation \
-                 <slug>",
+                 <namespace>",
                 dir.display()
             )
         })
@@ -582,6 +674,8 @@ pub struct Publish {
     pub follow_for: Duration,
     /// How often the build is asked after (FOLLOW_EVERY).
     pub follow_every: Duration,
+    /// How its report is shown.
+    pub shown: Shown,
 }
 
 /// What the pre-flight found to send: the plugin, its version and its
@@ -604,7 +698,7 @@ pub fn preflight(asked: &Publish, repository: &dyn Repository) -> Result<Ready, 
     }
     if !is_slug(&asked.organisation) {
         return Err(format!(
-            "`{}` is not an organisation's slug: lower-case letters, digits and hyphens, at most \
+            "`{}` is not an organisation's namespace: lower-case letters, digits and hyphens, at most \
              39",
             asked.organisation
         ));
@@ -681,9 +775,47 @@ pub fn settled(build: &serde_json::Value) -> bool {
     )
 }
 
-/// A build, for a person to read: where it stands, each finding, and the
-/// log where it is public.
-pub fn said(build: &serde_json::Value) -> String {
+/// How a build's report is shown: at the terminal's width, one line a
+/// check, or with `--details` every check's full text (ruling 275).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shown {
+    pub width: usize,
+    pub details: bool,
+}
+
+impl Default for Shown {
+    fn default() -> Shown {
+        Shown {
+            width: 100,
+            details: false,
+        }
+    }
+}
+
+/// A finding's two texts (ruling 275): the platform sends `detail` as one
+/// short line, then a newline and the full text where it says more. An older
+/// finding, with no newline, is its own short line and full text.
+pub fn detail_parts(detail: &str) -> (&str, &str) {
+    match detail.split_once('\n') {
+        Some((short, full)) if !full.trim().is_empty() => (short.trim_end(), full.trim()),
+        Some((short, _)) => (short.trim_end(), short.trim_end()),
+        None => (detail.trim(), detail.trim()),
+    }
+}
+
+/// `line` cut to `width` characters, an ellipsis ending what was cut.
+pub fn fitted(line: &str, width: usize) -> String {
+    if line.chars().count() <= width {
+        return line.to_string();
+    }
+    let kept: String = line.chars().take(width.saturating_sub(1)).collect();
+    format!("{}…", kept.trim_end())
+}
+
+/// A build, for a person to read: where it stands, each check on one line
+/// that fits the terminal (every check's full text with `--details`), the
+/// log where it is public, and the listing's address once it is listed.
+pub fn said(build: &serde_json::Value, platform: &str, shown: &Shown) -> String {
     let mut out = format!(
         "{} {} ({}): {}\n",
         build["listing"].as_str().unwrap_or_default(),
@@ -694,6 +826,7 @@ pub fn said(build: &serde_json::Value) -> String {
     if let Some(digest) = build["image_digest"].as_str().filter(|d| !d.is_empty()) {
         out.push_str(&format!("  image: {digest}\n"));
     }
+    let mut more = false;
     for finding in build["findings"].as_array().into_iter().flatten() {
         let mark = match finding["severity"].as_str() {
             Some("BUILD_FINDING_SEVERITY_PASSED") => "ok  ",
@@ -701,16 +834,68 @@ pub fn said(build: &serde_json::Value) -> String {
             Some("BUILD_FINDING_SEVERITY_BLOCKED") => "FAIL",
             _ => "--  ",
         };
-        out.push_str(&format!(
-            "  {mark}  {}: {}\n",
-            finding["check"].as_str().unwrap_or_default(),
-            finding["detail"].as_str().unwrap_or_default()
-        ));
+        let (short, full) = detail_parts(finding["detail"].as_str().unwrap_or_default());
+        let line = format!(
+            "  {mark}  {}: {short}",
+            finding["check"].as_str().unwrap_or_default()
+        );
+        if shown.details {
+            out.push_str(&line);
+            out.push('\n');
+            if full != short {
+                for text in full.lines() {
+                    if text.trim().is_empty() {
+                        out.push('\n');
+                    } else {
+                        out.push_str(&format!("          {text}\n"));
+                    }
+                }
+            }
+        } else {
+            let fit = fitted(&line, shown.width);
+            more |= fit != line || full != short;
+            out.push_str(&fit);
+            out.push('\n');
+        }
+    }
+    if more {
+        out.push_str("  (--details prints each check's full text)\n");
     }
     if let Some(log) = build["log_url"].as_str().filter(|l| !l.is_empty()) {
         out.push_str(&format!("  log: {log}\n"));
     }
+    if build["state"] == "PLUGIN_BUILD_STATE_LISTED" {
+        if let Some(listing) = build["listing"].as_str().filter(|l| l.contains('/')) {
+            out.push_str(&format!("  listing: {platform}/plugins/{listing}\n"));
+        }
+    }
     out
+}
+
+/// The terminal's width in columns: `COLUMNS` where the shell exports it,
+/// else what the terminal says (`stty size`), else 100.
+pub fn terminal_width() -> usize {
+    let given = std::env::var("COLUMNS")
+        .ok()
+        .and_then(|columns| columns.trim().parse::<usize>().ok());
+    let asked = || {
+        let tty = std::fs::File::open("/dev/tty").ok()?;
+        let said = std::process::Command::new("stty")
+            .arg("size")
+            .stdin(tty)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&said.stdout)
+            .split_whitespace()
+            .nth(1)?
+            .parse::<usize>()
+            .ok()
+    };
+    given
+        .or_else(asked)
+        .filter(|width| *width >= 20)
+        .unwrap_or(100)
 }
 
 /// `meridian plugin publish`: the pre-flight, the request, and the build
@@ -749,7 +934,7 @@ pub async fn publish(
         .filter(|id| !id.is_empty())
         .ok_or_else(|| format!("{platform} answered the publish with no build"))?
         .to_string();
-    eprint!("{}", said(&build));
+    eprint!("{}", said(&build, &platform, &asked.shown));
     let started = tokio::time::Instant::now();
     while !settled(&build) {
         if started.elapsed() >= asked.follow_for {
@@ -760,7 +945,7 @@ pub async fn publish(
             ));
         }
         tokio::time::sleep(asked.follow_every).await;
-        // A narrowed token lives ten minutes; a long build asks again.
+        // The push token held, narrowed again only near its end.
         let bearer = signed_in
             .push_token(&asked.organisation, &ready.plugin)
             .await?;

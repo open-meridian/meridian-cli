@@ -15,13 +15,17 @@ mod doctor;
 mod down;
 #[cfg(test)]
 mod fake_http;
+mod gc;
 mod live;
 mod machine;
 mod migrate;
 mod plugin;
+mod plugin_release;
 mod registry;
 mod release;
+mod rollback;
 mod sessions;
+mod signing;
 mod status;
 mod up;
 mod upgrade_deployment;
@@ -38,12 +42,13 @@ meridian -- bringing a Meridian deployment up
                              move a running deployment to a newer chart, in place,
                              after checking it can; not this binary
   meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>;
-                             with --role custody, data, operations or reporting,
-                             that role's template
+                             with --role connectivity, custody, data, operations or
+                             reporting, that role's template
   meridian plugin check      hold the plugin here to the framework's rules: its pages,
                              settings, SDK use, [tool.meridian], documentation (docs/),
                              tests and shape
   meridian plugin migrate    move the plugin here to a newer release of its SDK: its pins
+                             (a base pinned by digest takes the new release's digest)
                              and its CI's meridian, each release's rewrite of its code,
                              then plugin check
   meridian plugin upload     build the plugin here and put it in the deployment's catalogue,
@@ -64,9 +69,25 @@ meridian -- bringing a Meridian deployment up
                              a link to a plugin's page that one browser opens once
   meridian plugin publish --registry community|verified --tag vX.Y.Z
                              ask the platform to build that signed release tag of the
-                             plugin here and list it, after plugin check passes
+                             plugin here and list it, after plugin check passes; its
+                             report a line a check (--details: each check's full text)
+  meridian plugin release <version>
+                             release the plugin here: checks (on main, clean, up to
+                             date, main's CI green, the version higher than the last
+                             tag), opens the release PR (pyproject.toml's version and
+                             the CHANGELOG heading) and waits for its CI and for a
+                             person to merge it; then signs v<version> on the merge
+                             commit, pushes it, publishes it and follows the build.
+                             --no-wait stops once the PR is open; run it again to go on
+  meridian plugin key setup  make the key release tags are signed with ready: git's
+                             SSH signing key, or a new one ssh-keygen makes (--hardware:
+                             on a security key); git set to sign with it, and its public
+                             half registered on the organisation
   meridian plugin key register <file.pub> | revoke <key-id> | list
                              the organisation's tag-signing keys at the platform
+  meridian plugin gc         collect the deployment's plugin registry's garbage: the layers
+                             retired versions left. Read-only while it runs (pulls go
+                             on, uploads wait), then back; shown, then asked
   meridian plugin download <organisation>/<plugin>@<version>
                              write a plugin bundle of a listed version, verified, for
                              a deployment that reaches nothing
@@ -78,9 +99,18 @@ meridian -- bringing a Meridian deployment up
                              (default: https://meridian.localhost, the local install)
   meridian sign-out [<address>]
                              revoke that delegation, here and at the deployment
-  meridian status            each component: its image, readiness, restarts and why,
-                             memory against its limit; and the book's health per account
-  meridian logs <component>  what a component printed; --since 10m for the last ten minutes
+  meridian status            the release (revision, state, chart; Helm's words where it
+                             is not deployed); each component and each plugin: its
+                             image, readiness, restarts and why, each pod's memory
+                             against its limit; and the book's health per account
+  meridian logs <component>  what a component printed: core's, a plugin's by its instance,
+                             or a Job's (migrate, key, first-run, backup), its newest run;
+                             --since 10m for the last ten minutes, --previous for what
+                             it printed before its last restart
+  meridian rollback-deployment [--to-revision <n>]
+                             return the deployment to an earlier revision of its release:
+                             by default the last one deployed before the newest. The
+                             database is not rolled back with it; shown, then asked
   meridian upgrade           replace this binary with the latest release; not a
                              deployment, which is upgrade-deployment
   meridian authority         this machine's certificate authority, which signs a local
@@ -148,7 +178,9 @@ plugin new:
       --into <dir>          where to write it (default: ./<name>). Never somewhere
                             that already exists
       --role <role>         write that role's template, a whole plugin holding it
-                            on the role's common pages and settings: custody (a
+                            on the role's common pages and settings:
+                            connectivity (a venue placed at through the SDK's
+                            Trader, with its Trading page), custody (a
                             custodian's accounts and statements), data (a
                             vendor's prices into the lake, its tests running the
                             suite), operations (opening balances, reconciliation
@@ -208,29 +240,48 @@ asked wrongly, and 3 when there is no session or it has lapsed
                             (read). Without it, the first you hold: Manage, then
                             Open, then View, as the home's first button opens
 
-plugin publish, key, download: through the platform sign-in, made in your browser
-the first time and kept 30 days; never a password. The platform is --platform's
-      --registry <r>        publish: community or verified; download: which registry's
-                            version (default: community)
+plugin publish, release, key, download: through the platform sign-in, made in your
+browser the first time and kept 30 days; never a password. The platform is
+--platform's. release asks GitHub with your own GitHub sign-in: GH_TOKEN or
+GITHUB_TOKEN, else the credential git keeps for github.com
+      --registry <r>        publish: community or verified; release: the same (default:
+                            community); download: which registry's version (default:
+                            community)
       --tag <vX.Y.Z>        publish: the release tag, signed with an SSH key registered on
                             the organisation, of the version pyproject.toml holds
-      --organisation <slug> publish, key: the organisation the listing or the key is its
+      --organisation <namespace>
+                            publish, release, key: the organisation the listing or the key is its
                             (default: the one the plugin's git remote names); a listing
                             is organisation/plugin
+      --hardware            key setup: where git has no SSH signing key, make one held
+                            on a FIDO security key (ssh-keygen -t ed25519-sk) rather
+                            than a desktop key (-t ed25519)
       --reason <text>       key revoke: why, as the revocation records it
       --not-trusted-after <time>
                             key revoke: when the key stopped being trusted, as
                             2026-10-16T12:00Z (default: now)
       --to <file>           download: where the bundle goes (default:
                             <organisation>-<plugin>-<version>.plugin-bundle.tar)
-      --timeout <d>         publish: how long to follow the build (default: 30m)
+      --timeout <d>         publish: how long to follow the build (default: 30m);
+                            release: that, and how long to wait for the PR's CI and
+                            its merge (default: 30m each)
+      --no-wait             release: stop once the release PR is open
+      --details             publish: every check's full text, where it prints one line
+                            a check that fits the terminal
 
-status, logs: read-only; the components and logs through kubectl, as doctor and backup
-are, and status's book health from the deployment, through the session meridian
-connect keeps (--deployment names one)
+status, logs: read-only; the components and logs through kubectl and the release through
+helm, as doctor and backup read them, and status's book health from the deployment,
+through the session meridian connect keeps (--deployment names one)
       --release <name>      the Helm release (default: meridian)
       --since <span>        logs: only what was printed in the last 30s, 10m, 2h or 1d
+      --previous            logs: what each container printed before its last restart
       --json                status: one JSON object on stdout
+
+plugin gc: through kubectl, as backup is; checks first and changes nothing if one fails
+      --release <name>      the Helm release (default: meridian)
+      --timeout <d>         how long to give the registry each restart (default: 5m)
+      --yes                 collect without being asked. For a script that has read
+                            what it will do
 
 down: nothing is asked, since saying down is the decision
       --release <name>      the Helm release (default: meridian)
@@ -256,6 +307,15 @@ what it will do and asks
                             certificate it wrote is renewed within 30 days of its end
                             with or without this
       --yes                 upgrade without being asked. For a script that has read
+                            what it will do
+
+rollback-deployment: checks first, and changes nothing if a check fails; then shows the
+revision it returns to and asks. Then waits as upgrade-deployment does
+      --release <name>      the Helm release (default: meridian)
+      --to-revision <n>     the revision to return to, as `meridian status` and Helm number
+                            them (default: the last one deployed before the newest)
+      --timeout <d>         how long to wait for every component (default: 10m)
+      --yes                 roll back without being asked. For a script that has read
                             what it will do
 
 upgrade: this binary, not a deployment
@@ -285,9 +345,10 @@ backup key: needs no deployment
 
 restore: only into a namespace without the release and without anything a deployment
 keeps: the backup's Secrets and ConfigMaps, the key's Secret, the database's and the
-registry's claims, and a backup volume a deleted namespace left. Checks first and
-changes nothing if one fails; then shows the backup, the cluster, the namespace, the
-chart and what it will make, and asks. The database's URL is withheld until the
+registry's claims. Checks first and changes nothing if one fails; then shows the
+backup, the cluster, the namespace, the chart and what it will make, and asks. A
+backup volume a deleted namespace left is deleted within that one approval, the
+node's directory with its backups kept. The database's URL is withheld until the
 database is loaded, the brought one or (from a dump of one somebody else runs) an
 empty external one, and every table's row count matches the backup's; then the
 components start
@@ -306,6 +367,85 @@ connect:
   local one. The sign-in opens in your browser; this never takes a password.
 ";
 
+/// `meridian <command> --help`: that command's lines of the list, every
+/// section of flags naming it, and the flags both take; the whole of the
+/// usage for a command it does not know.
+fn help_for(command: &str, words: &[String]) -> String {
+    let with_sub = matches!(command, "plugin" | "backup" | "authority")
+        .then(|| words.first().map(|sub| format!("{command} {sub}")))
+        .flatten();
+    let named = with_sub.clone().unwrap_or_else(|| command.to_string());
+    if command.is_empty() || matches!(command, "help" | "-h" | "--help") {
+        return USAGE.to_string();
+    }
+    let blocks: Vec<&str> = USAGE.split("\n\n").collect();
+    // The list: each `  meridian <named>...` entry with its continuation.
+    let mut listed = String::new();
+    let mut taking = false;
+    for line in blocks.iter().take(2).flat_map(|block| block.lines()) {
+        if let Some(entry) = line.strip_prefix("  meridian ") {
+            let first: Vec<&str> = entry.split_whitespace().collect();
+            let says = |name: &str| {
+                let parts: Vec<&str> = name.split(' ').collect();
+                first.len() >= parts.len() && first[..parts.len()] == parts[..]
+            };
+            taking = says(&named) || (with_sub.is_none() && says(command));
+        } else if !line.starts_with("    ") {
+            taking = false;
+        }
+        if taking {
+            listed.push_str(line);
+            listed.push('\n');
+        }
+    }
+    // The sections: a block whose head, before its first colon, names it.
+    let mut sections = Vec::new();
+    for block in &blocks[1..] {
+        let head = block.lines().next().unwrap_or_default();
+        if head.starts_with(' ') {
+            continue;
+        }
+        let Some((names, _)) = head.split_once(':') else {
+            continue;
+        };
+        let items: Vec<String> = names.split(", ").map(str::trim).map(String::from).collect();
+        let plugin = items
+            .first()
+            .is_some_and(|first| first.starts_with("plugin "));
+        let items: Vec<String> = items
+            .into_iter()
+            .map(|item| {
+                if plugin && !item.starts_with("plugin ") {
+                    format!("plugin {item}")
+                } else {
+                    item
+                }
+            })
+            .collect();
+        if items.iter().any(|item| *item == named || *item == command) {
+            sections.push(*block);
+        }
+    }
+    if listed.is_empty() && sections.is_empty() {
+        return USAGE.to_string();
+    }
+    let both = blocks
+        .iter()
+        .find(|block| block.starts_with("Both:"))
+        .copied()
+        .unwrap_or_default();
+    let mut out = format!("meridian {named}\n\n{listed}");
+    for section in sections {
+        out.push('\n');
+        out.push_str(section);
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(both);
+    out.push('\n');
+    out
+}
+
 struct Arguments {
     command: String,
     /// The words after a command that takes them: `plugin new <name>`.
@@ -315,7 +455,8 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 31] = [
+const TAKES_A_VALUE: [&str; 32] = [
+    "--to-revision",
     "--registry",
     "--tag",
     "--organisation",
@@ -352,7 +493,11 @@ const TAKES_A_VALUE: [&str; 31] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 16] = [
+const SWITCHES: [&str; 20] = [
+    "--previous",
+    "--details",
+    "--hardware",
+    "--no-wait",
     "--no-doctor",
     "--force",
     "--run-tests",
@@ -475,7 +620,7 @@ async fn main() {
     }
 
     if arguments.set("-h") || arguments.set("--help") {
-        print!("{USAGE}");
+        print!("{}", help_for(&arguments.command, &arguments.words));
         return;
     }
 
@@ -509,6 +654,9 @@ async fn main() {
         "upgrade-deployment" => {
             std::process::exit(upgrade_deployment_command(&arguments, &intended.namespace).await)
         }
+        "rollback-deployment" => {
+            std::process::exit(rollback_command(&arguments, &intended.namespace).await)
+        }
         "uninstall" => std::process::exit(uninstall_command(&arguments).await),
         "authority" => std::process::exit(authority_command(&arguments)),
         "backup" => std::process::exit(backup_command(&arguments, &intended.namespace).await),
@@ -538,6 +686,12 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
     if words.first() == Some(&"publish") {
         return publish_command(arguments, &words, &platform_of(arguments)).await;
     }
+    if words.first() == Some(&"gc") {
+        return gc_command(arguments, &words).await;
+    }
+    if words.first() == Some(&"release") {
+        return release_command(arguments, &words, &platform_of(arguments)).await;
+    }
     if words.first() == Some(&"key") {
         return key_command(arguments, &words, &platform_of(arguments)).await;
     }
@@ -562,6 +716,7 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
             match plugin::scaffold(name, &into, role) {
                 Ok(_) => {
                     print!("{}", plugin::next_steps(name, &into, role));
+                    offer_key_setup(&into, &platform_of(arguments)).await;
                     0
                 }
                 Err(refusal) => {
@@ -571,8 +726,80 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
             }
         }
         _ => {
-            eprintln!("meridian: plugin takes `new <name>`, `check`, `migrate`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events`, `open`, `publish`, `key` or `download`\n\n{USAGE}");
+            eprintln!("meridian: plugin takes `new <name>`, `check`, `migrate`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events`, `open`, `publish`, `release <version>`, `key` or `download`\n\n{USAGE}");
             2
+        }
+    }
+}
+
+/// `plugin new` on first use: where git has no SSH key to sign release tags
+/// with, offered at a terminal, and said otherwise (ruling 256).
+async fn offer_key_setup(into: &std::path::Path, platform: &str) {
+    use std::io::IsTerminal as _;
+    if signing::has_ssh_key(&signing::ThisWorkstation, into) {
+        return;
+    }
+    if !std::io::stdin().is_terminal() {
+        println!(
+            "\nIts releases are tags signed with an SSH key, which git has none of here yet: \
+             `meridian plugin key setup` makes one ready."
+        );
+        return;
+    }
+    println!(
+        "\nIts releases are tags signed with an SSH key, which git has none of here yet. \
+         `meridian plugin key setup` makes one ready (a desktop key; --hardware for one on a \
+         security key), and you may run it later."
+    );
+    if approved("Set up a signing key now?") {
+        set_up_key(into, false, None, platform).await;
+    }
+}
+
+/// `meridian plugin gc` (ruling 166): the in-cluster registry read-only, its
+/// garbage collected, then back; checked, shown and asked first.
+async fn gc_command(arguments: &Arguments, words: &[&str]) -> i32 {
+    if words.len() != 1 {
+        eprintln!("meridian plugin gc: takes no words\n\n{USAGE}");
+        return 2;
+    }
+    let timeout = arguments.value("--timeout", "--timeout").unwrap_or("5m");
+    if upgrade_deployment::duration(timeout).is_none() {
+        eprintln!("meridian plugin gc: --timeout takes a duration: 5m, 90s");
+        return 2;
+    }
+    let asked = gc::Asked {
+        release: arguments
+            .value("--release", "--release")
+            .unwrap_or("meridian")
+            .into(),
+        namespace: arguments
+            .value("--namespace", "-n")
+            .unwrap_or("meridian")
+            .into(),
+        timeout: timeout.into(),
+    };
+    let plan = match gc::check(&machine::ThisMachine, &asked).await {
+        Ok(plan) => plan,
+        Err(refused) => {
+            eprintln!("meridian plugin gc: {refused}. Nothing was changed.");
+            return 1;
+        }
+    };
+    eprintln!("{}", gc::plan_text(&asked, &plan));
+    if !arguments.set("--yes") && !approved("Collect it?") {
+        eprintln!("meridian plugin gc: not approved, so nothing was changed. Where there is no terminal to ask at, --yes approves");
+        return 1;
+    }
+    let mut say = |line: &str| eprintln!("{line}");
+    match gc::apply(&machine::ThisMachine, &asked, &plan, &mut say).await {
+        Ok(done) => {
+            print!("{done}");
+            0
+        }
+        Err(failed) => {
+            eprintln!("meridian plugin gc: {failed}");
+            1
         }
     }
 }
@@ -1314,39 +1541,157 @@ async fn publish_command(arguments: &Arguments, words: &[&str], platform: &str) 
         organisation,
         follow_for,
         follow_every: registry::FOLLOW_EVERY,
+        shown: registry::Shown {
+            width: registry::terminal_width(),
+            details: arguments.set("--details"),
+        },
     };
+    published(&asked, platform, "publish").await
+}
+
+/// The publish path, `plugin publish`'s and `plugin release`'s: the
+/// pre-flight, the request under a push token, the build followed, and its
+/// report.
+async fn published(asked: &registry::Publish, platform: &str, verb: &str) -> i32 {
     // The pre-flight first, so a plugin that would fail is told before any
     // browser is opened.
-    if let Err(refused) = registry::preflight(&asked, &registry::Git) {
-        eprintln!("meridian plugin publish: {refused}");
+    if let Err(refused) = registry::preflight(asked, &registry::Git) {
+        eprintln!("meridian plugin {verb}: {refused}");
         return 1;
     }
     let session = match signed_in(platform).await {
         Ok(session) => session,
         Err(failed) => {
-            eprintln!("meridian plugin publish: {failed}");
+            eprintln!("meridian plugin {verb}: {failed}");
             return 1;
         }
     };
-    match registry::publish(&asked, &registry::Git, &session).await {
+    match registry::publish(asked, &registry::Git, &session).await {
         Ok(build) => {
-            print!("{}", registry::said(&build));
+            print!("{}", registry::said(&build, platform, &asked.shown));
             match build["state"].as_str() {
                 Some("PLUGIN_BUILD_STATE_REFUSED") => 1,
+                Some("PLUGIN_BUILD_STATE_IN_REVIEW") => {
+                    if let Some(listing) = build["listing"].as_str() {
+                        println!("  its listing, once reviewed: {platform}/plugins/{listing}");
+                    }
+                    0
+                }
                 _ => 0,
             }
         }
         Err(failed) => {
-            eprintln!("meridian plugin publish: {failed}");
+            eprintln!("meridian plugin {verb}: {failed}");
             1
         }
     }
 }
 
+/// `meridian plugin release <version>` (ruling 256): the checks, the release
+/// PR and its CI, the merge a person makes, then the signed tag on the merge
+/// commit, published and followed. `--no-wait` stops after the PR; running
+/// it again resumes.
+async fn release_command(arguments: &Arguments, words: &[&str], platform: &str) -> i32 {
+    let ["release", version] = words else {
+        eprintln!("meridian plugin release: takes the version, as `meridian plugin release 1.4.0`\n\n{USAGE}");
+        return 2;
+    };
+    let version = version.trim_start_matches('v');
+    let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
+    let registry = arguments
+        .value("--registry", "--registry")
+        .unwrap_or("community");
+    if !matches!(registry, "community" | "verified") {
+        eprintln!("meridian plugin release: --registry is community or verified");
+        return 2;
+    }
+    let organisation = match registry::organisation(
+        arguments.value("--organisation", "--organisation"),
+        &dir,
+        &registry::Git,
+    ) {
+        Ok(organisation) => organisation,
+        Err(refused) => {
+            eprintln!("meridian plugin release: {refused}");
+            return 2;
+        }
+    };
+    let timeout = match arguments.value("--timeout", "--timeout") {
+        None => registry::FOLLOW_FOR,
+        Some(given) => match upgrade_deployment::duration(given) {
+            Some(duration) => duration,
+            None => {
+                eprintln!("meridian plugin release: --timeout takes a duration: 30m, 1h");
+                return 2;
+            }
+        },
+    };
+    let repo = plugin_release::Checkout(dir.clone());
+    let github = match plugin_release::Repository::origin(&repo)
+        .and_then(|origin| registry::github_repository(&origin))
+        .and_then(|url| {
+            plugin_release::owner_and_name(&url).ok_or_else(|| format!("{url} names no repository"))
+        }) {
+        Ok((owner, repository)) => match plugin_release::github_token() {
+            Ok(token) => plugin_release::Rest {
+                api: "https://api.github.com".into(),
+                owner,
+                repository,
+                token,
+            },
+            Err(refused) => {
+                eprintln!("meridian plugin release: {refused}");
+                return 1;
+            }
+        },
+        Err(refused) => {
+            eprintln!("meridian plugin release: {refused}");
+            return 2;
+        }
+    };
+    let today = registry::moment(credential::now_s() * 1_000_000_000)[..10].to_string();
+    let asked = plugin_release::Asked {
+        dir: dir.clone(),
+        version: version.to_string(),
+        wait: !arguments.set("--no-wait"),
+        every: std::time::Duration::from_secs(15),
+        timeout,
+        today,
+    };
+    let mut say = |line: &str| eprintln!("{line}");
+    let tag = match plugin_release::release(&asked, &repo, &github, &mut say).await {
+        Ok(plugin_release::Reached::Stopped(said)) => {
+            println!("{said}");
+            return 0;
+        }
+        Ok(plugin_release::Reached::Tagged { tag, .. }) => tag,
+        Err(refused) => {
+            eprintln!("meridian plugin release: {refused}");
+            return 1;
+        }
+    };
+    let publish = registry::Publish {
+        dir,
+        registry: registry.into(),
+        tag,
+        organisation,
+        follow_for: timeout,
+        follow_every: registry::FOLLOW_EVERY,
+        shown: registry::Shown {
+            width: registry::terminal_width(),
+            details: arguments.set("--details"),
+        },
+    };
+    published(&publish, platform, "release").await
+}
+
 /// `meridian plugin key register <file.pub> | revoke <key-id> | list`
-/// (W5.30), the organisation's tag-signing keys.
+/// (W5.30), the organisation's tag-signing keys; and `setup` (ruling 256).
 async fn key_command(arguments: &Arguments, words: &[&str], platform: &str) -> i32 {
     let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
+    if words == ["key", "setup"] {
+        return key_setup(arguments, &dir, platform).await;
+    }
     let organisation = match registry::organisation(
         arguments.value("--organisation", "--organisation"),
         &dir,
@@ -1419,7 +1764,7 @@ async fn key_command(arguments: &Arguments, words: &[&str], platform: &str) -> i
         }
         ["key", "list"] => Act::List,
         _ => {
-            eprintln!("meridian plugin key: takes `register <file.pub>`, `revoke <key-id>` or `list`\n\n{USAGE}");
+            eprintln!("meridian plugin key: takes `setup`, `register <file.pub>`, `revoke <key-id>` or `list`\n\n{USAGE}");
             return 2;
         }
     };
@@ -1469,6 +1814,95 @@ async fn key_command(arguments: &Arguments, words: &[&str], platform: &str) -> i
     }
 }
 
+/// `meridian plugin key setup [--hardware]` (ruling 256): git's SSH signing
+/// key, or one ssh-keygen makes, git set to sign with it, and its public half
+/// registered on the organisation where the person may.
+async fn key_setup(arguments: &Arguments, dir: &std::path::Path, platform: &str) -> i32 {
+    let organisation = match arguments.value("--organisation", "--organisation") {
+        Some(given) => match registry::organisation(Some(given), dir, &registry::Git) {
+            Ok(organisation) => Some(organisation),
+            Err(refused) => {
+                eprintln!("meridian plugin key setup: {refused}");
+                return 2;
+            }
+        },
+        None => registry::organisation(None, dir, &registry::Git).ok(),
+    };
+    set_up_key(
+        dir,
+        arguments.set("--hardware"),
+        organisation.as_deref(),
+        platform,
+    )
+    .await
+}
+
+/// The key made ready and registered: `key setup`, and `plugin new`'s offer.
+async fn set_up_key(
+    dir: &std::path::Path,
+    hardware: bool,
+    organisation: Option<&str>,
+    platform: &str,
+) -> i32 {
+    let asked = signing::Setup {
+        dir: dir.to_path_buf(),
+        hardware,
+    };
+    let ready = match signing::prepare(&signing::ThisWorkstation, &asked) {
+        Ok(ready) => ready,
+        Err(refused) => {
+            eprintln!("meridian plugin key setup: {refused}");
+            return 1;
+        }
+    };
+    print!("{}", signing::said(&ready));
+    let Some(organisation) = organisation else {
+        println!(
+            "Git signs release tags with it. Register its public half on your organisation once \
+             the plugin's repository is on GitHub: `meridian plugin key setup` there again, or \
+             `meridian plugin key register {} --organisation <namespace>`.",
+            ready
+                .file
+                .as_ref()
+                .map(|file| file.display().to_string())
+                .unwrap_or_else(|| "<the key's .pub>".into())
+        );
+        return 0;
+    };
+    let session = match signed_in(platform).await {
+        Ok(session) => session,
+        Err(failed) => {
+            eprintln!("meridian plugin key setup: {failed}");
+            return 1;
+        }
+    };
+    match signing::register(&session, organisation, &ready).await {
+        Ok(signing::Registered::Already(key_id)) => {
+            println!(
+                "It is registered on {organisation} already, as {key_id}: a tag it signs is built."
+            );
+            0
+        }
+        Ok(signing::Registered::Made {
+            key_id,
+            fingerprint,
+        }) => {
+            println!(
+                "Registered {fingerprint} on {organisation}, as {key_id}: a tag it signs is built, from now."
+            );
+            0
+        }
+        Ok(signing::Registered::Ask(said)) => {
+            print!("{said}");
+            1
+        }
+        Err(failed) => {
+            eprintln!("meridian plugin key setup: {failed}");
+            1
+        }
+    }
+}
+
 /// `meridian plugin download organisation/plugin@version` (W8.14): a
 /// verified plugin bundle, or nothing written.
 async fn download_command(arguments: &Arguments, words: &[&str], platform: &str) -> i32 {
@@ -1498,13 +1932,6 @@ async fn download_command(arguments: &Arguments, words: &[&str], platform: &str)
         .iter()
         .map(|k| k.to_string())
         .collect();
-    if keys.is_empty() {
-        eprintln!(
-            "meridian plugin download: this meridian carries none of the platform's keys yet, so \
-             nothing it downloads can be verified, and no bundle is written"
-        );
-        return 1;
-    }
     let session = match signed_in(platform).await {
         Ok(session) => session,
         Err(failed) => {
@@ -1565,7 +1992,7 @@ async fn status_command(arguments: &Arguments, namespace: &str) -> i32 {
             } else {
                 print!(
                     "{}",
-                    status::said(&held, credential::now_s() * 1_000_000_000)
+                    status::said(&held, credential::now_s() * 1_000_000_000, namespace)
                 );
             }
             0
@@ -1589,14 +2016,11 @@ async fn logs_command(arguments: &Arguments, namespace: &str) -> i32 {
             .into(),
         namespace: namespace.into(),
     };
-    match status::logs(
-        &status::ThisCluster,
-        &asked,
-        component,
-        arguments.value("--since", "--since"),
-    )
-    .await
-    {
+    let read = status::Read {
+        since: arguments.value("--since", "--since").map(String::from),
+        previous: arguments.set("--previous"),
+    };
+    match status::logs(&status::ThisCluster, &asked, component, &read).await {
         Ok(printed) => {
             print!("{printed}");
             0
@@ -1827,6 +2251,69 @@ async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i
         }
         Err(refusal) => {
             eprintln!("\nmeridian upgrade-deployment: {refusal}");
+            1
+        }
+    }
+}
+
+/// `meridian rollback-deployment [--to-revision <n>]` (audit D4): checks,
+/// shows the revision it returns to and that the database stays, asks, then
+/// rolls back and waits.
+async fn rollback_command(arguments: &Arguments, namespace: &str) -> i32 {
+    if !arguments.words.is_empty() {
+        eprintln!("meridian rollback-deployment: takes no words; --to-revision <n> names a revision\n\n{USAGE}");
+        return 2;
+    }
+    let to_revision = match arguments.value("--to-revision", "--to-revision") {
+        None => None,
+        Some(given) => match given.parse::<u64>() {
+            Ok(revision) if revision > 0 => Some(revision),
+            _ => {
+                eprintln!("meridian rollback-deployment: --to-revision takes a revision's number, as `meridian status` says it");
+                return 2;
+            }
+        },
+    };
+    let timeout = arguments.value("--timeout", "--timeout").unwrap_or("10m");
+    let Some(waited) = upgrade_deployment::duration(timeout) else {
+        eprintln!(
+            "meridian rollback-deployment: --timeout takes a duration as Helm writes one: 10m, 90s, 1h30m"
+        );
+        return 2;
+    };
+    let asked = rollback::Asked {
+        release: arguments
+            .value("--release", "--release")
+            .unwrap_or("meridian")
+            .into(),
+        namespace: namespace.into(),
+        to_revision,
+        timeout: timeout.into(),
+    };
+    let plan = match rollback::check(&machine::ThisMachine, &asked).await {
+        Ok(plan) => plan,
+        Err(refused) => {
+            eprintln!("meridian rollback-deployment: {refused}. Nothing was changed.");
+            return 1;
+        }
+    };
+    eprintln!("{}", rollback::plan_text(&asked, &plan));
+    if !arguments.set("--yes") && !approved("Roll it back?") {
+        eprintln!("meridian rollback-deployment: not approved, so nothing was changed. Where there is no terminal to ask at, --yes approves");
+        return 1;
+    }
+    let pace = rollback::Pace {
+        poll: std::time::Duration::from_secs(2),
+        timeout: waited,
+    };
+    let mut say = |line: &str| eprintln!("{line}");
+    match rollback::apply(&machine::ThisMachine, &asked, &plan, &pace, &mut say).await {
+        Ok(done) => {
+            print!("{done}");
+            0
+        }
+        Err(failed) => {
+            eprintln!("meridian rollback-deployment: {failed}");
             1
         }
     }
@@ -2413,7 +2900,59 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{connect_address, parse};
+    use super::{connect_address, help_for, parse};
+
+    #[test]
+    fn a_commands_help_is_its_own_flags() {
+        // `meridian logs --help` printed the whole usage in 0.1.46.
+        let logs = help_for("logs", &[]);
+        assert!(logs.starts_with("meridian logs\n"), "{logs}");
+        assert!(logs.contains("--previous            logs:"), "{logs}");
+        assert!(logs.contains("--since <span>"), "{logs}");
+        assert!(logs.contains("Both:"), "{logs}");
+        assert!(!logs.contains("--first-run-code"), "{logs}");
+        assert!(!logs.contains("meridian plugin logs"), "{logs}");
+        let release = help_for("plugin", &["release".to_string()]);
+        assert!(
+            release.contains("meridian plugin release <version>"),
+            "{release}"
+        );
+        assert!(release.contains("--no-wait"), "{release}");
+        assert!(!release.contains("--first-run-code"), "{release}");
+        let rollback = help_for("rollback-deployment", &[]);
+        assert!(rollback.contains("--to-revision <n>"), "{rollback}");
+        let key = help_for("plugin", &["key".to_string()]);
+        assert!(
+            key.contains("meridian plugin key setup") && key.contains("--hardware"),
+            "{key}"
+        );
+        let gc = help_for("plugin", &["gc".to_string()]);
+        assert!(gc.contains("meridian plugin gc"), "{gc}");
+        // A command it does not know: the whole usage.
+        assert_eq!(help_for("nonsense", &[]), super::USAGE);
+    }
+
+    #[test]
+    fn the_v0_1_47_commands_parse() {
+        let release = parse(said("plugin release 1.4.0 --no-wait --registry community")).unwrap();
+        assert_eq!(release.words, ["release", "1.4.0"]);
+        assert!(release.set("--no-wait"));
+        let setup = parse(said("plugin key setup --hardware --organisation acme")).unwrap();
+        assert_eq!(setup.words, ["key", "setup"]);
+        assert!(setup.set("--hardware"));
+        let rollback = parse(said("rollback-deployment --to-revision 12 --yes")).unwrap();
+        assert_eq!(rollback.value("--to-revision", "--to-revision"), Some("12"));
+        assert!(rollback.set("--yes"));
+        let previous = parse(said("logs bor --previous")).unwrap();
+        assert!(previous.set("--previous"));
+        let details = parse(said(
+            "plugin publish --registry community --tag v1.0.0 --details",
+        ))
+        .unwrap();
+        assert!(details.set("--details"));
+        let gc = parse(said("plugin gc --yes")).unwrap();
+        assert_eq!(gc.words, ["gc"]);
+    }
 
     fn said(line: &str) -> Vec<String> {
         line.split_whitespace().map(String::from).collect()

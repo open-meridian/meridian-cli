@@ -15,8 +15,20 @@
 //! keeps.
 //! Read-only: it changes nothing.
 //!
-//! **`meridian logs <component> [--since <duration>]`** prints what a
-//! component's pods printed, each line under its pod's name.
+//! From CLI 0.1.47 it also says the **release** -- its revision, its state,
+//! its chart and, where Helm holds it as anything but deployed, Helm's own
+//! words for why -- and lists the **plugins**: each launched instance, by its
+//! name, with the plugin's image, readiness, restarts and memory, as core's
+//! components are said. Memory is each pod's own, against the limit each pod
+//! has (0.1.46 summed every pod of a component, so every plugin's line showed
+//! the memory of all of them).
+//!
+//! **`meridian logs <component> [--since <duration>] [--previous]`** prints
+//! what a component's pods printed, each line under its pod's name; with
+//! `--previous`, what each container printed before its last restart (as
+//! kubectl's own flag). A plugin's instance is named as `status` lists it,
+//! and the release's Jobs -- `migrate`, `key`, `first-run`, `settings-key`,
+//! `dashboard-key`, `backup` -- by their component, the newest run of each.
 //!
 //! The components and logs are read through the administrator's own kubectl,
 //! as `doctor`, `up` and `backup` do: the chart says what runs, and this reads
@@ -29,34 +41,42 @@ use std::collections::BTreeMap;
 pub trait Cluster: Send + Sync {
     /// kubectl, with `arguments`: what it printed, or why it failed.
     async fn kubectl(&self, arguments: &[&str]) -> Result<String, String>;
+    /// helm, read-only here: what it printed, or why it failed.
+    async fn helm(&self, arguments: &[&str]) -> Result<String, String>;
 }
 
 pub struct ThisCluster;
 
+async fn ran(program: &str, arguments: &[&str]) -> Result<String, String> {
+    let output = tokio::process::Command::new(program)
+        .args(arguments)
+        .output()
+        .await
+        .map_err(|failed| match failed.kind() {
+            std::io::ErrorKind::NotFound => format!(
+                "{program} is not installed here; `meridian doctor` says what a deployment's \
+                 machine needs"
+            ),
+            _ => format!("{program} could not be run: {failed}"),
+        })?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(format!(
+            "`{program} {}`: {}",
+            arguments.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
 #[async_trait::async_trait]
 impl Cluster for ThisCluster {
     async fn kubectl(&self, arguments: &[&str]) -> Result<String, String> {
-        let output = tokio::process::Command::new("kubectl")
-            .args(arguments)
-            .output()
-            .await
-            .map_err(|failed| match failed.kind() {
-                std::io::ErrorKind::NotFound => {
-                    "kubectl is not installed here; `meridian doctor` says what a deployment's \
-                     machine needs"
-                        .to_string()
-                }
-                _ => format!("kubectl could not be run: {failed}"),
-            })?;
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-        } else {
-            Err(format!(
-                "`kubectl {}`: {}",
-                arguments.join(" "),
-                String::from_utf8_lossy(&output.stderr).trim()
-            ))
-        }
+        ran("kubectl", arguments).await
+    }
+    async fn helm(&self, arguments: &[&str]) -> Result<String, String> {
+        ran("helm", arguments).await
     }
 }
 
@@ -66,8 +86,29 @@ pub struct Asked {
     pub namespace: String,
 }
 
+/// The flags naming a release in a `meridian` command: `-n <namespace>`, and
+/// `--release <name>` where it is not the default.
+pub fn scope(release: &str, namespace: &str) -> String {
+    if release == "meridian" {
+        format!("-n {namespace}")
+    } else {
+        format!("--release {release} -n {namespace}")
+    }
+}
+
+/// The release's workloads: every one carries its instance label. Which
+/// component each is, `component_of` reads: the chart labels some on their
+/// own metadata and the database's and the registry's only in their pods'
+/// selector.
 fn selector(release: &str) -> String {
-    format!("app.kubernetes.io/instance={release},meridian.dev/component")
+    format!("app.kubernetes.io/instance={release}")
+}
+
+/// A workload's component: its own label, or its pods' selector's.
+pub fn component_of(workload: &serde_json::Value) -> Option<&str> {
+    workload["metadata"]["labels"]["meridian.dev/component"]
+        .as_str()
+        .or_else(|| workload["spec"]["selector"]["matchLabels"]["meridian.dev/component"].as_str())
 }
 
 async fn json(cluster: &dyn Cluster, arguments: &[&str]) -> Result<serde_json::Value, String> {
@@ -124,9 +165,33 @@ pub struct Component {
     /// The last restart's reason and when it ended, where one is known.
     pub last_reason: String,
     pub last_at: String,
-    /// Bytes in use, where the cluster serves metrics, and the limit.
+    /// Bytes in use by its busiest pod, where the cluster serves metrics,
+    /// and the limit each pod has.
     pub memory: Option<u64>,
     pub limit: Option<u64>,
+    /// Each of its pods, by name, with the bytes it uses where known.
+    pub pods: Vec<(String, Option<u64>)>,
+    /// A plugin's: its instance, the plugin's own image (the container
+    /// that is not its sidecar) and whether the launcher launched it.
+    pub instance: Option<String>,
+    pub plugin_image: Option<String>,
+    pub launched: bool,
+}
+
+/// The component plugins run as: one Deployment each, a sidecar beside the
+/// plugin, named by its instance.
+pub const SIDECAR: &str = "sidecar";
+
+/// Whether a pod is one of a workload's: every label of the workload's
+/// selector on the pod; or, where it names none, the component's label.
+fn selects(workload: &serde_json::Value, pod: &serde_json::Value, component: &str) -> bool {
+    let labels = &pod["metadata"]["labels"];
+    match workload["spec"]["selector"]["matchLabels"].as_object() {
+        Some(wanted) if !wanted.is_empty() => wanted
+            .iter()
+            .all(|(key, value)| labels[key.as_str()] == *value),
+        _ => labels["meridian.dev/component"].as_str() == Some(component),
+    }
 }
 
 /// The components among the workloads and pods kubectl listed, with the
@@ -158,7 +223,7 @@ pub fn components(
     let mut found = Vec::new();
     for workload in workloads["items"].as_array().into_iter().flatten() {
         let labels = &workload["metadata"]["labels"];
-        let Some(name) = labels["meridian.dev/component"].as_str() else {
+        let Some(name) = component_of(workload) else {
             continue;
         };
         let spec = &workload["spec"]["template"]["spec"];
@@ -187,13 +252,13 @@ pub fn components(
             })
             .sum();
         component.limit = (limit > 0).then_some(limit);
-        let mut used = None;
         let mut last: Option<(String, String)> = None;
         for pod in pods["items"].as_array().into_iter().flatten() {
-            if pod["metadata"]["labels"]["meridian.dev/component"].as_str() != Some(name) {
+            if !selects(workload, pod, name) {
                 continue;
             }
             let pod_name = pod["metadata"]["name"].as_str().unwrap_or_default();
+            let mut used: Option<u64> = None;
             for status in pod["status"]["containerStatuses"]
                 .as_array()
                 .into_iter()
@@ -212,15 +277,26 @@ pub fn components(
                     used = Some(used.unwrap_or(0) + bytes);
                 }
             }
+            component.pods.push((pod_name.to_string(), used));
         }
-        component.memory = used;
+        component.pods.sort();
+        component.memory = component.pods.iter().filter_map(|(_, used)| *used).max();
         if let Some((reason, at)) = last {
             component.last_reason = reason;
             component.last_at = at;
         }
+        if name == SIDECAR {
+            component.instance = labels["meridian.dev/instance"].as_str().map(String::from);
+            component.launched = labels["meridian.dev/launched"] == "true";
+            component.plugin_image = containers
+                .iter()
+                .find(|c| c["name"].as_str() != Some(SIDECAR))
+                .and_then(|c| c["image"].as_str())
+                .map(String::from);
+        }
         found.push(component);
     }
-    found.sort_by(|a, b| a.name.cmp(&b.name));
+    found.sort_by(|a, b| (&a.name, &a.instance).cmp(&(&b.name, &b.instance)));
     found
 }
 
@@ -330,9 +406,81 @@ pub async fn book_health(
     ))
 }
 
+/// The release, as `helm history --max 1` says its newest revision.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Release {
+    pub name: String,
+    pub revision: u64,
+    pub status: String,
+    pub chart: String,
+    pub app_version: String,
+    pub updated: String,
+    pub description: String,
+}
+
+/// The newest revision `helm history -o json` lists.
+pub fn release_from(name: &str, history: &str) -> Option<Release> {
+    let listed: serde_json::Value = serde_json::from_str(history).ok()?;
+    let newest = listed
+        .as_array()?
+        .iter()
+        .max_by_key(|revision| revision["revision"].as_u64().unwrap_or(0))?;
+    Some(Release {
+        name: name.to_string(),
+        revision: newest["revision"].as_u64()?,
+        status: newest["status"].as_str().unwrap_or_default().to_string(),
+        chart: newest["chart"].as_str().unwrap_or_default().to_string(),
+        app_version: newest["app_version"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        updated: newest["updated"].as_str().unwrap_or_default().to_string(),
+        description: newest["description"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+    })
+}
+
+/// The release's revisions, every one `helm history -o json` lists, oldest
+/// first: what `rollback-deployment` returns to.
+pub fn revisions_from(name: &str, history: &str) -> Vec<Release> {
+    let listed: serde_json::Value = serde_json::from_str(history).unwrap_or_default();
+    let mut all: Vec<Release> = listed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|revision| {
+            let one = serde_json::Value::Array(vec![revision.clone()]).to_string();
+            release_from(name, &one)
+        })
+        .collect();
+    all.sort_by_key(|release| release.revision);
+    all
+}
+
+/// The releases helm lists in a namespace, by name.
+async fn releases_in(cluster: &dyn Cluster, namespace: &str) -> Option<Vec<String>> {
+    let listed = cluster
+        .helm(&["list", "--namespace", namespace, "--all", "-o", "json"])
+        .await
+        .ok()?;
+    let listed: serde_json::Value = serde_json::from_str(&listed).ok()?;
+    Some(
+        listed
+            .as_array()?
+            .iter()
+            .filter_map(|release| release["name"].as_str().map(String::from))
+            .collect(),
+    )
+}
+
 /// Everything `status` reads.
 pub struct Status {
+    pub release: Result<Release, String>,
     pub components: Vec<Component>,
+    /// Each plugin instance's Deployment, named by its instance.
+    pub plugins: Vec<Component>,
     /// Why memory in use is not said, where the cluster serves no metrics.
     pub no_metrics: Option<String>,
     pub accounts: Result<Vec<Account>, String>,
@@ -379,16 +527,43 @@ pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, Stri
             ),
         ),
     };
-    let components = components(&workloads, &pods, metrics.as_ref());
-    if components.is_empty() {
+    let (plugins, components): (Vec<Component>, Vec<Component>) =
+        components(&workloads, &pods, metrics.as_ref())
+            .into_iter()
+            .partition(|component| component.name == SIDECAR);
+    if components.is_empty() && plugins.is_empty() {
+        let there = match releases_in(cluster, ns).await {
+            Some(names) if names.is_empty() => " (it holds no release)".to_string(),
+            Some(names) => format!(" (its releases: {})", names.join(", ")),
+            None => String::new(),
+        };
         return Err(format!(
-            "no deployment `{}` in {ns}: `meridian up` installs one, and -n and --release name \
-             another",
+            "no deployment `{}` in {ns}{there}: `meridian up` installs one, and -n and --release \
+             name another",
             asked.release
         ));
     }
+    let release = match cluster
+        .helm(&[
+            "history",
+            &asked.release,
+            "--namespace",
+            ns,
+            "--max",
+            "1",
+            "-o",
+            "json",
+        ])
+        .await
+    {
+        Ok(history) => release_from(&asked.release, &history)
+            .ok_or_else(|| "Helm listed no revision of it".to_string()),
+        Err(failed) => Err(failed),
+    };
     Ok(Status {
+        release,
         components,
+        plugins,
         no_metrics,
         // Read from the deployment by the caller (`book_health`), which
         // holds the session; the cluster has no part in it.
@@ -396,49 +571,133 @@ pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, Stri
     })
 }
 
+/// A component's memory as a person reads it: each pod's in use against
+/// the limit each pod has.
+fn memory_said(c: &Component) -> String {
+    let used: Vec<u64> = c.pods.iter().filter_map(|(_, used)| *used).collect();
+    let each = if used.len() > 1 { " each" } else { "" };
+    let listed = used
+        .iter()
+        .map(|bytes| said_bytes(*bytes))
+        .collect::<Vec<_>>()
+        .join(", ");
+    match (used.is_empty(), c.limit) {
+        (false, Some(limit)) if used.len() == 1 => format!(
+            "memory {listed} of {} ({}%)",
+            said_bytes(limit),
+            used[0] * 100 / limit.max(1)
+        ),
+        (false, Some(limit)) => format!("memory {listed} of {}{each}", said_bytes(limit)),
+        (false, None) => format!("memory {listed} (no limit)"),
+        (true, Some(limit)) => format!("limit {}", said_bytes(limit)),
+        (true, None) => "no limit".into(),
+    }
+}
+
+fn restarts_said(c: &Component) -> String {
+    if c.restarts == 0 {
+        "no restarts".to_string()
+    } else if c.last_reason.is_empty() {
+        format!("{} restart(s)", c.restarts)
+    } else {
+        format!(
+            "{} restart(s), the last {} at {}",
+            c.restarts, c.last_reason, c.last_at
+        )
+    }
+}
+
+/// The release, as a line, and Helm's words where it is not deployed.
+fn release_said(release: &Result<Release, String>, namespace: &str) -> String {
+    match release {
+        Err(why) => format!("Release: not read: {why}\n"),
+        Ok(r) => {
+            let mut out = format!(
+                "Release: {} revision {}, {}, chart {}{}{}\n",
+                r.name,
+                r.revision,
+                r.status,
+                r.chart,
+                if r.app_version.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (app {})", r.app_version)
+                },
+                if r.updated.is_empty() {
+                    String::new()
+                } else {
+                    format!(", updated {}", r.updated)
+                },
+            );
+            if r.status != "deployed" {
+                if !r.description.is_empty() {
+                    out.push_str(&format!("  Helm says: {}\n", r.description));
+                }
+                out.push_str(&format!(
+                    "  `meridian rollback-deployment -n {namespace}` returns it to its last \
+                     deployed revision{}\n",
+                    if r.status.starts_with("pending") {
+                        ", once no other Helm operation is running on it"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            out
+        }
+    }
+}
+
 /// The status, for a person to read.
-pub fn said(status: &Status, now_ns: u64) -> String {
+pub fn said(status: &Status, now_ns: u64, namespace: &str) -> String {
+    let mut out = release_said(&status.release, namespace);
     let width = status
         .components
         .iter()
         .map(|c| c.name.len())
         .max()
         .unwrap_or(0);
-    let mut out = String::from("Components:\n");
+    out.push_str("\nComponents:\n");
     for c in &status.components {
-        let memory = match (c.memory, c.limit) {
-            (Some(used), Some(limit)) => format!(
-                "memory {} of {} ({}%)",
-                said_bytes(used),
-                said_bytes(limit),
-                used * 100 / limit.max(1)
-            ),
-            (Some(used), None) => format!("memory {} (no limit)", said_bytes(used)),
-            (None, Some(limit)) => format!("limit {}", said_bytes(limit)),
-            (None, None) => "no limit".into(),
-        };
-        let restarts = if c.restarts == 0 {
-            "no restarts".to_string()
-        } else if c.last_reason.is_empty() {
-            format!("{} restart(s)", c.restarts)
-        } else {
-            format!(
-                "{} restart(s), the last {} at {}",
-                c.restarts, c.last_reason, c.last_at
-            )
-        };
         out.push_str(&format!(
             "  {:width$}  {}/{} ready  {}  {}  {}\n",
             c.name,
             c.ready,
             c.wanted,
-            restarts,
-            memory,
+            restarts_said(c),
+            memory_said(c),
             c.images.join(", "),
         ));
     }
     if let Some(why) = &status.no_metrics {
         out.push_str(&format!("  ({why})\n"));
+    }
+    out.push_str("\nPlugins:\n");
+    if status.plugins.is_empty() {
+        out.push_str(
+            "  none running: `meridian plugin list` shows the catalogue and each launch\n",
+        );
+    }
+    let named = |c: &Component| c.instance.clone().unwrap_or_else(|| "(unnamed)".into());
+    let width = status
+        .plugins
+        .iter()
+        .map(|c| named(c).len())
+        .max()
+        .unwrap_or(0);
+    for c in &status.plugins {
+        out.push_str(&format!(
+            "  {:width$}  {}/{} ready  {}  {}  {}{}\n",
+            named(c),
+            c.ready,
+            c.wanted,
+            restarts_said(c),
+            memory_said(c),
+            c.plugin_image
+                .clone()
+                .unwrap_or_else(|| "a sidecar alone".into()),
+            if c.launched { "" } else { "  (the chart's)" },
+        ));
     }
     out.push_str("\nBook health:\n");
     match &status.accounts {
@@ -482,15 +741,39 @@ fn ago(ns: u64) -> String {
     }
 }
 
-/// The status as one JSON object, for a script or an agent.
+fn component_json(c: &Component) -> serde_json::Value {
+    let mut said = serde_json::json!({
+        "component": c.name, "kind": c.kind, "images": c.images,
+        "ready": c.ready, "wanted": c.wanted, "restarts": c.restarts,
+        "last_restart_reason": c.last_reason, "last_restart_at": c.last_at,
+        "memory_bytes": c.memory, "memory_limit_bytes": c.limit,
+        "pods": c.pods.iter().map(|(pod, used)| serde_json::json!({
+            "pod": pod, "memory_bytes": used,
+        })).collect::<Vec<_>>(),
+    });
+    if let Some(instance) = &c.instance {
+        said["instance_id"] = instance.clone().into();
+        said["plugin_image"] = c.plugin_image.clone().into();
+        said["launched"] = c.launched.into();
+    }
+    said
+}
+
+/// The status as one JSON object, for a script or an agent. `memory_bytes`
+/// is the busiest pod's, against `memory_limit_bytes`, each pod's limit;
+/// `pods` holds each pod's own.
 pub fn json_of(status: &Status) -> serde_json::Value {
     serde_json::json!({
-        "components": status.components.iter().map(|c| serde_json::json!({
-            "component": c.name, "kind": c.kind, "images": c.images,
-            "ready": c.ready, "wanted": c.wanted, "restarts": c.restarts,
-            "last_restart_reason": c.last_reason, "last_restart_at": c.last_at,
-            "memory_bytes": c.memory, "memory_limit_bytes": c.limit,
-        })).collect::<Vec<_>>(),
+        "release": match &status.release {
+            Ok(r) => serde_json::json!({
+                "release": r.name, "revision": r.revision, "status": r.status,
+                "chart": r.chart, "app_version": r.app_version, "updated": r.updated,
+                "description": r.description,
+            }),
+            Err(why) => serde_json::json!({ "not_read": why }),
+        },
+        "components": status.components.iter().map(component_json).collect::<Vec<_>>(),
+        "plugins": status.plugins.iter().map(component_json).collect::<Vec<_>>(),
         "metrics": status.no_metrics.is_none(),
         "book_health": match &status.accounts {
             Ok(accounts) => serde_json::json!(accounts.iter().map(|a| serde_json::json!({
@@ -511,17 +794,40 @@ pub fn is_since(given: &str) -> bool {
         && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// What `meridian logs` was asked beside the component.
+#[derive(Debug, Clone, Default)]
+pub struct Read {
+    pub since: Option<String>,
+    pub previous: bool,
+}
+
+/// A Job's component: its label where it has one, else its name past the
+/// release's own prefix, a revision's number dropped (`<prefix>-migrate-12`
+/// is `migrate`).
+fn job_component(job: &serde_json::Value, prefix: Option<&str>) -> Option<String> {
+    if let Some(labelled) = job["metadata"]["labels"]["meridian.dev/component"].as_str() {
+        return Some(labelled.to_string());
+    }
+    let name = job["metadata"]["name"].as_str()?;
+    let past = name.strip_prefix(&format!("{}-", prefix?))?;
+    let named = match past.rsplit_once('-') {
+        Some((head, revision)) if revision.bytes().all(|b| b.is_ascii_digit()) => head,
+        _ => past,
+    };
+    (!named.is_empty()).then(|| named.to_string())
+}
+
 /// `meridian logs <component>`: what the component's pods printed, each line
-/// under its pod's name. A component that is not the deployment's is
-/// refused, naming those that are.
+/// under its pod's name; a plugin's, by its instance; a Job's, its newest
+/// run's. Anything else is refused, naming what is the deployment's.
 pub async fn logs(
     cluster: &dyn Cluster,
     asked: &Asked,
     component: &str,
-    since: Option<&str>,
+    read: &Read,
 ) -> Result<String, String> {
     let ns = asked.namespace.as_str();
-    if let Some(since) = since {
+    if let Some(since) = &read.since {
         if !is_since(since) {
             return Err(format!(
                 "--since takes a span, as 30s, 10m, 2h or 1d, not `{since}`"
@@ -542,31 +848,94 @@ pub async fn logs(
         ],
     )
     .await?;
-    let known: Vec<String> = workloads["items"]
+    let items: Vec<&serde_json::Value> = workloads["items"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|w| {
-            w["metadata"]["labels"]["meridian.dev/component"]
-                .as_str()
-                .map(String::from)
-        })
         .collect();
-    if !known.iter().any(|name| name == component) {
-        let mut known = known;
-        known.sort();
-        known.dedup();
-        return Err(format!(
-            "`{component}` is not a component of {} in {ns}: {}",
-            asked.release,
-            known.join(", ")
-        ));
-    }
-    let chosen = format!(
-        "app.kubernetes.io/instance={},meridian.dev/component={component}",
-        asked.release
-    );
-    let since_flag = since.map(|s| format!("--since={s}"));
+    let label =
+        |w: &serde_json::Value, key: &str| w["metadata"]["labels"][key].as_str().map(String::from);
+    let mut known: Vec<String> = items
+        .iter()
+        .filter_map(|w| component_of(w).map(String::from))
+        .filter(|name| name != SIDECAR)
+        .collect();
+    let instances: Vec<String> = items
+        .iter()
+        .filter(|w| component_of(w) == Some(SIDECAR))
+        .filter_map(|w| label(w, "meridian.dev/instance"))
+        .collect();
+    // The release's own prefix, from a component's workload name.
+    let prefix = items.iter().find_map(|w| {
+        let name = w["metadata"]["name"].as_str()?;
+        let component = component_of(w)?;
+        name.strip_suffix(&format!("-{component}"))
+            .map(String::from)
+    });
+    let chosen = if known.iter().any(|name| name == component) {
+        format!(
+            "app.kubernetes.io/instance={},meridian.dev/component={component}",
+            asked.release
+        )
+    } else if instances.iter().any(|name| name == component) {
+        format!(
+            "app.kubernetes.io/instance={},meridian.dev/instance={component}",
+            asked.release
+        )
+    } else {
+        // The release's Jobs, by component, the newest run of each.
+        let jobs = json(
+            cluster,
+            &[
+                "get",
+                "jobs",
+                "-n",
+                ns,
+                "-l",
+                &format!("app.kubernetes.io/instance={}", asked.release),
+                "-o",
+                "json",
+            ],
+        )
+        .await
+        .unwrap_or_default();
+        let mut runs: Vec<(String, String, String)> = jobs["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|job| {
+                Some((
+                    job_component(job, prefix.as_deref())?,
+                    job["metadata"]["creationTimestamp"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    job["metadata"]["name"].as_str()?.to_string(),
+                ))
+            })
+            .collect();
+        runs.sort();
+        known.extend(runs.iter().map(|(name, _, _)| name.clone()));
+        match runs.iter().rev().find(|(name, _, _)| name == component) {
+            Some((_, _, job)) => format!("job-name={job}"),
+            None => {
+                known.sort();
+                known.dedup();
+                let mut said = format!(
+                    "`{component}` is not a component of {} in {ns}: {}",
+                    asked.release,
+                    known.join(", ")
+                );
+                if !instances.is_empty() {
+                    let mut instances = instances;
+                    instances.sort();
+                    said.push_str(&format!("; its plugins: {}", instances.join(", ")));
+                }
+                return Err(said);
+            }
+        }
+    };
+    let since_flag = read.since.as_ref().map(|s| format!("--since={s}"));
     let mut arguments = vec![
         "logs",
         "-n",
@@ -578,10 +947,22 @@ pub async fn logs(
         "--tail=-1",
         "--max-log-requests=20",
     ];
+    if read.previous {
+        arguments.push("--previous");
+    }
     if let Some(flag) = &since_flag {
         arguments.push(flag);
     }
-    cluster.kubectl(&arguments).await
+    cluster.kubectl(&arguments).await.map_err(|failed| {
+        if read.previous && failed.contains("not found") {
+            format!(
+                "no container of {component} has restarted, so there is nothing from before a \
+                 restart to print: `meridian logs {component}` prints what it says now"
+            )
+        } else {
+            failed
+        }
+    })
 }
 
 #[cfg(test)]

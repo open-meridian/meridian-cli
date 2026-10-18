@@ -175,8 +175,9 @@ async fn target(machine: &dyn Machine, asked: &Asked) -> Result<Chart, Finding> 
     if let Some(version) = &asked.chart_version {
         arguments.extend(["--version", version.as_str()]);
     }
-    let fix = "`helm show chart <chart> --version <v>` says whether a version exists; \
-               --chart-version names one, and without it the latest published is used.";
+    let fix = "The chart's registry could not answer for that version: check --chart-version \
+               against the versions published, or leave it out for the latest; --chart names \
+               the chart it was installed from.";
     let shown = machine
         .run("helm", &arguments)
         .await
@@ -226,7 +227,10 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         Err(failed) => {
             findings.push(Finding::Stops {
                 what: format!("the release could not be read: {failed}"),
-                fix: "`helm list -n <namespace>` should list it.".into(),
+                fix: format!(
+                    "`meridian status {}` says whether the release is there.",
+                    crate::status::scope(&asked.release, &asked.namespace)
+                ),
             });
             return refuse(&findings, say);
         }
@@ -308,10 +312,10 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
                 what: "the deployment's own values could not be read, so what the values files \
                        change cannot be shown"
                     .into(),
-                fix: format!(
-                    "`helm get values {} -n {}` should answer; then run this again.",
-                    asked.release, asked.namespace
-                ),
+                fix: "Helm could not read the release's values, which only it holds: check \
+                      that this account may read Secrets in the namespace, then run this \
+                      again."
+                    .into(),
             });
             return refuse(&findings, say);
         };
@@ -560,10 +564,11 @@ pub async fn apply(
     let applied = machine.run("helm", &arguments).await;
     watch.end(Step::Apply, applied.is_ok());
     applied.map_err(|failed| {
+        let scope = crate::status::scope(release, namespace);
         format!(
-            "helm refused the upgrade: {failed}\n`helm history {release} -n {namespace}` shows \
-             the revision it left; `helm rollback {release} -n {namespace}` returns it to \
-             revision {}.",
+            "helm refused the upgrade: {failed}\n`meridian status {scope}` shows the revision \
+             it left; `meridian rollback-deployment {scope} --to-revision {}` returns it to the \
+             revision it was at.",
             plan.from.revision
         )
     })?;
@@ -616,12 +621,14 @@ pub async fn apply(
         }
 
         if let Some(job) = now.failed {
+            let scope = crate::status::scope(release, namespace);
             return Err(format!(
-                "the migration failed, and the components wait for it.\n\
-                 Its log: `kubectl logs -n {namespace} job/{job} --all-containers`.\n\
-                 Revision {revision} stays applied. `helm history {release} -n {namespace}` \
-                 lists the revisions; read the log before rolling back, since a migration that \
-                 got part of the way may have changed what the older runtime would read."
+                "the migration, job/{job}, failed, and the components wait for it.\n\
+                 Its log: `meridian logs migrate {scope}`.\n\
+                 Revision {revision} stays applied. `meridian status {scope}` says the release's \
+                 state; read the log before `meridian rollback-deployment {scope}`, since a \
+                 migration that got part of the way may have changed what the older runtime \
+                 would read."
             ));
         }
         if now.waiting.is_empty() {
@@ -633,12 +640,12 @@ pub async fn apply(
             watch.end(Step::Components, false);
             return Err(format!(
                 "after {}, still waiting for:\n  - {}\nRevision {revision} is applied and \
-                 nothing was rolled back. `kubectl get pods -n {namespace} -l {}` shows where \
-                 it is; run this again with a longer --timeout to keep waiting, since it is at \
+                 nothing was rolled back. `meridian status {}` shows where each component \
+                 is; run this again with a longer --timeout to keep waiting, since it is at \
                  {} already.",
                 asked.timeout,
                 now.waiting.join("\n  - "),
-                asked.selector(),
+                crate::status::scope(release, namespace),
                 plan.to.version
             ));
         }
@@ -701,9 +708,13 @@ pub async fn apply(
         match machine.run("kubectl", &arguments).await {
             Ok(_) => *done = names,
             Err(failed) => report.not_cleaned.push(format!(
-                "{failed}. The upgrade itself is done; `kubectl delete {kind} -n {namespace} {}` \
-                 removes them.",
-                names.join(" ")
+                "{failed}. The upgrade itself is done. They are left from earlier revisions \
+                 and harm nothing ({}); the next `meridian upgrade-deployment` removes them.",
+                names
+                    .iter()
+                    .map(|name| format!("{kind}/{name}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )),
         }
     }

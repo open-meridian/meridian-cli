@@ -277,7 +277,7 @@ async fn a_failed_release_is_refused_with_how_to_recover_and_nothing_is_changed(
     let said = said.join("\n");
     assert!(said.contains("stops"), "{said}");
     assert!(
-        said.contains("helm rollback meridian -n meridian"),
+        said.contains("`meridian rollback-deployment -n meridian` returns it"),
         "{said}"
     );
     assert!(said.contains("Nothing was changed"), "{said}");
@@ -1087,9 +1087,8 @@ async fn a_failed_migration_says_where_its_log_is_and_cleans_up_nothing() {
     .expect_err("a failed migration is a failed upgrade");
 
     assert!(
-        failed.contains(
-            "kubectl logs -n meridian job/meridian-meridian-runtime-migrate-8 --all-containers"
-        ),
+        failed.contains("job/meridian-meridian-runtime-migrate-8, failed")
+            && failed.contains("Its log: `meridian logs migrate -n meridian`"),
         "{failed}"
     );
     assert!(!stand
@@ -1155,7 +1154,7 @@ async fn helm_refusing_says_how_to_get_back() {
     .expect_err("helm refused");
 
     assert!(
-        failed.contains("helm rollback meridian -n meridian"),
+        failed.contains("`meridian rollback-deployment -n meridian --to-revision 7`"),
         "{failed}"
     );
     assert!(failed.contains("revision 7"), "{failed}");

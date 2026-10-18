@@ -58,12 +58,22 @@ pub const KEY_STATUS_TYPE: &str = "application/vnd.open-meridian.signing-key-sta
 /// The bundle's own record, beside its image layout.
 pub const RECORD: &str = "meridian-bundle.json";
 
-/// The platform's public keys this release carries, PEM, the current one and
-/// the next. Empty in 0.1.46: the KMS key is created at the platform's v25
-/// deploy (the v25 plan, step 2, item 143), and its public half is written
-/// here in 0.1.47 or a patch release; until then a bundle cannot be verified,
-/// and its download refuses.
-pub const PLATFORM_KEYS: [&str; 0] = [];
+/// The platform's public keys this release carries, PEM (SubjectPublicKeyInfo),
+/// the current one and, once there is one, the next. 0.1.46 shipped none; from
+/// 0.1.47 the platform's registry-signing key: version 1 of the KMS key
+/// `meridian-registry/registry-signing`, ECDSA P-256 (the v25 plan, step 2,
+/// item 143), the file's SHA-256 69c1961a3e4df9abafd397387a109ebac3d5a96ff7070173b61d78a18f2d4871.
+/// It signs the listing statements, the provenance and the key status a
+/// bundle is verified against. A rotation adds the next key here a release
+/// before the platform signs with it, and drops the old one a release after.
+pub const PLATFORM_KEYS: [&str; 1] = [REGISTRY_SIGNING_V1];
+
+/// `meridian-registry/registry-signing`, version 1.
+const REGISTRY_SIGNING_V1: &str = "-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYM0/p11OyeOPd/Wxgpt0yNiY74kY
+CavdxXGp4OQ2EJvgQBJfLQm4DG2uWK3eIlP1NBy1ez3L7tuAnvT8TiIWeg==
+-----END PUBLIC KEY-----
+";
 
 const OCI_MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
 const OCI_INDEX: &str = "application/vnd.oci.image.index.v1+json";
@@ -619,7 +629,7 @@ pub fn named(given: &str) -> Result<(String, String, String), String> {
         .ok_or_else(|| format!("{given} is not organisation/plugin@version"))?;
     if !crate::registry::is_slug(organisation) || !crate::catalogue::is_name(plugin) {
         return Err(format!(
-            "{given} is not organisation/plugin@version: a slug, a plugin's name and its version"
+            "{given} is not organisation/plugin@version: an organisation's namespace, a plugin's name and its version"
         ));
     }
     if crate::registry::semver_of_tag(&format!("v{version}")).is_none() {
