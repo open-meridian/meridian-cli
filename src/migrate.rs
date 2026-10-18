@@ -20,6 +20,13 @@
 //!
 //! Then `meridian plugin check`, and a report of what changed and what is
 //! left by hand, each with its rule, file and line.
+//!
+//! **A base pinned by digest** (`ARG BASE=...plugin-python:<v>@sha256:...`,
+//! as plugins pin it from SDK 0.29.0's releases) moves with its tag: the new
+//! release's digest is read from its registry anonymously, as a `docker pull`
+//! reads it. Where it cannot be read, the digest is dropped and that is left
+//! by hand: an old digest under a new tag is never written, since it would
+//! build the old release while saying the new one (CLI 0.1.47).
 
 use std::path::{Path, PathBuf};
 
@@ -101,11 +108,37 @@ impl Ran {
     }
 }
 
-/// The machine, as migrate reaches it: programs (git and docker) and one GET.
+/// The machine, as migrate reaches it: programs (git and docker), one GET,
+/// and a release's digest from its registry.
 #[async_trait::async_trait]
 pub trait Host: Sync {
     async fn run(&self, program: &str, arguments: &[String], stdin: &[u8]) -> Result<Ran, String>;
     async fn fetch(&self, url: &str) -> Result<(u16, String), String>;
+    /// `image:tag`'s digest, as its registry answers it to anybody (an
+    /// image index's, where the tag names one): `sha256:<hex>`.
+    async fn digest(&self, image: &str, tag: &str) -> Result<String, String>;
+}
+
+/// The registry an image is in and its repository there:
+/// `ghcr.io/open-meridian/plugin-python` is ghcr.io's
+/// `open-meridian/plugin-python`.
+fn registry_of(image: &str) -> Option<(&str, &str)> {
+    let (host, repository) = image.split_once('/')?;
+    (host.contains('.') && !repository.is_empty()).then_some((host, repository))
+}
+
+/// What a manifest is asked for as: an image index first, so a multi-platform
+/// release's digest is the index's, as `FROM ...@sha256:` takes it.
+const MANIFESTS: &str = "application/vnd.oci.image.index.v1+json, \
+     application/vnd.docker.distribution.manifest.list.v2+json, \
+     application/vnd.oci.image.manifest.v1+json, \
+     application/vnd.docker.distribution.manifest.v2+json";
+
+/// `sha256:` and 64 lower-case hex digits.
+fn is_digest(text: &str) -> bool {
+    text.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    })
 }
 
 pub struct ThisHost;
@@ -157,6 +190,52 @@ impl Host for ThisHost {
             .map_err(|failed| failed.to_string())?;
         let status = response.status().as_u16();
         Ok((status, response.text().await.unwrap_or_default()))
+    }
+
+    async fn digest(&self, image: &str, tag: &str) -> Result<String, String> {
+        let (host, repository) =
+            registry_of(image).ok_or_else(|| format!("{image} names no registry"))?;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|failed| failed.to_string())?;
+        // The anonymous pull token a public repository is read with.
+        let said = client
+            .get(format!(
+                "https://{host}/token?scope=repository:{repository}:pull"
+            ))
+            .send()
+            .await
+            .map_err(|failed| failed.to_string())?
+            .text()
+            .await
+            .unwrap_or_default();
+        let token: serde_json::Value = serde_json::from_str(&said)
+            .map_err(|failed| format!("{host}'s token answer does not read: {failed}"))?;
+        let token = token["token"]
+            .as_str()
+            .ok_or_else(|| format!("{host} gave no anonymous pull token"))?;
+        let answer = client
+            .head(format!("https://{host}/v2/{repository}/manifests/{tag}"))
+            .bearer_auth(token)
+            .header("accept", MANIFESTS)
+            .send()
+            .await
+            .map_err(|failed| failed.to_string())?;
+        if !answer.status().is_success() {
+            return Err(format!("{host} answered {}", answer.status()));
+        }
+        let digest = answer
+            .headers()
+            .get("docker-content-digest")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        if is_digest(&digest) {
+            Ok(digest)
+        } else {
+            Err(format!("{host} named no digest for {image}:{tag}"))
+        }
     }
 }
 
@@ -237,6 +316,19 @@ fn sdk_pin(sdk: &Sdk, pyproject: &str) -> Result<String, String> {
     ))
 }
 
+/// Whether a base in the Dockerfile is pinned by digest as well as by tag:
+/// `plugin-python:X@sha256:...`.
+fn by_digest(sdk: &Sdk, dockerfile: &str) -> bool {
+    let prefix = format!("{}:", sdk.image);
+    dockerfile.match_indices(&prefix).any(|(at, _)| {
+        let rest = &dockerfile[at + prefix.len()..];
+        let tag_end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+            .unwrap_or(rest.len());
+        rest[tag_end..].starts_with("@sha256:")
+    })
+}
+
 /// `plugin-python:X` in the Dockerfile, every place it is said.
 fn base_pins(sdk: &Sdk, dockerfile: &str) -> Vec<(usize, String)> {
     let prefix = format!("{}:", sdk.image);
@@ -283,8 +375,10 @@ pub fn pins(sdk: &Sdk, dir: &Path) -> Result<Pins, String> {
     })
 }
 
-/// Both pins moved to `to`, in the text, and where each was.
-fn moved(sdk: &Sdk, pins: &Pins, to: &str) -> (String, String, Vec<Moved>) {
+/// Both pins moved to `to`, in the text, and where each was. A base pinned
+/// by digest takes `digest`, the new release's, or none where it is not
+/// known: never the old one under the new tag.
+fn moved(sdk: &Sdk, pins: &Pins, to: &str, digest: Option<&str>) -> (String, String, Vec<Moved>) {
     let mut said = Vec::new();
     let mut replace = |file: &str, text: &str, old: &str, new: &str| {
         let mut out = String::with_capacity(text.len());
@@ -294,18 +388,36 @@ fn moved(sdk: &Sdk, pins: &Pins, to: &str) -> (String, String, Vec<Moved>) {
             // Only the whole pin: `==0.6.1` is not the start of `==0.6.10`.
             let after = rest[at + old.len()..].chars().next();
             let whole = !after.is_some_and(|c| c.is_ascii_alphanumeric() || c == '.');
+            // A digest after the tag is the old release's, and goes with it.
+            let pinned = &rest[at + old.len()..];
+            let old_digest = pinned
+                .strip_prefix('@')
+                .filter(|d| d.len() >= 71 && is_digest(&d[..71]))
+                .map(|d| &d[..71]);
             out.push_str(&rest[..at]);
-            out.push_str(if whole { new } else { old });
+            let mut taken = old.len();
             if whole {
+                let mut now = new.to_string();
+                let mut was = old.to_string();
+                if let Some(old_digest) = old_digest {
+                    taken += 1 + old_digest.len();
+                    was = format!("{old}@{old_digest}");
+                    if let Some(digest) = digest {
+                        now = format!("{new}@{digest}");
+                    }
+                }
+                out.push_str(&now);
                 said.push(Moved {
                     file: file.to_string(),
                     line: line_at(text, offset + at),
-                    was: old.to_string(),
-                    now: new.to_string(),
+                    was,
+                    now,
                 });
+            } else {
+                out.push_str(old);
             }
-            offset += at + old.len();
-            rest = &rest[at + old.len()..];
+            offset += at + taken;
+            rest = &rest[at + taken..];
         }
         out.push_str(rest);
         out
@@ -590,9 +702,37 @@ pub async fn migrate(host: &dyn Host, sdk: &Sdk, asked: &Asked) -> Migrated {
     // What the steps are given: the plugin's code, and pyproject.toml and
     // the Dockerfile with their pins moved, as they will be written (0.29.0's
     // step reads whether the image holds the documentation).
-    let (pyproject, dockerfile, pins_moved) = moved(sdk, &pins, &to);
-    let mut sent = std::collections::BTreeMap::new();
+    // A base pinned by digest moves with its tag, or drops it, said.
     let mut by_hand = Vec::new();
+    let digest = if by_digest(sdk, &pins.dockerfile) {
+        match host.digest(sdk.image, &to).await {
+            Ok(digest) => Some(digest),
+            Err(failed) => {
+                by_hand.push(ByHand {
+                    rule: "base-digest".into(),
+                    file: "Dockerfile".into(),
+                    line: base_pins(sdk, &pins.dockerfile).first().map(|(line, _)| *line),
+                    found: format!(
+                        "the base was pinned by digest, and {}:{to}'s could not be read ({failed}), \
+                         so its old digest was dropped rather than kept under the new tag",
+                        sdk.image
+                    ),
+                    instead: format!(
+                        "pin it again: `{}:{to}@sha256:<digest>`, the digest `docker buildx \
+                         imagetools inspect {}:{to}` names",
+                        sdk.image, sdk.image
+                    ),
+                    from: None,
+                    to: None,
+                });
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let (pyproject, dockerfile, pins_moved) = moved(sdk, &pins, &to, digest.as_deref());
+    let mut sent = std::collections::BTreeMap::new();
     for (relative, path) in walk(dir) {
         let extension = relative
             .rsplit_once('.')

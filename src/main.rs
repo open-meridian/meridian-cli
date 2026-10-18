@@ -19,9 +19,11 @@ mod live;
 mod machine;
 mod migrate;
 mod plugin;
+mod plugin_release;
 mod registry;
 mod release;
 mod sessions;
+mod signing;
 mod status;
 mod up;
 mod upgrade_deployment;
@@ -65,6 +67,18 @@ meridian -- bringing a Meridian deployment up
   meridian plugin publish --registry community|verified --tag vX.Y.Z
                              ask the platform to build that signed release tag of the
                              plugin here and list it, after plugin check passes
+  meridian plugin release <version>
+                             release the plugin here: checks (on main, clean, up to
+                             date, main's CI green, the version higher than the last
+                             tag), opens the release PR (pyproject.toml's version and
+                             the CHANGELOG heading) and waits for its CI and for a
+                             person to merge it; then signs v<version> on the merge
+                             commit, pushes it, publishes it and follows the build.
+                             --no-wait stops once the PR is open; run it again to go on
+  meridian plugin key setup  make the key release tags are signed with ready: git's
+                             SSH signing key, or a new one ssh-keygen makes (--hardware:
+                             on a security key); git set to sign with it, and its public
+                             half registered on the organisation
   meridian plugin key register <file.pub> | revoke <key-id> | list
                              the organisation's tag-signing keys at the platform
   meridian plugin download <organisation>/<plugin>@<version>
@@ -210,23 +224,32 @@ asked wrongly, and 3 when there is no session or it has lapsed
                             (read). Without it, the first you hold: Manage, then
                             Open, then View, as the home's first button opens
 
-plugin publish, key, download: through the platform sign-in, made in your browser
-the first time and kept 30 days; never a password. The platform is --platform's
-      --registry <r>        publish: community or verified; download: which registry's
-                            version (default: community)
+plugin publish, release, key, download: through the platform sign-in, made in your
+browser the first time and kept 30 days; never a password. The platform is
+--platform's. release asks GitHub with your own GitHub sign-in: GH_TOKEN or
+GITHUB_TOKEN, else the credential git keeps for github.com
+      --registry <r>        publish: community or verified; release: the same (default:
+                            community); download: which registry's version (default:
+                            community)
       --tag <vX.Y.Z>        publish: the release tag, signed with an SSH key registered on
                             the organisation, of the version pyproject.toml holds
       --organisation <namespace>
-                            publish, key: the organisation the listing or the key is its
+                            publish, release, key: the organisation the listing or the key is its
                             (default: the one the plugin's git remote names); a listing
                             is organisation/plugin
+      --hardware            key setup: where git has no SSH signing key, make one held
+                            on a FIDO security key (ssh-keygen -t ed25519-sk) rather
+                            than a desktop key (-t ed25519)
       --reason <text>       key revoke: why, as the revocation records it
       --not-trusted-after <time>
                             key revoke: when the key stopped being trusted, as
                             2026-10-16T12:00Z (default: now)
       --to <file>           download: where the bundle goes (default:
                             <organisation>-<plugin>-<version>.plugin-bundle.tar)
-      --timeout <d>         publish: how long to follow the build (default: 30m)
+      --timeout <d>         publish: how long to follow the build (default: 30m);
+                            release: that, and how long to wait for the PR's CI and
+                            its merge (default: 30m each)
+      --no-wait             release: stop once the release PR is open
       --details             publish: every check's full text, where it prints one line
                             a check that fits the terminal
 
@@ -357,8 +380,10 @@ const TAKES_A_VALUE: [&str; 31] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 17] = [
+const SWITCHES: [&str; 19] = [
     "--details",
+    "--hardware",
+    "--no-wait",
     "--no-doctor",
     "--force",
     "--run-tests",
@@ -544,6 +569,9 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
     if words.first() == Some(&"publish") {
         return publish_command(arguments, &words, &platform_of(arguments)).await;
     }
+    if words.first() == Some(&"release") {
+        return release_command(arguments, &words, &platform_of(arguments)).await;
+    }
     if words.first() == Some(&"key") {
         return key_command(arguments, &words, &platform_of(arguments)).await;
     }
@@ -568,6 +596,7 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
             match plugin::scaffold(name, &into, role) {
                 Ok(_) => {
                     print!("{}", plugin::next_steps(name, &into, role));
+                    offer_key_setup(&into, &platform_of(arguments)).await;
                     0
                 }
                 Err(refusal) => {
@@ -577,9 +606,33 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
             }
         }
         _ => {
-            eprintln!("meridian: plugin takes `new <name>`, `check`, `migrate`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events`, `open`, `publish`, `key` or `download`\n\n{USAGE}");
+            eprintln!("meridian: plugin takes `new <name>`, `check`, `migrate`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events`, `open`, `publish`, `release <version>`, `key` or `download`\n\n{USAGE}");
             2
         }
+    }
+}
+
+/// `plugin new` on first use: where git has no SSH key to sign release tags
+/// with, offered at a terminal, and said otherwise (ruling 256).
+async fn offer_key_setup(into: &std::path::Path, platform: &str) {
+    use std::io::IsTerminal as _;
+    if signing::has_ssh_key(&signing::ThisWorkstation, into) {
+        return;
+    }
+    if !std::io::stdin().is_terminal() {
+        println!(
+            "\nIts releases are tags signed with an SSH key, which git has none of here yet: \
+             `meridian plugin key setup` makes one ready."
+        );
+        return;
+    }
+    println!(
+        "\nIts releases are tags signed with an SSH key, which git has none of here yet. \
+         `meridian plugin key setup` makes one ready (a desktop key; --hardware for one on a \
+         security key), and you may run it later."
+    );
+    if approved("Set up a signing key now?") {
+        set_up_key(into, false, None, platform).await;
     }
 }
 
@@ -1325,38 +1378,152 @@ async fn publish_command(arguments: &Arguments, words: &[&str], platform: &str) 
             details: arguments.set("--details"),
         },
     };
+    published(&asked, platform, "publish").await
+}
+
+/// The publish path, `plugin publish`'s and `plugin release`'s: the
+/// pre-flight, the request under a push token, the build followed, and its
+/// report.
+async fn published(asked: &registry::Publish, platform: &str, verb: &str) -> i32 {
     // The pre-flight first, so a plugin that would fail is told before any
     // browser is opened.
-    if let Err(refused) = registry::preflight(&asked, &registry::Git) {
-        eprintln!("meridian plugin publish: {refused}");
+    if let Err(refused) = registry::preflight(asked, &registry::Git) {
+        eprintln!("meridian plugin {verb}: {refused}");
         return 1;
     }
     let session = match signed_in(platform).await {
         Ok(session) => session,
         Err(failed) => {
-            eprintln!("meridian plugin publish: {failed}");
+            eprintln!("meridian plugin {verb}: {failed}");
             return 1;
         }
     };
-    match registry::publish(&asked, &registry::Git, &session).await {
+    match registry::publish(asked, &registry::Git, &session).await {
         Ok(build) => {
             print!("{}", registry::said(&build, platform, &asked.shown));
             match build["state"].as_str() {
                 Some("PLUGIN_BUILD_STATE_REFUSED") => 1,
+                Some("PLUGIN_BUILD_STATE_IN_REVIEW") => {
+                    if let Some(listing) = build["listing"].as_str() {
+                        println!("  its listing, once reviewed: {platform}/plugins/{listing}");
+                    }
+                    0
+                }
                 _ => 0,
             }
         }
         Err(failed) => {
-            eprintln!("meridian plugin publish: {failed}");
+            eprintln!("meridian plugin {verb}: {failed}");
             1
         }
     }
 }
 
+/// `meridian plugin release <version>` (ruling 256): the checks, the release
+/// PR and its CI, the merge a person makes, then the signed tag on the merge
+/// commit, published and followed. `--no-wait` stops after the PR; running
+/// it again resumes.
+async fn release_command(arguments: &Arguments, words: &[&str], platform: &str) -> i32 {
+    let ["release", version] = words else {
+        eprintln!("meridian plugin release: takes the version, as `meridian plugin release 1.4.0`\n\n{USAGE}");
+        return 2;
+    };
+    let version = version.trim_start_matches('v');
+    let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
+    let registry = arguments
+        .value("--registry", "--registry")
+        .unwrap_or("community");
+    if !matches!(registry, "community" | "verified") {
+        eprintln!("meridian plugin release: --registry is community or verified");
+        return 2;
+    }
+    let organisation = match registry::organisation(
+        arguments.value("--organisation", "--organisation"),
+        &dir,
+        &registry::Git,
+    ) {
+        Ok(organisation) => organisation,
+        Err(refused) => {
+            eprintln!("meridian plugin release: {refused}");
+            return 2;
+        }
+    };
+    let timeout = match arguments.value("--timeout", "--timeout") {
+        None => registry::FOLLOW_FOR,
+        Some(given) => match upgrade_deployment::duration(given) {
+            Some(duration) => duration,
+            None => {
+                eprintln!("meridian plugin release: --timeout takes a duration: 30m, 1h");
+                return 2;
+            }
+        },
+    };
+    let repo = plugin_release::Checkout(dir.clone());
+    let github = match plugin_release::Repository::origin(&repo)
+        .and_then(|origin| registry::github_repository(&origin))
+        .and_then(|url| {
+            plugin_release::owner_and_name(&url).ok_or_else(|| format!("{url} names no repository"))
+        }) {
+        Ok((owner, repository)) => match plugin_release::github_token() {
+            Ok(token) => plugin_release::Rest {
+                api: "https://api.github.com".into(),
+                owner,
+                repository,
+                token,
+            },
+            Err(refused) => {
+                eprintln!("meridian plugin release: {refused}");
+                return 1;
+            }
+        },
+        Err(refused) => {
+            eprintln!("meridian plugin release: {refused}");
+            return 2;
+        }
+    };
+    let today = registry::moment(credential::now_s() * 1_000_000_000)[..10].to_string();
+    let asked = plugin_release::Asked {
+        dir: dir.clone(),
+        version: version.to_string(),
+        wait: !arguments.set("--no-wait"),
+        every: std::time::Duration::from_secs(15),
+        timeout,
+        today,
+    };
+    let mut say = |line: &str| eprintln!("{line}");
+    let tag = match plugin_release::release(&asked, &repo, &github, &mut say).await {
+        Ok(plugin_release::Reached::Stopped(said)) => {
+            println!("{said}");
+            return 0;
+        }
+        Ok(plugin_release::Reached::Tagged { tag, .. }) => tag,
+        Err(refused) => {
+            eprintln!("meridian plugin release: {refused}");
+            return 1;
+        }
+    };
+    let publish = registry::Publish {
+        dir,
+        registry: registry.into(),
+        tag,
+        organisation,
+        follow_for: timeout,
+        follow_every: registry::FOLLOW_EVERY,
+        shown: registry::Shown {
+            width: registry::terminal_width(),
+            details: arguments.set("--details"),
+        },
+    };
+    published(&publish, platform, "release").await
+}
+
 /// `meridian plugin key register <file.pub> | revoke <key-id> | list`
-/// (W5.30), the organisation's tag-signing keys.
+/// (W5.30), the organisation's tag-signing keys; and `setup` (ruling 256).
 async fn key_command(arguments: &Arguments, words: &[&str], platform: &str) -> i32 {
     let dir = std::path::PathBuf::from(arguments.value("--dir", "--dir").unwrap_or("."));
+    if words == ["key", "setup"] {
+        return key_setup(arguments, &dir, platform).await;
+    }
     let organisation = match registry::organisation(
         arguments.value("--organisation", "--organisation"),
         &dir,
@@ -1429,7 +1596,7 @@ async fn key_command(arguments: &Arguments, words: &[&str], platform: &str) -> i
         }
         ["key", "list"] => Act::List,
         _ => {
-            eprintln!("meridian plugin key: takes `register <file.pub>`, `revoke <key-id>` or `list`\n\n{USAGE}");
+            eprintln!("meridian plugin key: takes `setup`, `register <file.pub>`, `revoke <key-id>` or `list`\n\n{USAGE}");
             return 2;
         }
     };
@@ -1474,6 +1641,95 @@ async fn key_command(arguments: &Arguments, words: &[&str], platform: &str) -> i
         }
         Err(failed) => {
             eprintln!("meridian plugin key: {failed}");
+            1
+        }
+    }
+}
+
+/// `meridian plugin key setup [--hardware]` (ruling 256): git's SSH signing
+/// key, or one ssh-keygen makes, git set to sign with it, and its public half
+/// registered on the organisation where the person may.
+async fn key_setup(arguments: &Arguments, dir: &std::path::Path, platform: &str) -> i32 {
+    let organisation = match arguments.value("--organisation", "--organisation") {
+        Some(given) => match registry::organisation(Some(given), dir, &registry::Git) {
+            Ok(organisation) => Some(organisation),
+            Err(refused) => {
+                eprintln!("meridian plugin key setup: {refused}");
+                return 2;
+            }
+        },
+        None => registry::organisation(None, dir, &registry::Git).ok(),
+    };
+    set_up_key(
+        dir,
+        arguments.set("--hardware"),
+        organisation.as_deref(),
+        platform,
+    )
+    .await
+}
+
+/// The key made ready and registered: `key setup`, and `plugin new`'s offer.
+async fn set_up_key(
+    dir: &std::path::Path,
+    hardware: bool,
+    organisation: Option<&str>,
+    platform: &str,
+) -> i32 {
+    let asked = signing::Setup {
+        dir: dir.to_path_buf(),
+        hardware,
+    };
+    let ready = match signing::prepare(&signing::ThisWorkstation, &asked) {
+        Ok(ready) => ready,
+        Err(refused) => {
+            eprintln!("meridian plugin key setup: {refused}");
+            return 1;
+        }
+    };
+    print!("{}", signing::said(&ready));
+    let Some(organisation) = organisation else {
+        println!(
+            "Git signs release tags with it. Register its public half on your organisation once \
+             the plugin's repository is on GitHub: `meridian plugin key setup` there again, or \
+             `meridian plugin key register {} --organisation <namespace>`.",
+            ready
+                .file
+                .as_ref()
+                .map(|file| file.display().to_string())
+                .unwrap_or_else(|| "<the key's .pub>".into())
+        );
+        return 0;
+    };
+    let session = match signed_in(platform).await {
+        Ok(session) => session,
+        Err(failed) => {
+            eprintln!("meridian plugin key setup: {failed}");
+            return 1;
+        }
+    };
+    match signing::register(&session, organisation, &ready).await {
+        Ok(signing::Registered::Already(key_id)) => {
+            println!(
+                "It is registered on {organisation} already, as {key_id}: a tag it signs is built."
+            );
+            0
+        }
+        Ok(signing::Registered::Made {
+            key_id,
+            fingerprint,
+        }) => {
+            println!(
+                "Registered {fingerprint} on {organisation}, as {key_id}: a tag it signs is built, from now."
+            );
+            0
+        }
+        Ok(signing::Registered::Ask(said)) => {
+            print!("{said}");
+            1
+        }
+        Err(failed) => {
+            eprintln!("meridian plugin key setup: {failed}");
             1
         }
     }

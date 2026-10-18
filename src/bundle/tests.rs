@@ -141,11 +141,7 @@ fn the_pinned_platform_key_is_the_registry_signing_keys_public_half() {
     assert!(!signed_by(&keys, &message, &signature));
     assert!(!key_status_signed(&throwaway.key_status(false), &keys));
     assert!(
-        signed_by(
-            &[keys[0].clone(), throwaway.pem()],
-            &message,
-            &signature
-        ),
+        signed_by(&[keys[0].clone(), throwaway.pem()], &message, &signature),
         "beside the pinned key, a next one is taken"
     );
 }

@@ -437,8 +437,7 @@ async fn a_publish_signs_in_narrows_its_token_and_follows_the_build_until_it_is_
 
 #[tokio::test]
 async fn a_platform_that_does_not_narrow_on_refresh_is_signed_in_to_for_the_plugin_alone() {
-    let (address, kept) = platform(Platform::default())
-    .await;
+    let (address, kept) = platform(Platform::default()).await;
     let scratch = Scratch::new("narrowed");
     let signed_in = SignedIn::within(scratch.0.join("platform"), &address, open_in_a_browser())
         .await
@@ -546,7 +545,10 @@ async fn the_browser_is_opened_for_a_narrowed_sign_in_once_a_publish_at_most() {
         .push_token("acme", "venue-desk")
         .await
         .unwrap_err();
-    assert!(refused.contains("signed in for it once already"), "{refused}");
+    assert!(
+        refused.contains("signed in for it once already"),
+        "{refused}"
+    );
     assert_eq!(authorized(&kept), ["publish", "publish:acme/venue-desk"]);
 }
 
@@ -577,7 +579,11 @@ fn a_build_report_is_one_line_a_check_and_every_full_text_with_details() {
         "  FAIL  licences: requests 2.31 is GPL-3.0, the plugin Apache-2.0"
     );
     assert!(lines[2].starts_with("  warn  vulnerabilities: an older finding"));
-    assert!(lines[2].ends_with('…') && lines[2].chars().count() == 70, "{}", lines[2]);
+    assert!(
+        lines[2].ends_with('…') && lines[2].chars().count() == 70,
+        "{}",
+        lines[2]
+    );
     assert_eq!(lines[3], "  ok    tag signature: signed");
     assert_eq!(lines[4], "  (--details prints each check's full text)");
     assert!(!said.contains("Replace it"), "{said}");
@@ -587,8 +593,14 @@ fn a_build_report_is_one_line_a_check_and_every_full_text_with_details() {
     assert!(detailed.contains(
         "  FAIL  licences: requests 2.31 is GPL-3.0, the plugin Apache-2.0\n          requests 2.31.0 (GPL-3.0-only) conflicts"
     ), "{detailed}");
-    assert!(detailed.contains("\n\n          Replace it, or relicense the plugin.\n"), "{detailed}");
-    assert!(detailed.contains("at forty\n"), "the older finding whole: {detailed}");
+    assert!(
+        detailed.contains("\n\n          Replace it, or relicense the plugin.\n"),
+        "{detailed}"
+    );
+    assert!(
+        detailed.contains("at forty\n"),
+        "the older finding whole: {detailed}"
+    );
     assert!(!detailed.contains("--details"), "{detailed}");
     assert_eq!(detail_parts("one line"), ("one line", "one line"));
     assert_eq!(fitted("short", 10), "short");

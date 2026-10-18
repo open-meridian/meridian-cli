@@ -425,10 +425,7 @@ impl SignedIn {
         }
         // The platform answered a wider token: a sign-in narrowed to this
         // plugin, for this publish alone, and the browser opened for it once.
-        if self
-            .browsed
-            .swap(true, std::sync::atomic::Ordering::SeqCst)
-        {
+        if self.browsed.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return Err(format!(
                 "{} did not narrow the sign-in's token to {organisation}/{plugin}, and this \
                  publish has signed in for it once already; the build goes on at the platform: \

@@ -99,6 +99,7 @@ struct Fake {
     index: Result<(u16, String), String>,
     build: Ran,
     migrations: Ran,
+    digest: Result<String, String>,
     asked: Mutex<Vec<(String, Vec<String>, String)>>,
 }
 
@@ -113,6 +114,7 @@ impl Fake {
             )),
             build: ran(0, "sha256:abc", ""),
             migrations: ran(0, migrations, ""),
+            digest: Ok(NEW_DIGEST.into()),
             asked: Mutex::new(Vec::new()),
         }
     }
@@ -160,6 +162,30 @@ impl Host for Fake {
             .push(("GET".into(), vec![url.into()], String::new()));
         self.index.clone()
     }
+
+    async fn digest(&self, image: &str, tag: &str) -> Result<String, String> {
+        self.asked.lock().unwrap().push((
+            "DIGEST".into(),
+            vec![format!("{image}:{tag}")],
+            String::new(),
+        ));
+        self.digest.clone()
+    }
+}
+
+const OLD_DIGEST: &str = "sha256:f3b62d27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const NEW_DIGEST: &str = "sha256:a238c6d9292779b4f1df0a06cd30836367c01412a703b559a7414137f3473ed6";
+
+/// The plugin's base pinned by digest, as plugins pin it from 0.29.0's
+/// releases.
+fn pinned_by_digest(plugin: &Plugin, version: &str) {
+    let base = format!("plugin-python:{version}");
+    let text = plugin.read("Dockerfile");
+    assert!(text.contains(&base));
+    plugin.write(
+        "Dockerfile",
+        &text.replace(&base, &format!("{base}@{OLD_DIGEST}")),
+    );
 }
 
 /// What the migrations answer for the scaffold: its page rewritten, one
@@ -262,7 +288,7 @@ fn pins_that_disagree_or_are_missing_are_refused() {
 fn a_pin_moves_whole_and_says_where_it_was() {
     let plugin = Plugin::at("moved", "0.6.1");
     let held = pins(&PYTHON, &plugin.0).unwrap();
-    let (pyproject, dockerfile, said) = moved(&PYTHON, &held, "0.7.0");
+    let (pyproject, dockerfile, said) = moved(&PYTHON, &held, "0.7.0", None);
     assert!(pyproject.contains("open-meridian==0.7.0") && !pyproject.contains("0.6.1"));
     assert!(dockerfile.contains("plugin-python:0.7.0") && !dockerfile.contains("0.6.1"));
     assert_eq!(
@@ -275,8 +301,79 @@ fn a_pin_moves_whole_and_says_where_it_was() {
         pyproject: "x = \"open-meridian==0.6.10\"\n".into(),
         dockerfile: String::new(),
     };
-    let (pyproject, _, said) = moved(&PYTHON, &longer, "0.7.0");
+    let (pyproject, _, said) = moved(&PYTHON, &longer, "0.7.0", None);
     assert!(pyproject.contains("==0.6.10") && said.is_empty());
+}
+
+#[test]
+fn a_base_pinned_by_digest_moves_with_its_tag_or_drops_it() {
+    let plugin = Plugin::at("digest", "0.6.1");
+    pinned_by_digest(&plugin, "0.6.1");
+    let held = pins(&PYTHON, &plugin.0).unwrap();
+    assert_eq!(
+        held.version, "0.6.1",
+        "the tag is the pin, its digest beside it"
+    );
+    assert!(by_digest(&PYTHON, &held.dockerfile));
+
+    let (_, dockerfile, said) = moved(&PYTHON, &held, "0.7.0", Some(NEW_DIGEST));
+    assert!(
+        dockerfile.contains(&format!("plugin-python:0.7.0@{NEW_DIGEST}")),
+        "{dockerfile}"
+    );
+    assert!(!dockerfile.contains(OLD_DIGEST) && !dockerfile.contains("0.6.1"));
+    let base = said.iter().find(|m| m.file == "Dockerfile").unwrap();
+    assert_eq!(
+        base.was,
+        format!("ghcr.io/open-meridian/plugin-python:0.6.1@{OLD_DIGEST}")
+    );
+    assert_eq!(
+        base.now,
+        format!("ghcr.io/open-meridian/plugin-python:0.7.0@{NEW_DIGEST}")
+    );
+
+    // Not known: the old digest goes, and nothing stands in for it.
+    let (_, dockerfile, _) = moved(&PYTHON, &held, "0.7.0", None);
+    assert!(dockerfile.contains("plugin-python:0.7.0\n"), "{dockerfile}");
+    assert!(!dockerfile.contains("@sha256:"), "{dockerfile}");
+    // A base by tag alone is not given a digest.
+    let plain = Plugin::at("tag-alone", "0.6.1");
+    let held = pins(&PYTHON, &plain.0).unwrap();
+    assert!(!by_digest(&PYTHON, &held.dockerfile));
+}
+
+#[tokio::test]
+async fn a_digest_is_read_for_the_new_release_and_its_failure_left_by_hand() {
+    let plugin = Plugin::at("digest-read", "0.6.1");
+    pinned_by_digest(&plugin, "0.6.1");
+    let page = plugin.read("src/migrated_plugin/page.py");
+    let fake = Fake::new(&answered(&page));
+    let report = done(migrate(&fake, &PYTHON, &plugin.asked()).await);
+    assert!(fake.calls().iter().any(|(what, said, _)| what == "DIGEST"
+        && said == &["ghcr.io/open-meridian/plugin-python:0.7.0".to_string()]));
+    assert!(plugin
+        .read("Dockerfile")
+        .contains(&format!("plugin-python:0.7.0@{NEW_DIGEST}")));
+    assert!(!report.by_hand.iter().any(|left| left.rule == "base-digest"));
+
+    let plugin = Plugin::at("digest-unread", "0.6.1");
+    pinned_by_digest(&plugin, "0.6.1");
+    let page = plugin.read("src/migrated_plugin/page.py");
+    let fake = Fake {
+        digest: Err("ghcr.io answered 503".into()),
+        ..Fake::new(&answered(&page))
+    };
+    let report = done(migrate(&fake, &PYTHON, &plugin.asked()).await);
+    let written = plugin.read("Dockerfile");
+    assert!(written.contains("plugin-python:0.7.0\n"), "{written}");
+    assert!(!written.contains("@sha256:"), "{written}");
+    let left = report
+        .by_hand
+        .iter()
+        .find(|left| left.rule == "base-digest")
+        .expect("said");
+    assert!(left.found.contains("ghcr.io answered 503") && left.found.contains("dropped"));
+    assert!(!report.done());
 }
 
 // ── Refused before anything changes ──────────────────────────────────────
