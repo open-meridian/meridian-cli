@@ -1,19 +1,18 @@
-//! `meridian plugin release <version>` (ruling 256): a plugin's release in
-//! one command, its merge a person's.
+//! `meridian plugin release <version>` (ruling 323, revising 256): a
+//! plugin's release in one command, which checks, signs and publishes. It
+//! makes no pull request and writes no file: the version bump and the
+//! CHANGELOG entry went in with the change's own pull request.
 //!
 //! 1. **Checks**: the plugin's checkout is on its default branch, clean, and
-//!    up to date with `origin`; that branch's last CI run is green; and the
-//!    version is higher than the last release tag.
-//! 2. **The release PR**: `pyproject.toml`'s version and the CHANGELOG's
-//!    heading for it, on a branch `release/v<version>` made in a worktree of
-//!    its own (the person's checkout is never switched), pushed, and a pull
-//!    request opened. Then its CI is waited for, and then its merge, which
-//!    stays a person's. `--no-wait` stops once the PR is open; running the
-//!    command again resumes from whatever has happened since: a PR open, one
-//!    merged, a tag made.
-//! 3. **The tag**: `v<version>` signed (git's SSH signing key, which `meridian
-//!    plugin key setup` makes ready) on the merge commit, and pushed.
-//! 4. **Publishing**: the existing path (`meridian plugin publish`), its build
+//!    up to date with `origin`; the version is higher than the last release
+//!    tag; `pyproject.toml`'s version is already that version; the CHANGELOG
+//!    has its `## <version>` heading, undated (the date lives on the tag and
+//!    the listing); and that branch's last CI run is green. Each refusal says
+//!    what to do next.
+//! 2. **The tag**: `v<version>` signed (git's SSH signing key, which `meridian
+//!    plugin key setup` makes ready) on the branch's head, and pushed. Run
+//!    again once the tag is on origin, it publishes that tag.
+//! 3. **Publishing**: the existing path (`meridian plugin publish`), its build
 //!    followed, and the listing's address printed. No package-visibility step:
 //!    the builder pushes the image, and a package it pushes is created public.
 //!
@@ -26,11 +25,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::registry;
-
-/// The branch a release's PR is made on.
-pub fn branch_of(version: &str) -> String {
-    format!("release/v{version}")
-}
 
 // ── The repository ───────────────────────────────────────────────────────
 
@@ -49,19 +43,9 @@ pub trait Repository: Sync {
     /// The commit a tag at `origin` names, or None where origin has none.
     fn remote_tag(&self, tag: &str) -> Result<Option<String>, String>;
     fn origin(&self) -> Result<String, String>;
-    /// A file at `revision`, or None where it has none.
+    /// A file at `revision`, byte for byte (its final newline kept), or
+    /// None where it has none.
     fn show(&self, revision: &str, path: &str) -> Option<String>;
-    /// `files` written over `base` and committed as `message` on `branch`,
-    /// in a worktree of its own, and pushed to origin: the commit.
-    fn push_branch(
-        &self,
-        base: &str,
-        branch: &str,
-        files: &[(String, String)],
-        message: &str,
-    ) -> Result<String, String>;
-    /// `git merge --ff-only origin/<branch>`, on a clean checkout of it.
-    fn fast_forward(&self, branch: &str) -> Result<(), String>;
     /// `git config --get <key>`.
     fn config(&self, key: &str) -> Option<String>;
     /// `tag` made at `commit`, annotated with `message` and signed (`-s`).
@@ -174,49 +158,21 @@ impl Repository for Checkout {
     }
 
     fn show(&self, revision: &str, path: &str) -> Option<String> {
-        self.git(&["show", &format!("{revision}:{path}")]).ok()
-    }
-
-    fn push_branch(
-        &self,
-        base: &str,
-        branch: &str,
-        files: &[(String, String)],
-        message: &str,
-    ) -> Result<String, String> {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|since| since.as_nanos())
-            .unwrap_or_default();
-        let worktree = std::env::temp_dir().join(format!("meridian-release-{unique}"));
-        let at = worktree.display().to_string();
-        self.git(&["worktree", "add", "--quiet", "--detach", &at, base])?;
-        let made = (|| {
-            for (path, text) in files {
-                std::fs::write(worktree.join(path), text)
-                    .map_err(|failed| format!("{path}: {failed}"))?;
-                git_in(&worktree, &["add", "--", path])?;
-            }
-            git_at_terminal(&worktree, &["commit", "--quiet", "-m", message])?;
-            let commit = git_in(&worktree, &["rev-parse", "HEAD"])?;
-            git_at_terminal(
-                &worktree,
-                &[
-                    "push",
-                    "--quiet",
-                    "origin",
-                    &format!("HEAD:refs/heads/{branch}"),
-                ],
-            )?;
-            Ok(commit)
-        })();
-        let _ = self.git(&["worktree", "remove", "--force", &at]);
-        made
-    }
-
-    fn fast_forward(&self, branch: &str) -> Result<(), String> {
-        self.git(&["merge", "--ff-only", "--quiet", &format!("origin/{branch}")])
-            .map(|_| ())
+        // Not through `git`, which trims what git printed: a file is read
+        // as git holds it, its final newline kept. (0.1.48's release PR
+        // wrote CHANGELOG.md and pyproject.toml back from this trimmed, so
+        // without their final newline.)
+        let shown = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.0)
+            .args(["show", &format!("{revision}:{path}")])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .ok()?;
+        shown
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&shown.stdout).into_owned())
     }
 
     fn config(&self, key: &str) -> Option<String> {
@@ -250,32 +206,11 @@ pub enum Ci {
     Red(Vec<String>),
 }
 
-/// A pull request, as release reads it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Pull {
-    pub number: u64,
-    pub url: String,
-    pub head: String,
-    pub state: String,
-    pub merged: bool,
-    pub merge_commit: Option<String>,
-}
-
 /// GitHub, as release asks it.
 #[async_trait::async_trait]
 pub trait GitHub: Sync {
     async fn default_branch(&self) -> Result<String, String>;
     async fn ci(&self, commit: &str) -> Result<Ci, String>;
-    /// The release PR from `branch`, the newest, open or closed.
-    async fn pull_from(&self, branch: &str) -> Result<Option<Pull>, String>;
-    async fn pull(&self, number: u64) -> Result<Pull, String>;
-    async fn open_pull(
-        &self,
-        branch: &str,
-        base: &str,
-        title: &str,
-        body: &str,
-    ) -> Result<Pull, String>;
 }
 
 /// The person's GitHub sign-in: `GH_TOKEN` or `GITHUB_TOKEN`, else the
@@ -311,10 +246,10 @@ pub fn github_token() -> Result<String, String> {
         .find_map(|line| line.strip_prefix("password=").map(str::to_string))
         .filter(|token| !token.is_empty());
     password.ok_or_else(|| {
-        "the release PR is opened through GitHub's API with your GitHub sign-in, and none was \
-         found: not GH_TOKEN, not GITHUB_TOKEN, and git keeps no credential for github.com. \
-         `gh auth setup-git` gives git one, or set GH_TOKEN to a token that may write pull \
-         requests and read checks on the plugin's repository"
+        "main's CI is read through GitHub's API with your GitHub sign-in, and none was found: \
+         not GH_TOKEN, not GITHUB_TOKEN, and git keeps no credential for github.com. `gh auth \
+         setup-git` gives git one, or set GH_TOKEN to a token that may read checks on the \
+         plugin's repository"
             .to_string()
     })
 }
@@ -385,7 +320,7 @@ impl Rest {
                 401 => format!("GitHub did not take your sign-in ({message})"),
                 403 | 404 => format!(
                     "GitHub refused ({status}: {message}): your sign-in may not reach \
-                     {}/{}, or may not write pull requests there",
+                     {}/{}, or may not read its checks",
                     self.owner, self.repository
                 ),
                 _ => format!("GitHub refused ({status}): {message}"),
@@ -393,21 +328,6 @@ impl Rest {
         }
         serde_json::from_str(&text)
             .map_err(|failed| format!("GitHub answered unreadably: {failed}"))
-    }
-}
-
-fn pull_of(said: &serde_json::Value) -> Pull {
-    Pull {
-        number: said["number"].as_u64().unwrap_or(0),
-        url: said["html_url"].as_str().unwrap_or_default().to_string(),
-        head: said["head"]["sha"].as_str().unwrap_or_default().to_string(),
-        state: said["state"].as_str().unwrap_or_default().to_string(),
-        merged: said["merged_at"].as_str().is_some_and(|at| !at.is_empty())
-            || said["merged"] == true,
-        merge_commit: said["merge_commit_sha"]
-            .as_str()
-            .filter(|sha| !sha.is_empty())
-            .map(String::from),
     }
 }
 
@@ -481,46 +401,6 @@ impl GitHub for Rest {
             .await?;
         Ok(ci_of(&runs, &statuses))
     }
-
-    async fn pull_from(&self, branch: &str) -> Result<Option<Pull>, String> {
-        let said = self
-            .call(
-                reqwest::Method::GET,
-                &format!(
-                    "/pulls?state=all&head={}:{branch}&sort=created&direction=desc",
-                    self.owner
-                ),
-                None,
-            )
-            .await?;
-        Ok(said.as_array().and_then(|pulls| pulls.first()).map(pull_of))
-    }
-
-    async fn pull(&self, number: u64) -> Result<Pull, String> {
-        let said = self
-            .call(reqwest::Method::GET, &format!("/pulls/{number}"), None)
-            .await?;
-        Ok(pull_of(&said))
-    }
-
-    async fn open_pull(
-        &self,
-        branch: &str,
-        base: &str,
-        title: &str,
-        body: &str,
-    ) -> Result<Pull, String> {
-        let said = self
-            .call(
-                reqwest::Method::POST,
-                "/pulls",
-                Some(&serde_json::json!({
-                    "title": title, "head": branch, "base": base, "body": body,
-                })),
-            )
-            .await?;
-        Ok(pull_of(&said))
-    }
 }
 
 /// `https://github.com/<owner>/<repository>` as its owner and name.
@@ -532,86 +412,56 @@ pub fn owner_and_name(repository: &str) -> Option<(String, String)> {
 
 // ── The files ────────────────────────────────────────────────────────────
 
-/// pyproject.toml with `[project]`'s version set to `version`; None where
-/// it names none.
-pub fn with_version(pyproject: &str, version: &str) -> Option<String> {
-    let mut out = String::with_capacity(pyproject.len());
+/// `[project]`'s version in pyproject.toml, or None where it names none.
+pub fn version_of(pyproject: &str) -> Option<String> {
     let mut in_project = false;
-    let mut done = false;
-    for line in pyproject.split_inclusive('\n') {
+    for line in pyproject.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with('[') {
             in_project = trimmed == "[project]";
+            continue;
         }
-        if in_project && !done {
-            if let Some(rest) = trimmed.strip_prefix("version") {
-                if rest.trim_start().starts_with('=') {
-                    let end = if line.ends_with('\n') { "\n" } else { "" };
-                    let indent = &line[..line.len() - line.trim_start().len()];
-                    out.push_str(&format!("{indent}version = \"{version}\"{end}"));
-                    done = true;
-                    continue;
-                }
+        if !in_project {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("version") {
+            if let Some(value) = rest.trim_start().strip_prefix('=') {
+                let value = value.split('#').next().unwrap_or_default().trim();
+                return Some(value.trim_matches(['"', '\'']).to_string());
             }
         }
-        out.push_str(line);
     }
-    done.then_some(out)
+    None
 }
 
-/// The CHANGELOG with `version`'s heading dated `date`: its own heading
-/// (`## 0.4.0 (not released)`) or an `## Unreleased` one renamed, or a new
-/// heading above the first release's. Without a CHANGELOG, one is begun.
-pub fn with_heading(changelog: Option<&str>, version: &str, date: &str) -> String {
-    let heading = format!("## {version} ({date})");
+/// Where the CHANGELOG stands for `version`: Ok when it has the heading
+/// `## <version>` alone; else what to do, said.
+pub fn changelog_entry(changelog: Option<&str>, version: &str) -> Result<(), String> {
+    let wanted = format!("## {version}");
+    let next = "add it, with this release's changes, in a pull request (with pyproject.toml's \
+                version), merge it, then run this again";
     let Some(text) = changelog else {
-        return format!("# Changelog\n\n{heading}\n");
+        return Err(format!(
+            "the plugin has no CHANGELOG.md in git, so no `{wanted}` entry: {next}"
+        ));
     };
-    let is_versions = |line: &str| {
-        let rest = line.trim_start_matches('#').trim();
-        line.starts_with("## ")
-            && (rest == version
-                || rest.starts_with(&format!("{version} "))
-                || rest == format!("[{version}]")
-                || rest.starts_with(&format!("[{version}] ")))
+    // `## 0.4.0`, `## [0.4.0]`, `## 0.4.0 (2026-10-18)`, `## 0.4.0 (unreleased)`:
+    // each names 0.4.0; `## 0.4.01` does not.
+    let names_it = |line: &str| {
+        line.strip_prefix("## ").is_some_and(|rest| {
+            rest.split_whitespace()
+                .next()
+                .is_some_and(|first| first.trim_matches(['[', ']']) == version)
+        })
     };
-    let is_unreleased = |line: &str| {
-        line.starts_with("## ")
-            && line
-                .trim_start_matches('#')
-                .trim()
-                .trim_matches(['[', ']'])
-                .eq_ignore_ascii_case("unreleased")
-    };
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    let at = lines
-        .iter()
-        .position(|line| is_versions(line))
-        .or_else(|| lines.iter().position(|line| is_unreleased(line)));
-    if let Some(at) = at {
-        let mut out = String::new();
-        for (n, line) in lines.iter().enumerate() {
-            if n == at {
-                out.push_str(&heading);
-                out.push('\n');
-            } else {
-                out.push_str(line);
-            }
-        }
-        return out;
-    }
-    match lines.iter().position(|line| line.starts_with("## ")) {
-        Some(first) => {
-            let mut out: String = lines[..first].concat();
-            out.push_str(&format!("{heading}\n\n"));
-            out.push_str(&lines[first..].concat());
-            out
-        }
-        None => {
-            let mut out = text.trim_end().to_string();
-            out.push_str(&format!("\n\n{heading}\n"));
-            out
-        }
+    match text.lines().map(str::trim_end).find(|line| names_it(line)) {
+        Some(line) if line == wanted => Ok(()),
+        Some(line) => Err(format!(
+            "CHANGELOG.md's heading for {version} is `{line}`: make it `{wanted}` alone, with no \
+             date and no \"(unreleased)\" (the date lives on the tag and the listing), in a pull \
+             request, merge it, then run this again"
+        )),
+        None => Err(format!("CHANGELOG.md has no `{wanted}` heading: {next}")),
     }
 }
 
@@ -629,30 +479,23 @@ pub fn last_release(tags: &[String]) -> Option<String> {
 pub struct Asked {
     pub dir: PathBuf,
     pub version: String,
-    pub wait: bool,
-    pub every: Duration,
-    pub timeout: Duration,
-    /// Today, `YYYY-MM-DD`, the CHANGELOG heading's date.
-    pub today: String,
 }
 
-/// Where a release stopped.
+/// The tag on origin, signed, at this commit: publish it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Reached {
-    /// The PR is open (`--no-wait`), or a wait timed out: what to say.
-    Stopped(String),
-    /// The tag is on origin at this commit, signed: publish it.
-    Tagged { tag: String, commit: String },
+pub struct Tagged {
+    pub tag: String,
+    pub commit: String,
 }
 
-/// The release, from wherever it stands, to its tag on origin. Each step
-/// said through `say`.
+/// The release, from its checks to its tag on origin. Each step said
+/// through `say`.
 pub async fn release(
     asked: &Asked,
     repo: &dyn Repository,
     github: &dyn GitHub,
     say: &mut (dyn FnMut(&str) + Send),
-) -> Result<Reached, String> {
+) -> Result<Tagged, String> {
     let version = asked.version.as_str();
     let tag = format!("v{version}");
     if registry::semver_of_tag(&tag).is_none() {
@@ -666,211 +509,89 @@ pub async fn release(
         .map_err(|failed| format!("{} has no pyproject.toml: {failed}", asked.dir.display()))?;
     let name = crate::catalogue::metadata(&pyproject_now)?.name;
 
-    // A tag on origin already: the release is past its merge.
+    // A tag on origin already: signed and pushed by an earlier run, whose
+    // publish did not finish.
     if let Some(commit) = repo.remote_tag(&tag)? {
         say(&format!(
             "{tag} is on origin already, at {}; publishing it.",
             short(&commit)
         ));
-        return Ok(Reached::Tagged { tag, commit });
+        return Ok(Tagged { tag, commit });
     }
 
-    let branch = branch_of(version);
-    let pull = match github.pull_from(&branch).await? {
-        Some(pull) if pull.merged => Some(pull),
-        Some(pull) if pull.state == "open" => Some(pull),
-        Some(pull) => {
-            return Err(format!(
-                "the release PR for {version}, #{} ({}), was closed without being merged: reopen \
-                 it, or delete the branch {branch} at origin to begin again",
-                pull.number, pull.url
-            ))
-        }
-        None => None,
-    };
-
-    let pull = match pull {
-        Some(pull) => {
-            say(&format!("The release PR is #{}: {}", pull.number, pull.url));
-            pull
-        }
-        None => {
-            // Checks, before anything is made.
-            let on = repo.branch()?;
-            if on.as_deref() != Some(main.as_str()) {
-                return Err(format!(
-                    "the checkout is on {}, not {main}: a release is made from {main}",
-                    on.unwrap_or_else(|| "no branch".into())
-                ));
-            }
-            if !repo.clean()? {
-                return Err(
-                    "the checkout holds changes git does not: commit or stash them first".into(),
-                );
-            }
-            let head = repo.commit_of("HEAD").ok_or("HEAD names no commit")?;
-            let upstream = repo
-                .commit_of(&format!("origin/{main}"))
-                .ok_or_else(|| format!("origin has no {main}"))?;
-            if head != upstream {
-                return Err(format!(
-                    "{main} here ({}) is not origin's ({}): pull or push first",
-                    short(&head),
-                    short(&upstream)
-                ));
-            }
-            match github.ci(&head).await? {
-                Ci::Green => {}
-                Ci::None => {
-                    return Err(format!(
-                        "{main}'s head, {}, has no CI run: a release is made from a green {main}",
-                        short(&head)
-                    ))
-                }
-                Ci::Pending => {
-                    return Err(format!(
-                        "{main}'s CI is still running on {}: run this again once it is green",
-                        short(&head)
-                    ))
-                }
-                Ci::Red(failed) => {
-                    return Err(format!(
-                        "{main}'s last CI run on {} is not green:\n  {}",
-                        short(&head),
-                        failed.join("\n  ")
-                    ))
-                }
-            }
-            let tags = repo.tags()?;
-            if let Some(last) = last_release(&tags) {
-                if crate::release::compare(version, &last) != std::cmp::Ordering::Greater {
-                    return Err(format!(
-                        "{version} is not higher than the last release tag, v{last}"
-                    ));
-                }
-            }
-            say(&format!(
-                "Checked: on {main}, clean, up to date with origin, CI green on {}, {version} \
-                 higher than the last tag.",
-                short(&head)
-            ));
-
-            // The release PR's files.
-            let pyproject = repo
-                .show(&head, "pyproject.toml")
-                .ok_or("pyproject.toml is not in git")?;
-            let bumped = with_version(&pyproject, version)
-                .ok_or("pyproject.toml's [project] names no version")?;
-            let changelog = repo.show(&head, "CHANGELOG.md");
-            let dated = with_heading(changelog.as_deref(), version, &asked.today);
-            let mut files = Vec::new();
-            if bumped != pyproject {
-                files.push(("pyproject.toml".to_string(), bumped));
-            }
-            if changelog.as_deref() != Some(dated.as_str()) {
-                files.push(("CHANGELOG.md".to_string(), dated));
-            }
-            if files.is_empty() {
-                // Nothing to change: the tag goes on the green head.
-                say(&format!(
-                    "pyproject.toml and CHANGELOG.md say {version} already: no release PR."
-                ));
-                return tagged(repo, &tag, &head, &name, version, say);
-            }
-            let commit = repo.push_branch(&head, &branch, &files, &format!("Release {version}"))?;
-            let body = format!(
-                "The release of {name} {version}: pyproject.toml's version and the CHANGELOG's \
-                 heading.\n\nMerging it is yours. Once it is merged, `meridian plugin release \
-                 {version}` signs `{tag}` on the merge commit, pushes it, and publishes it \
-                 (it resumes where it stopped)."
-            );
-            let pull = github
-                .open_pull(&branch, &main, &format!("Release {version}"), &body)
-                .await?;
-            say(&format!(
-                "Opened the release PR #{}, at {}: {}",
-                pull.number,
-                short(&commit),
-                pull.url
-            ));
-            pull
-        }
-    };
-
-    if !pull.merged {
-        if !asked.wait {
-            return Ok(Reached::Stopped(format!(
-                "The release PR is #{}: {}\nMerge it once its CI is green, then run `meridian \
-                 plugin release {version}` again: it signs and pushes {tag} and publishes it.",
-                pull.number, pull.url
-            )));
-        }
-        // Its CI, then its merge, which is a person's.
-        let started = tokio::time::Instant::now();
-        let mut said_waiting = false;
-        loop {
-            let now = github.pull(pull.number).await?;
-            if now.merged {
-                break;
-            }
-            if now.state != "open" {
-                return Err(format!(
-                    "the release PR #{} was closed without being merged: {}",
-                    now.number, now.url
-                ));
-            }
-            match github.ci(&now.head).await? {
-                Ci::Red(failed) => {
-                    return Err(format!(
-                        "the release PR's CI failed:\n  {}\nFix it on {branch}, then run this \
-                         again: {}",
-                        failed.join("\n  "),
-                        now.url
-                    ))
-                }
-                Ci::Green if !said_waiting => {
-                    say(&format!(
-                        "CI is green on #{}. Waiting for it to be merged, which is a person's: {}",
-                        now.number, now.url
-                    ));
-                    said_waiting = true;
-                }
-                _ => {}
-            }
-            if started.elapsed() >= asked.timeout {
-                return Ok(Reached::Stopped(format!(
-                    "Stopped waiting after {} minutes; #{} is not merged yet: {}\nRun `meridian \
-                     plugin release {version}` again to go on from here.",
-                    asked.timeout.as_secs() / 60,
-                    now.number,
-                    now.url
-                )));
-            }
-            tokio::time::sleep(asked.every).await;
-        }
-    }
-    let merged = github.pull(pull.number).await?;
-    let commit = merged
-        .merge_commit
-        .ok_or_else(|| format!("GitHub names no merge commit for #{}", merged.number))?;
-    say(&format!(
-        "#{} is merged, as {}.",
-        merged.number,
-        short(&commit)
-    ));
-    repo.fetch()?;
-    // The checkout brought up to the merge, so the publish reads the
-    // released pyproject.toml and holds the tag it signs.
-    if repo.branch()?.as_deref() == Some(main.as_str()) && repo.clean()? {
-        repo.fast_forward(&main)?;
-    } else {
+    // Checks, before anything is made.
+    let on = repo.branch()?;
+    if on.as_deref() != Some(main.as_str()) {
         return Err(format!(
-            "#{} is merged; the checkout must be on {main} and clean to sign and publish it: \
-             switch to {main}, then run this again",
-            merged.number
+            "the checkout is on {}, not {main}: a release is made from {main}",
+            on.unwrap_or_else(|| "no branch".into())
         ));
     }
-    tagged(repo, &tag, &commit, &name, version, say)
+    if !repo.clean()? {
+        return Err("the checkout holds changes git does not: commit or stash them first".into());
+    }
+    let head = repo.commit_of("HEAD").ok_or("HEAD names no commit")?;
+    let upstream = repo
+        .commit_of(&format!("origin/{main}"))
+        .ok_or_else(|| format!("origin has no {main}"))?;
+    if head != upstream {
+        return Err(format!(
+            "{main} here ({}) is not origin's ({}): pull or push first",
+            short(&head),
+            short(&upstream)
+        ));
+    }
+    let tags = repo.tags()?;
+    if let Some(last) = last_release(&tags) {
+        if crate::release::compare(version, &last) != std::cmp::Ordering::Greater {
+            return Err(format!(
+                "{version} is not higher than the last release tag, v{last}"
+            ));
+        }
+    }
+    let pyproject = repo
+        .show(&head, "pyproject.toml")
+        .ok_or("pyproject.toml is not in git")?;
+    match version_of(&pyproject) {
+        Some(held) if held == version => {}
+        Some(held) => {
+            return Err(format!(
+                "pyproject.toml's version is {held}, not {version}: raise it to {version}, with \
+                 its `## {version}` CHANGELOG entry, in a pull request, merge it, then run this \
+                 again"
+            ))
+        }
+        None => return Err("pyproject.toml's [project] names no version".into()),
+    }
+    changelog_entry(repo.show(&head, "CHANGELOG.md").as_deref(), version)?;
+    match github.ci(&head).await? {
+        Ci::Green => {}
+        Ci::None => {
+            return Err(format!(
+                "{main}'s head, {}, has no CI run: a release is made from a green {main}",
+                short(&head)
+            ))
+        }
+        Ci::Pending => {
+            return Err(format!(
+                "{main}'s CI is still running on {}: run this again once it is green",
+                short(&head)
+            ))
+        }
+        Ci::Red(failed) => {
+            return Err(format!(
+                "{main}'s last CI run on {} is not green:\n  {}",
+                short(&head),
+                failed.join("\n  ")
+            ))
+        }
+    }
+    say(&format!(
+        "Checked: on {main}, clean, up to date with origin, {version} higher than the last tag, \
+         pyproject.toml and CHANGELOG.md at {version}, CI green on {}.",
+        short(&head)
+    ));
+    tagged(repo, &tag, &head, &name, version, say)
 }
 
 /// `tag` signed at `commit` and pushed: the person's own SSH signing key.
@@ -881,7 +602,7 @@ fn tagged(
     name: &str,
     version: &str,
     say: &mut (dyn FnMut(&str) + Send),
-) -> Result<Reached, String> {
+) -> Result<Tagged, String> {
     if repo.config("gpg.format").as_deref() != Some("ssh")
         || repo.config("user.signingkey").is_none()
     {
@@ -907,7 +628,7 @@ fn tagged(
     }
     repo.push_tag(tag)?;
     say(&format!("Pushed {tag}."));
-    Ok(Reached::Tagged {
+    Ok(Tagged {
         tag: tag.to_string(),
         commit: commit.to_string(),
     })

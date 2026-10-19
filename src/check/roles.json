@@ -86,14 +86,16 @@
           "ComputeDate",
           "ListReplacements",
           "ListTemplates",
-          "ReadTemplate"
+          "ReadTemplate",
+          "ListEventGroups"
         ],
         "hears": [
           "ReplaceMergedInstrument",
           "AccountAttributeChanged",
           "PlacementUpdated",
           "ExecutionRecorded",
-          "TradingInstructionChanged"
+          "TradingInstructionChanged",
+          "EventGroupChanged"
         ]
       }
     },
@@ -174,7 +176,14 @@
           "ListPrices",
           "ListBars",
           "ListOutcomes",
-          "ListDatasets"
+          "ListDatasets",
+          "RunJob",
+          "ListMeasureDefinitions",
+          "ListFinishedJobs",
+          "ReadJobAnswer",
+          "ListEventGroups",
+          "ReadAgentOrdersDemoOnly",
+          "QueryLake"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -191,7 +200,9 @@
           "AlertChanged",
           "PricesRecorded",
           "BarsRecorded",
-          "OutcomesRecorded"
+          "OutcomesRecorded",
+          "JobFinished",
+          "EventGroupChanged"
         ]
       }
     },
@@ -309,10 +320,12 @@
           "ComputeDate",
           "ListReplacements",
           "ListTemplates",
-          "ReadTemplate"
+          "ReadTemplate",
+          "ListEventGroups"
         ],
         "hears": [
-          "ReplaceMergedInstrument"
+          "ReplaceMergedInstrument",
+          "EventGroupChanged"
         ]
       }
     },
@@ -364,7 +377,8 @@
           "RecordTrades",
           "RecordQuotes",
           "RecordOutcomes",
-          "DeclineWant"
+          "DeclineWant",
+          "ReportEventGroup"
         ],
         "reads": [
           "ResolveIdentifier",
@@ -376,12 +390,15 @@
           "ListTemplates",
           "ReadTemplate",
           "ListTrades",
-          "ListDatasets"
+          "ListDatasets",
+          "ListEventGroups",
+          "QueryLake"
         ],
         "hears": [
           "ReplaceMergedInstrument",
           "ObservationsWanted",
-          "WantWithdrawn"
+          "WantWithdrawn",
+          "EventGroupChanged"
         ]
       }
     },
@@ -463,7 +480,10 @@
           "ReadTemplate",
           "ListTrades",
           "ListQuotes",
-          "ListDatasets"
+          "ListDatasets",
+          "ListEventGroups",
+          "ReadAgentOrdersDemoOnly",
+          "QueryLake"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -474,7 +494,8 @@
           "TradingInstructionChanged",
           "ReportVenueCatalogue",
           "TradesRecorded",
-          "QuotesRecorded"
+          "QuotesRecorded",
+          "EventGroupChanged"
         ]
       }
     },
@@ -519,10 +540,12 @@
           "ComputeDate",
           "ListReplacements",
           "ListTemplates",
-          "ReadTemplate"
+          "ReadTemplate",
+          "ListEventGroups"
         ],
         "hears": [
-          "ReplaceMergedInstrument"
+          "ReplaceMergedInstrument",
+          "EventGroupChanged"
         ]
       }
     },
@@ -607,7 +630,9 @@
           "ComputeDate",
           "ListReplacements",
           "ListTemplates",
-          "ReadTemplate"
+          "ReadTemplate",
+          "ListEventGroups",
+          "ReadAgentOrdersDemoOnly"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -621,7 +646,8 @@
           "LocateUpdated",
           "ReportVenueCatalogue",
           "BookingUpdated",
-          "AlertChanged"
+          "AlertChanged",
+          "EventGroupChanged"
         ]
       }
     },
@@ -700,7 +726,9 @@
           "ListReplacements",
           "ListTemplates",
           "ReadTemplate",
-          "ListOutcomes"
+          "ListOutcomes",
+          "ListEventGroups",
+          "QueryLake"
         ],
         "hears": [
           "StatementRecorded",
@@ -718,7 +746,8 @@
           "UnplacedFactRecorded",
           "BookingUpdated",
           "AlertChanged",
-          "OutcomesRecorded"
+          "OutcomesRecorded",
+          "EventGroupChanged"
         ]
       }
     },
@@ -791,7 +820,14 @@
           "ListPrices",
           "ListBars",
           "ListOutcomes",
-          "ListDatasets"
+          "ListDatasets",
+          "RunJob",
+          "ListMeasureDefinitions",
+          "ListFinishedJobs",
+          "ReadJobAnswer",
+          "ListEventGroups",
+          "ReadAgentOrdersDemoOnly",
+          "QueryLake"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -806,7 +842,9 @@
           "BookingUpdated",
           "PricesRecorded",
           "BarsRecorded",
-          "OutcomesRecorded"
+          "OutcomesRecorded",
+          "JobFinished",
+          "EventGroupChanged"
         ]
       }
     },
@@ -872,7 +910,13 @@
           "ListPrices",
           "ListBars",
           "ListOutcomes",
-          "ListDatasets"
+          "ListDatasets",
+          "RunJob",
+          "ListMeasureDefinitions",
+          "ListFinishedJobs",
+          "ReadJobAnswer",
+          "ListEventGroups",
+          "QueryLake"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -886,7 +930,9 @@
           "AlertChanged",
           "PricesRecorded",
           "BarsRecorded",
-          "OutcomesRecorded"
+          "OutcomesRecorded",
+          "JobFinished",
+          "EventGroupChanged"
         ]
       }
     },
@@ -924,10 +970,12 @@
           "ComputeDate",
           "ListReplacements",
           "ListTemplates",
-          "ReadTemplate"
+          "ReadTemplate",
+          "ListEventGroups"
         ],
         "hears": [
-          "ReplaceMergedInstrument"
+          "ReplaceMergedInstrument",
+          "EventGroupChanged"
         ]
       }
     },
@@ -964,10 +1012,12 @@
           "ComputeDate",
           "ListReplacements",
           "ListTemplates",
-          "ReadTemplate"
+          "ReadTemplate",
+          "ListEventGroups"
         ],
         "hears": [
-          "ReplaceMergedInstrument"
+          "ReplaceMergedInstrument",
+          "EventGroupChanged"
         ]
       }
     },
@@ -1010,7 +1060,13 @@
           "ListTrades",
           "ListQuotes",
           "ListOutcomes",
-          "ListDatasets"
+          "ListDatasets",
+          "RunJob",
+          "ListMeasureDefinitions",
+          "ListFinishedJobs",
+          "ReadJobAnswer",
+          "ListEventGroups",
+          "QueryLake"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -1018,7 +1074,9 @@
           "BarsRecorded",
           "TradesRecorded",
           "QuotesRecorded",
-          "OutcomesRecorded"
+          "OutcomesRecorded",
+          "JobFinished",
+          "EventGroupChanged"
         ]
       }
     },
@@ -1088,10 +1146,73 @@
           "ComputeDate",
           "ListReplacements",
           "ListTemplates",
-          "ReadTemplate"
+          "ReadTemplate",
+          "ListEventGroups"
         ],
         "hears": [
-          "ReplaceMergedInstrument"
+          "ReplaceMergedInstrument",
+          "EventGroupChanged"
+        ]
+      }
+    },
+    {
+      "name": "pricing",
+      "status": "proposed",
+      "persona": "a pricing or model vendor, or a firm's own quant team, whose model a deployment chooses for some instruments",
+      "archetype": "Pricing model implementation",
+      "summary": "Answers the analytics component's batches for the pricing model ids its version declares, from exactly the market objects each model declares.",
+      "duties": [
+        {
+          "duty": "Answers each batch the component routes to it, a value per unit for every instrument and scenario, equal to the built-in model's where it implements a v26 model (W12.3).",
+          "basis": [
+            "W12.3"
+          ]
+        },
+        {
+          "duty": "Reads the batches still waiting after a restart, from the last sequence it saw (W12.3).",
+          "basis": [
+            "W12.3"
+          ]
+        }
+      ],
+      "leaves_to": [
+        {
+          "what": "reading positions, accounts or anything a batch did not carry: it receives exactly the market objects its model declared",
+          "to": [
+            "analytics"
+          ]
+        },
+        {
+          "what": "which instruments it prices: a deployment admin routes a model id to it",
+          "to": [
+            "dashboard",
+            "conductor"
+          ]
+        },
+        {
+          "what": "figures, measures and verdicts: the component computes figures and compliance decides verdicts",
+          "to": [
+            "analytics",
+            "compliance"
+          ]
+        },
+        {
+          "what": "being called by a client: no client calls it directly",
+          "to": [
+            "analytics"
+          ]
+        }
+      ],
+      "edge": false,
+      "scope": {
+        "publishes": [
+          "AnswerPriceBatch"
+        ],
+        "reads": [
+          "ListPriceBatches"
+        ],
+        "hears": [
+          "PriceBatch"
         ]
       }
     }
@@ -1210,6 +1331,19 @@
           "oms",
           "operations",
           "reporting"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "AnswerPriceBatch",
+      "step": "W12.3",
+      "title": "Price a batch",
+      "kind": "command",
+      "topic": "platform.analytics.command.answer-price-batch",
+      "roles": {
+        "publishes": [
+          "pricing"
         ]
       },
       "stability": "preview"
@@ -1397,6 +1531,32 @@
       "stability": "stable"
     },
     {
+      "name": "EventGroupChanged",
+      "step": "W3.30",
+      "title": "Read event groups, and hear each change",
+      "kind": "event",
+      "topic": "platform.reference.event.event-group-changed",
+      "roles": {
+        "hears": [
+          "compliance",
+          "confirmation",
+          "connectivity",
+          "custody",
+          "data",
+          "ems",
+          "oms",
+          "operations",
+          "portfolio",
+          "reference",
+          "reporting",
+          "servicing",
+          "settlement",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ExecutionRecorded",
       "step": "W11.13",
       "title": "Journal each act, and publish what changed",
@@ -1440,6 +1600,22 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "JobFinished",
+      "step": "W12.4",
+      "title": "Finish a job later, and read its answer",
+      "kind": "event",
+      "topic": "platform.analytics.event.job-finished",
+      "roles": {
+        "hears": [
+          "compliance",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "LinkExternalAccount",
@@ -1600,6 +1776,48 @@
       "stability": "preview"
     },
     {
+      "name": "ListEventGroups",
+      "step": "W3.30",
+      "title": "Read event groups, and hear each change",
+      "kind": "query",
+      "topic": "platform.reference.query.list-event-groups",
+      "roles": {
+        "reads": [
+          "compliance",
+          "confirmation",
+          "connectivity",
+          "custody",
+          "data",
+          "ems",
+          "oms",
+          "operations",
+          "portfolio",
+          "reference",
+          "reporting",
+          "servicing",
+          "settlement",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ListFinishedJobs",
+      "step": "W12.4",
+      "title": "Finish a job later, and read its answer",
+      "kind": "query",
+      "topic": "platform.analytics.query.list-finished-jobs",
+      "roles": {
+        "reads": [
+          "compliance",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ListLocates",
       "step": "W11.18",
       "title": "Record a locate and the prime's answer",
@@ -1613,6 +1831,22 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "ListMeasureDefinitions",
+      "step": "W12.1",
+      "title": "Run a job",
+      "kind": "query",
+      "topic": "platform.analytics.query.list-measure-definitions",
+      "roles": {
+        "reads": [
+          "compliance",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "ListOrders",
@@ -1666,6 +1900,19 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "ListPriceBatches",
+      "step": "W12.3",
+      "title": "Price a batch",
+      "kind": "query",
+      "topic": "platform.analytics.query.list-price-batches",
+      "roles": {
+        "reads": [
+          "pricing"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "ListPrices",
@@ -1930,6 +2177,19 @@
       "stability": "stable"
     },
     {
+      "name": "PriceBatch",
+      "step": "W12.3",
+      "title": "Price a batch",
+      "kind": "event",
+      "topic": "platform.analytics.event.price-batch",
+      "roles": {
+        "hears": [
+          "pricing"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "PricesRecorded",
       "step": "W10.5",
       "title": "Record, sequence and publish each row",
@@ -1959,6 +2219,25 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "QueryLake",
+      "step": "W10.10",
+      "title": "Query the lake within bounds",
+      "kind": "query",
+      "topic": "platform.lake.query.query-lake",
+      "roles": {
+        "reads": [
+          "compliance",
+          "data",
+          "ems",
+          "operations",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "QuotesRecorded",
@@ -2014,6 +2293,22 @@
       "stability": "stable"
     },
     {
+      "name": "ReadAgentOrdersDemoOnly",
+      "step": "W11.39",
+      "title": "Read whether agents' orders are kept to demo connections",
+      "kind": "query",
+      "topic": "platform.book.query.read-agent-orders-demo-only",
+      "roles": {
+        "reads": [
+          "compliance",
+          "ems",
+          "oms",
+          "portfolio"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ReadCalendar",
       "step": "W3.19",
       "title": "Read a calendar",
@@ -2034,6 +2329,22 @@
           "reporting",
           "servicing",
           "settlement",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ReadJobAnswer",
+      "step": "W12.4",
+      "title": "Finish a job later, and read its answer",
+      "kind": "query",
+      "topic": "platform.analytics.query.read-job-answer",
+      "roles": {
+        "reads": [
+          "compliance",
+          "portfolio",
+          "reporting",
           "signal"
         ]
       },
@@ -2386,6 +2697,19 @@
       "stability": "stable"
     },
     {
+      "name": "ReportEventGroup",
+      "step": "W3.29",
+      "title": "Report an event group",
+      "kind": "command",
+      "topic": "platform.reference.command.report-event-group",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ReportExecution",
       "step": "W11.11",
       "title": "Report an execution",
@@ -2604,6 +2928,22 @@
           "connectivity",
           "data",
           "ems"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RunJob",
+      "step": "W12.1",
+      "title": "Run a job",
+      "kind": "query",
+      "topic": "platform.analytics.query.run-job",
+      "roles": {
+        "reads": [
+          "compliance",
+          "portfolio",
+          "reporting",
+          "signal"
         ]
       },
       "stability": "preview"

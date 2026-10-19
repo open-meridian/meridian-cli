@@ -198,11 +198,13 @@ PRODUCERS: dict[str, Producer] = {
 def test_every_case_of_the_custody_suite_passes() -> None:
     report = run("custody", PRODUCERS, instance_id=INSTANCE)
     assert report.passed, report.failures
-    assert len(report.passed_cases) == 47
-    # Contract v24: the two cases every suite holds, which the SDK answers.
+    assert len(report.passed_cases) == 48
+    # Contract v24: the two cases every suite holds, which the SDK answers;
+    # contract v26 a third, an event group heard and read.
     assert report.answered_by_sdk == [
         "hears-and-reads-a-replacement",
         "reads-the-template-catalogue",
+        "hears-and-reads-an-event-group",
     ]
 
 

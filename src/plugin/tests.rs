@@ -104,17 +104,19 @@ fn a_roles_template_is_a_plugin_holding_the_role_under_its_own_name() {
         );
         // Its tests run the role's suite, where the template has one.
         if let Ok(suite) = std::fs::read_to_string(into.join("tests/test_suite.py")) {
+            // `run("<role>", PRODUCERS` or, wrapped, `run(\n    "<role>", PRODUCERS`.
+            let wanted = format!("\"{role}\", PRODUCERS");
             assert!(
-                suite.contains(&format!("run(\"{role}\", PRODUCERS")),
+                suite
+                    .split("run(")
+                    .skip(1)
+                    .any(|after| after.trim_start().starts_with(&wanted)),
                 "{role}"
             );
         } else {
-            // Connectivity's tests run its adapter on the SDK's rig; the
-            // connectivity suite is the plugin's to add for its venue.
-            assert!(
-                matches!(role, "operations" | "connectivity"),
-                "{role} runs no suite"
-            );
+            // Connectivity's runs its suite from SDK 0.31.0; operations' has
+            // no suite in this release of the CLI.
+            assert_eq!(role, "operations", "{role} runs no suite");
         }
         for file in every_file(&into) {
             let text = std::fs::read_to_string(into.join(&file)).expect("readable");
@@ -167,7 +169,7 @@ fn a_role_with_no_template_is_refused_naming_those_that_have_one() {
     assert!(
         refused.contains("no template for `oms`")
             && refused.contains(
-                "`--role custody`, `--role data`, `--role operations` or `--role reporting`"
+                "`--role custody`, `--role data`, `--role operations`, `--role pricing` or `--role reporting`"
             ),
         "{refused}"
     );

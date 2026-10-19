@@ -42,8 +42,8 @@ meridian -- bringing a Meridian deployment up
                              move a running deployment to a newer chart, in place,
                              after checking it can; not this binary
   meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>;
-                             with --role connectivity, custody, data, operations or
-                             reporting, that role's template
+                             with --role connectivity, custody, data, operations,
+                             pricing or reporting, that role's template
   meridian plugin check      hold the plugin here to the framework's rules: its pages,
                              settings, SDK use, [tool.meridian], documentation (docs/),
                              tests and shape
@@ -73,12 +73,12 @@ meridian -- bringing a Meridian deployment up
                              report a line a check (--details: each check's full text)
   meridian plugin release <version>
                              release the plugin here: checks (on main, clean, up to
-                             date, main's CI green, the version higher than the last
-                             tag), opens the release PR (pyproject.toml's version and
-                             the CHANGELOG heading) and waits for its CI and for a
-                             person to merge it; then signs v<version> on the merge
-                             commit, pushes it, publishes it and follows the build.
-                             --no-wait stops once the PR is open; run it again to go on
+                             date, the version higher than the last tag, pyproject.toml
+                             at it, CHANGELOG.md's `## <version>` undated, main's CI
+                             green), then signs v<version> on main's head, pushes it,
+                             publishes it and follows the build. It opens no pull
+                             request: the change's own PR bumps the version and adds
+                             its CHANGELOG entry
   meridian plugin key setup  make the key release tags are signed with ready: git's
                              SSH signing key, or a new one ssh-keygen makes (--hardware:
                              on a security key); git set to sign with it, and its public
@@ -180,13 +180,15 @@ plugin new:
       --role <role>         write that role's template, a whole plugin holding it
                             on the role's common pages and settings:
                             connectivity (a venue placed at through the SDK's
-                            Trader, with its Trading page), custody (a
-                            custodian's accounts and statements), data (a
-                            vendor's prices into the lake, its tests running the
-                            suite), operations (opening balances, reconciliation
-                            and breaks) or reporting (the book valued from the
-                            lake, its tests running the suite). Without it, the
-                            reference plugin
+                            Trader, with its Trading page, its tests running the
+                            suite), custody (a custodian's accounts and
+                            statements), data (a vendor's prices into the lake,
+                            its tests running the suite), operations (opening
+                            balances, reconciliation and breaks), pricing (the
+                            analytics component's batches answered through the
+                            SDK's Pricer, its tests running the suite) or
+                            reporting (the book valued from the lake, its tests
+                            running the suite). Without it, the reference plugin
 
 plugin check: needs no deployment. Exits 0 when every rule holds, 1 when one does
 not, each failure with its file, line and what to write instead. A warning
@@ -198,7 +200,8 @@ of the Documentation tab, or a link it shows as plain text
       --run-tests           run its tests too, with pytest
       --verified            hold it as a verified plugin is: every changing route
                             a tool for agents, none kept from them, each role it
-                            holds with a suite (custody, data, connectivity) run
+                            holds with a suite (custody, data, connectivity,
+                            pricing) run
                             in its tests, each role's common pages, tools and
                             settings kept, and every act naming its check tool
                             (role-pages; without --verified, said as advice)
@@ -262,10 +265,8 @@ GITHUB_TOKEN, else the credential git keeps for github.com
                             2026-10-16T12:00Z (default: now)
       --to <file>           download: where the bundle goes (default:
                             <organisation>-<plugin>-<version>.plugin-bundle.tar)
-      --timeout <d>         publish: how long to follow the build (default: 30m);
-                            release: that, and how long to wait for the PR's CI and
-                            its merge (default: 30m each)
-      --no-wait             release: stop once the release PR is open
+      --timeout <d>         publish, release: how long to follow the build (default:
+                            30m)
       --details             publish: every check's full text, where it prints one line
                             a check that fits the terminal
 
@@ -493,11 +494,10 @@ const TAKES_A_VALUE: [&str; 32] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 20] = [
+const SWITCHES: [&str; 19] = [
     "--previous",
     "--details",
     "--hardware",
-    "--no-wait",
     "--no-doctor",
     "--force",
     "--run-tests",
@@ -1590,10 +1590,9 @@ async fn published(asked: &registry::Publish, platform: &str, verb: &str) -> i32
     }
 }
 
-/// `meridian plugin release <version>` (ruling 256): the checks, the release
-/// PR and its CI, the merge a person makes, then the signed tag on the merge
-/// commit, published and followed. `--no-wait` stops after the PR; running
-/// it again resumes.
+/// `meridian plugin release <version>` (ruling 323, revising 256): the
+/// checks, then the signed tag on main's head, published and followed. No
+/// pull request: the version and the CHANGELOG entry are already on main.
 async fn release_command(arguments: &Arguments, words: &[&str], platform: &str) -> i32 {
     let ["release", version] = words else {
         eprintln!("meridian plugin release: takes the version, as `meridian plugin release 1.4.0`\n\n{USAGE}");
@@ -1652,22 +1651,13 @@ async fn release_command(arguments: &Arguments, words: &[&str], platform: &str) 
             return 2;
         }
     };
-    let today = registry::moment(credential::now_s() * 1_000_000_000)[..10].to_string();
     let asked = plugin_release::Asked {
         dir: dir.clone(),
         version: version.to_string(),
-        wait: !arguments.set("--no-wait"),
-        every: std::time::Duration::from_secs(15),
-        timeout,
-        today,
     };
     let mut say = |line: &str| eprintln!("{line}");
     let tag = match plugin_release::release(&asked, &repo, &github, &mut say).await {
-        Ok(plugin_release::Reached::Stopped(said)) => {
-            println!("{said}");
-            return 0;
-        }
-        Ok(plugin_release::Reached::Tagged { tag, .. }) => tag,
+        Ok(plugin_release::Tagged { tag, .. }) => tag,
         Err(refused) => {
             eprintln!("meridian plugin release: {refused}");
             return 1;
@@ -2920,7 +2910,8 @@ mod tests {
             release.contains("meridian plugin release <version>"),
             "{release}"
         );
-        assert!(release.contains("--no-wait"), "{release}");
+        assert!(release.contains("--timeout <d>"), "{release}");
+        assert!(!release.contains("--no-wait"), "{release}");
         assert!(!release.contains("--first-run-code"), "{release}");
         let rollback = help_for("rollback-deployment", &[]);
         assert!(rollback.contains("--to-revision <n>"), "{rollback}");
@@ -2937,9 +2928,11 @@ mod tests {
 
     #[test]
     fn the_v0_1_47_commands_parse() {
-        let release = parse(said("plugin release 1.4.0 --no-wait --registry community")).unwrap();
+        let release = parse(said("plugin release 1.4.0 --registry community")).unwrap();
         assert_eq!(release.words, ["release", "1.4.0"]);
-        assert!(release.set("--no-wait"));
+        assert_eq!(release.value("--registry", "--registry"), Some("community"));
+        // 0.1.49 (ruling 323): no release PR, so nothing to stop waiting for.
+        assert!(parse(said("plugin release 1.4.0 --no-wait")).is_err());
         let setup = parse(said("plugin key setup --hardware --organisation acme")).unwrap();
         assert_eq!(setup.words, ["key", "setup"]);
         assert!(setup.set("--hardware"));

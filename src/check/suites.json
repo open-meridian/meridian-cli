@@ -6,7 +6,7 @@
     {
       "role": "compliance",
       "since": "v18",
-      "says": "A compliance plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it acknowledges an error-account alert for a person, raises its own, and hears and reads bookings and alerts. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue, and decides an order on a local record, which no price check can run on.\n",
+      "says": "A compliance plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it acknowledges an error-account alert for a person, raises its own, and hears and reads bookings and alerts. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue, and decides an order on a local record, which no price check can run on. From contract v26 it hears and reads event groups, runs analytics jobs and reads their answers, reads the agents' guard, and queries the lake within bounds.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -390,13 +390,95 @@
               "row": "ReadLocalRecordOrders"
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "runs-a-job-and-reads-its-answer",
+          "since": "v26",
+          "given": "the plugin asks the analytics component for a measure over accounts in its scope, answered inline when small and later when large",
+          "expect": [
+            {
+              "row": "ListMeasureDefinitions"
+            },
+            {
+              "row": "RunJob",
+              "fields": {
+                "job": {
+                  "account_ids": "<set>",
+                  "measures": "<set>"
+                }
+              }
+            },
+            {
+              "row": "JobFinished"
+            },
+            {
+              "row": "ReadJobAnswer",
+              "fields": {
+                "job_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "catches-up-finished-jobs",
+          "since": "v26",
+          "given": "the plugin lost a job's finishing and reads the jobs finished after the last sequence it saw",
+          "expect": [
+            {
+              "row": "ListFinishedJobs",
+              "fields": {
+                "after_sequence": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-the-agents-guard",
+          "since": "v26",
+          "given": "the plugin starts, and shows a person before an agent's act whether a live connection would refuse it",
+          "expect": [
+            {
+              "row": "ReadAgentOrdersDemoOnly"
+            }
+          ]
+        },
+        {
+          "name": "queries-the-lake-within-bounds",
+          "since": "v26",
+          "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
+          "expect": [
+            {
+              "row": "QueryLake",
+              "fields": {
+                "kind": "<set>",
+                "subjects": "<set>",
+                "row_limit": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "confirmation",
       "since": "v22",
-      "says": "A confirmation plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it reports a prime broker's answer to a give-up. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
+      "says": "A confirmation plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it reports a prime broker's answer to a give-up. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups.\n",
       "cases": [
         {
           "name": "reads-a-calendar",
@@ -472,13 +554,29 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "connectivity",
       "since": "v22",
-      "says": "A connectivity plugin passing every case sends the placements naming its instance and no other, with what its ems set in the venue's account field; reports every acknowledgement, rejection, restatement, fill, bust and charge in the contract's meanings, each with the raw record it was converted from and the venue's text only where no contract reason maps; marks an unconverted status outcome unknown and resolves it by asking, never by sending again; derives an execution ID the same way twice; states every fill's settlement date, the venue's or the date read's; sends nothing new on a pause and cancels at its venue on a stop, reporting each cancel as a fact; and publishes its venue's catalogue. A case about calendars, settlement dates, locates or compliance waits (`about`, contract v22) a plugin whose work never uses them marks not presented, with why, and a case about a fill's place of execution (`about_field`) one whose venue never states it; and a case about venue-originated fills, charges without a fill, busts or value-date rolls (`about`, contract v23) one whose venue never originates a fill, never charges a fee with no fill, never busts or corrects a fill, or settles its trades rather than rolling them. From contract v24 it reports a prime broker's answer to a give-up. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
+      "says": "A connectivity plugin passing every case sends the placements naming its instance and no other, with what its ems set in the venue's account field; reports every acknowledgement, rejection, restatement, fill, bust and charge in the contract's meanings, each with the raw record it was converted from and the venue's text only where no contract reason maps; marks an unconverted status outcome unknown and resolves it by asking, never by sending again; derives an execution ID the same way twice; states every fill's settlement date, the venue's or the date read's; sends nothing new on a pause and cancels at its venue on a stop, reporting each cancel as a fact; and publishes its venue's catalogue. A case about calendars, settlement dates, locates or compliance waits (`about`, contract v22) a plugin whose work never uses them marks not presented, with why, and a case about a fill's place of execution (`about_field`) one whose venue never states it; and a case about venue-originated fills, charges without a fill, busts or value-date rolls (`about`, contract v23) one whose venue never originates a fill, never charges a fee with no fill, never busts or corrects a fill, or settles its trades rather than rolling them. From contract v24 it reports a prime broker's answer to a give-up. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups.\n",
       "cases": [
         {
           "name": "acknowledges-a-placement-naming-it",
@@ -1020,13 +1118,29 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "custody",
       "since": "v11",
-      "says": "A custody plugin passing every case reports its source's accounts with their kinds, its sync state in the contract's own values, and each account's holdings counted once, every row referencing the raw record it was converted from, the settled and pending quantities stated, the custodian named, and every value it closed rather than read carrying its provenance; it sends a value it cannot convert as not known beside the value as reported, and withholds a statement it cannot serve clean. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why; and a case about plan fund codes, sweep funds or splits (`about`, contract v23) a plugin whose custodian never states them marks not presented, with why, and a case about a currency not stated (`about`, contract v23) one whose custodian states the currency of every holding. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue, and records a holding its source describes too thinly for a record unresolved, never dropped.\n",
+      "says": "A custody plugin passing every case reports its source's accounts with their kinds, its sync state in the contract's own values, and each account's holdings counted once, every row referencing the raw record it was converted from, the settled and pending quantities stated, the custodian named, and every value it closed rather than read carrying its provenance; it sends a value it cannot convert as not known beside the value as reported, and withholds a statement it cannot serve clean. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why; and a case about plan fund codes, sweep funds or splits (`about`, contract v23) a plugin whose custodian never states them marks not presented, with why, and a case about a currency not stated (`about`, contract v23) one whose custodian states the currency of every holding. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue, and records a holding its source describes too thinly for a record unresolved, never dropped, a case about securities (`about`, contract v26) a plugin whose custodian holds only cash and currencies marking it not presented, with why. From contract v26 it hears and reads event groups.\n",
       "cases": [
         {
           "name": "sync-current",
@@ -2012,6 +2126,7 @@
         },
         {
           "name": "records-a-thinly-described-holding-unresolved",
+          "about": "securities",
           "since": "v24",
           "given": "the venue names a holding by its own symbol alone, stating no description of the security, and the resolve answers not found",
           "expect": [
@@ -2029,13 +2144,29 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "data",
       "since": "v18",
-      "says": "A data plugin passing every case records each source's prices and bars exactly, under its dataset, its business date, its source's times and its raw record; restates a forming day under the same row key and sends an identical repeat unchanged; resolves every subject and venue before it records, reporting what does not resolve, and reads the record of a subject another source resolved to name it in its own; names a price in a token by the token's own cash instrument, never a fiat code; and records what a want asks, or declines it per subject. From v19 it records each trade it publishes with the platform's trade attributes, converted at the edge, and the side that took liquidity where its source says it, a withdrawal as a new version; and each quote it publishes with the sides its source states; and keeps a standing want of a streamed dataset current. A case about a kind of data the plugin declares it never publishes is not presented, with why. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why; and a case about outcomes or disputed outcomes (`about`, contract v23) a plugin with no event contracts, or whose source has no disputes, marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
+      "says": "A data plugin passing every case records each source's prices and bars exactly, under its dataset, its business date, its source's times and its raw record; restates a forming day under the same row key and sends an identical repeat unchanged; resolves every subject and venue before it records, reporting what does not resolve, and reads the record of a subject another source resolved to name it in its own; names a price in a token by the token's own cash instrument, never a fiat code; and records what a want asks, or declines it per subject. From v19 it records each trade it publishes with the platform's trade attributes, converted at the edge, and the side that took liquidity where its source says it, a withdrawal as a new version; and each quote it publishes with the sides its source states; and keeps a standing want of a streamed dataset current. A case about a kind of data the plugin declares it never publishes is not presented, with why. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why; and a case about outcomes or disputed outcomes (`about`, contract v23) a plugin with no event contracts, or whose source has no disputes, marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, reports its venue's event groups as stated -- a case about outcomes (`about`) a plugin serving no event contract marks not presented -- and queries the lake within bounds.\n",
       "cases": [
         {
           "name": "a-daily-close",
@@ -2688,13 +2819,80 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reports-an-event-group",
+          "about": "outcomes",
+          "since": "v26",
+          "given": "the venue groups its event contracts into an event and states whether they are mutually exclusive and exhaustive",
+          "expect": [
+            {
+              "row": "ResolveIdentifier"
+            },
+            {
+              "row": "ReportEventGroup",
+              "fields": {
+                "venue_id": "<set>",
+                "venue_event_ref": "<set>",
+                "member_instrument_ids": "<set>",
+                "mutually_exclusive": "<set>",
+                "exhaustive": "<set>",
+                "raw_record": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reports-a-flag-the-venue-does-not-state",
+          "about": "outcomes",
+          "since": "v26",
+          "given": "the venue's event adds placeholder outcomes named later, so it does not state that its named outcomes are exhaustive",
+          "expect": [
+            {
+              "row": "ReportEventGroup",
+              "fields": {
+                "exhaustive": "EVENT_GROUP_FLAG_NOT_STATED"
+              }
+            }
+          ]
+        },
+        {
+          "name": "queries-the-lake-within-bounds",
+          "since": "v26",
+          "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
+          "expect": [
+            {
+              "row": "QueryLake",
+              "fields": {
+                "kind": "<set>",
+                "subjects": "<set>",
+                "row_limit": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "ems",
       "since": "v19",
-      "says": "An ems plugin passing every case learns the datasets it may read, reads trades over a range and the latest quotes from the deployment's default sources unless it names others, hears every trade and the latest quotes the lake records after, narrowed to the subjects it asked for, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
+      "says": "An ems plugin passing every case learns the datasets it may read, reads trades over a range and the latest quotes from the deployment's default sources unless it names others, hears every trade and the latest quotes the lake records after, narrowed to the subjects it asked for, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, reads the agents' guard, meets the guard's five cases on an agent's placement and accept, and queries the lake within bounds.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -3090,13 +3288,133 @@
               "row": "ReadLocalRecordOrders"
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-the-agents-guard",
+          "since": "v26",
+          "given": "the plugin starts, and shows a person before an agent's act whether a live connection would refuse it",
+          "expect": [
+            {
+              "row": "ReadAgentOrdersDemoOnly"
+            }
+          ]
+        },
+        {
+          "name": "agent-placement-on-a-live-connection-refused",
+          "since": "v26",
+          "given": "an agent, through a delegation, asks for a placement on a connection that is not demo while the guard is on, and it is refused REFUSAL_REASON_AGENT_LIVE_ORDER and recorded",
+          "expect": [
+            {
+              "row": "CreatePlacement",
+              "fields": {
+                "order_id": "<set>",
+                "connectivity_instance_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "agent-placement-on-a-demo-connection",
+          "since": "v26",
+          "given": "the same placement on a connection whose environment setting and session both say paper",
+          "expect": [
+            {
+              "row": "CreatePlacement",
+              "fields": {
+                "order_id": "<set>",
+                "connectivity_instance_id": "<set>"
+              }
+            },
+            {
+              "row": "PlacementUpdated"
+            }
+          ]
+        },
+        {
+          "name": "person-makes-an-agents-prepared-live-placement",
+          "since": "v26",
+          "given": "a person makes, at the page, a live placement an agent prepared, and it is placed",
+          "expect": [
+            {
+              "row": "CreatePlacement",
+              "fields": {
+                "order_id": "<set>",
+                "connectivity_instance_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "agent-accept-to-a-new-order-on-a-live-connection-refused",
+          "since": "v26",
+          "given": "an agent accepts unmatched fills on a live connection to a new order while the guard is on, and it is refused REFUSAL_REASON_AGENT_LIVE_ORDER and recorded, the fills staying unmatched",
+          "expect": [
+            {
+              "row": "AcceptExecution",
+              "fields": {
+                "execution_ids": "<set>",
+                "new_order": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "setting-and-session-disagree-counts-live",
+          "since": "v26",
+          "given": "a connection's environment setting says paper and its catalogue reports live, and an agent's placement on it is refused REFUSAL_REASON_AGENT_LIVE_ORDER",
+          "expect": [
+            {
+              "row": "ReadVenueCatalogue",
+              "fields": {
+                "connectivity_instance_id": "<set>",
+                "venue_account_code": "<set>"
+              }
+            },
+            {
+              "row": "CreatePlacement",
+              "fields": {
+                "connectivity_instance_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "queries-the-lake-within-bounds",
+          "since": "v26",
+          "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
+          "expect": [
+            {
+              "row": "QueryLake",
+              "fields": {
+                "kind": "<set>",
+                "subjects": "<set>",
+                "row_limit": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "oms",
       "since": "v22",
-      "says": "An oms plugin passing every case releases a proposed order through the gate for a person or its service account, asks for changes, claims, holds and pauses, decides an approval its policy asks of it, records a telephoned order and a manual execution for a person, acknowledges a late fact, records a locate's use, reads the venue's catalogue, and seeds by a read and hears what follows of orders, placements, executions, locates and the trading instructions. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it books an order's executions to its instructed accounts, a block at its average price with the residual on a named allocation and an overfill's excess on the error account, cancels and rebooks before the hand-off, sees a booking held after a bust, records a sleeve cross, and hears and reads bookings and a held booking's alert. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
+      "says": "An oms plugin passing every case releases a proposed order through the gate for a person or its service account, asks for changes, claims, holds and pauses, decides an approval its policy asks of it, records a telephoned order and a manual execution for a person, acknowledges a late fact, records a locate's use, reads the venue's catalogue, and seeds by a read and hears what follows of orders, placements, executions, locates and the trading instructions. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it books an order's executions to its instructed accounts, a block at its average price with the residual on a named allocation and an overfill's excess on the error account, cancels and rebooks before the hand-off, sees a booking held after a bust, records a sleeve cross, and hears and reads bookings and a held booking's alert. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups and reads the agents' guard.\n",
       "cases": [
         {
           "name": "proposes-an-order",
@@ -3582,13 +3900,39 @@
               "row": "ReadLocalRecordOrders"
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-the-agents-guard",
+          "since": "v26",
+          "given": "the plugin starts, and shows a person before an agent's act whether a live connection would refuse it",
+          "expect": [
+            {
+              "row": "ReadAgentOrdersDemoOnly"
+            }
+          ]
         }
       ]
     },
     {
       "role": "operations",
       "since": "v14",
-      "says": "An operations plugin passing every case reads the account's activity when it reconciles, hears each activity recorded, and offers the activity that explains a break as its candidate cause, linked by value, under the category that fits; it books nothing from activity and confirms nothing without a person. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it corrects a handed-off booking, names an unsettled allocation as a break's cause, sets a client's allocation instruction where the firm is its custodian, and hears and reads bookings and a held booking's alert. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
+      "says": "An operations plugin passing every case reads the account's activity when it reconciles, hears each activity recorded, and offers the activity that explains a break as its candidate cause, linked by value, under the category that fits; it books nothing from activity and confirms nothing without a person. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it corrects a handed-off booking, names an unsettled allocation as a break's cause, sets a client's allocation instruction where the firm is its custodian, and hears and reads bookings and a held booking's alert. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups and queries the lake within bounds.\n",
       "cases": [
         {
           "name": "income-reinvested-explains-a-quantity-gained",
@@ -3936,13 +4280,44 @@
               "row": "ListAlerts"
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "queries-the-lake-within-bounds",
+          "since": "v26",
+          "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
+          "expect": [
+            {
+              "row": "QueryLake",
+              "fields": {
+                "kind": "<set>",
+                "subjects": "<set>",
+                "row_limit": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "portfolio",
       "since": "v18",
-      "says": "A portfolio plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it amends an order's allocation instruction and hears and reads bookings. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
+      "says": "A portfolio plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it amends an order's allocation instruction and hears and reads bookings. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, runs analytics jobs and reads their answers, reads the agents' guard, and queries the lake within bounds.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -4219,13 +4594,188 @@
               "row": "ReadLocalRecordOrders"
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "runs-a-job-and-reads-its-answer",
+          "since": "v26",
+          "given": "the plugin asks the analytics component for a measure over accounts in its scope, answered inline when small and later when large",
+          "expect": [
+            {
+              "row": "ListMeasureDefinitions"
+            },
+            {
+              "row": "RunJob",
+              "fields": {
+                "job": {
+                  "account_ids": "<set>",
+                  "measures": "<set>"
+                }
+              }
+            },
+            {
+              "row": "JobFinished"
+            },
+            {
+              "row": "ReadJobAnswer",
+              "fields": {
+                "job_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "catches-up-finished-jobs",
+          "since": "v26",
+          "given": "the plugin lost a job's finishing and reads the jobs finished after the last sequence it saw",
+          "expect": [
+            {
+              "row": "ListFinishedJobs",
+              "fields": {
+                "after_sequence": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-the-agents-guard",
+          "since": "v26",
+          "given": "the plugin starts, and shows a person before an agent's act whether a live connection would refuse it",
+          "expect": [
+            {
+              "row": "ReadAgentOrdersDemoOnly"
+            }
+          ]
+        },
+        {
+          "name": "queries-the-lake-within-bounds",
+          "since": "v26",
+          "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
+          "expect": [
+            {
+              "row": "QueryLake",
+              "fields": {
+                "kind": "<set>",
+                "subjects": "<set>",
+                "row_limit": "<set>"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "pricing",
+      "since": "v26",
+      "says": "A pricing plugin passing every case answers each batch routed to it with a value per unit for every instrument and scenario the batch names, from the market objects the batch carries and nothing else, and its answers equal the built-in model's exactly on the template's test cases; it carries no sensitivity until its model declares one, from v28; and after a restart it reads the batches still waiting after the last sequence it saw.\n",
+      "cases": [
+        {
+          "name": "answers-a-batch",
+          "since": "v26",
+          "given": "the component routes a quoted_price batch to the plugin, one instrument under the base scenario with its close",
+          "expect": [
+            {
+              "row": "PriceBatch"
+            },
+            {
+              "row": "AnswerPriceBatch",
+              "fields": {
+                "batch_id": "<set>",
+                "values": [
+                  {
+                    "instrument_id": "<set>",
+                    "scenario_key": "<set>",
+                    "value_per_unit": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "answers-every-scenario-of-a-batch",
+          "since": "v26",
+          "given": "a batch carries one instrument under several historical days' shocked closes",
+          "expect": [
+            {
+              "row": "AnswerPriceBatch",
+              "fields": {
+                "values": [
+                  {
+                    "scenario_key": {
+                      "kind": "SCENARIO_KIND_HISTORICAL_DAY",
+                      "business_date": "<set>"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "equals-the-built-in-model",
+          "since": "v26",
+          "given": "a batch carries the equity template's test case, 10 shares at a close of 227.50 USD",
+          "expect": [
+            {
+              "row": "AnswerPriceBatch",
+              "fields": {
+                "values": [
+                  {
+                    "value_per_unit": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "carries-no-sensitivity",
+          "since": "v26",
+          "given": "the plugin's model declares no sensitivity",
+          "expect": [
+            {
+              "row": "AnswerPriceBatch",
+              "fields": {
+                "sensitivities": []
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-the-batches-waiting-after-a-restart",
+          "since": "v26",
+          "given": "the plugin restarts with batches routed to it unanswered",
+          "expect": [
+            {
+              "row": "ListPriceBatches",
+              "fields": {
+                "after_sequence": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "reference",
       "since": "v24",
-      "says": "A reference plugin passing every case fills a security's template from the sources it reconciles, offering each value with its provenance and itself the source; keeps a value from a licensed vendor's feed as an offer that never leaves the deployment; never overwrites a value a person set or accepted; never asks for a mint; reads the template catalogue; and hears and catches up on replacements. A case about calendars or settlement dates (`about`) a plugin whose work never uses them marks not presented, with why.\n",
+      "says": "A reference plugin passing every case fills a security's template from the sources it reconciles, offering each value with its provenance and itself the source; keeps a value from a licensed vendor's feed as an offer that never leaves the deployment; never overwrites a value a person set or accepted; never asks for a mint; reads the template catalogue; and hears and catches up on replacements. A case about calendars or settlement dates (`about`) a plugin whose work never uses them marks not presented, with why. From contract v26 it hears and reads event groups.\n",
       "cases": [
         {
           "name": "fills-a-template",
@@ -4349,13 +4899,29 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "reporting",
       "since": "v18",
-      "says": "A reporting plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. From v19 it names an instrument by an identifier, such as its reporting currency by its ISO 4217 code, and has it resolved to the deployment's record, which mints nothing. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears and reads bookings and alerts. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
+      "says": "A reporting plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. From v19 it names an instrument by an identifier, such as its reporting currency by its ISO 4217 code, and has it resolved to the deployment's record, which mints nothing. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears and reads bookings and alerts. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, runs analytics jobs and reads their answers, and queries the lake within bounds, prices, bars and outcomes only.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -4576,13 +5142,85 @@
               "row": "ListAlerts"
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "runs-a-job-and-reads-its-answer",
+          "since": "v26",
+          "given": "the plugin asks the analytics component for a measure over accounts in its scope, answered inline when small and later when large",
+          "expect": [
+            {
+              "row": "ListMeasureDefinitions"
+            },
+            {
+              "row": "RunJob",
+              "fields": {
+                "job": {
+                  "account_ids": "<set>",
+                  "measures": "<set>"
+                }
+              }
+            },
+            {
+              "row": "JobFinished"
+            },
+            {
+              "row": "ReadJobAnswer",
+              "fields": {
+                "job_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "catches-up-finished-jobs",
+          "since": "v26",
+          "given": "the plugin lost a job's finishing and reads the jobs finished after the last sequence it saw",
+          "expect": [
+            {
+              "row": "ListFinishedJobs",
+              "fields": {
+                "after_sequence": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "queries-the-lake-within-bounds",
+          "since": "v26",
+          "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
+          "expect": [
+            {
+              "row": "QueryLake",
+              "fields": {
+                "kind": "<set>",
+                "subjects": "<set>",
+                "row_limit": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "servicing",
       "since": "v22",
-      "says": "A servicing plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
+      "says": "A servicing plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups.\n",
       "cases": [
         {
           "name": "reads-a-calendar",
@@ -4640,6 +5278,22 @@
               "row": "ReadTemplate",
               "fields": {
                 "template_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
               }
             }
           ]
@@ -4649,7 +5303,7 @@
     {
       "role": "settlement",
       "since": "v22",
-      "says": "A settlement plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
+      "says": "A settlement plugin passing every case reads a settlement calendar's days over a range, and asks the instrument store for an instrument's settlement date by its market's rule, as every role may. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups.\n",
       "cases": [
         {
           "name": "reads-a-calendar",
@@ -4710,13 +5364,29 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "signal",
       "since": "v18",
-      "says": "A signal plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; from v19 it reads trades over a range and the latest quotes, hears every trade and the latest quotes recorded after, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue.\n",
+      "says": "A signal plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; from v19 it reads trades over a range and the latest quotes, hears every trade and the latest quotes recorded after, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, runs analytics jobs and reads their answers, and queries the lake within bounds.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -4909,6 +5579,78 @@
               "row": "ReadTemplate",
               "fields": {
                 "template_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-and-reads-an-event-group",
+          "since": "v26",
+          "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
+          "expect": [
+            {
+              "row": "EventGroupChanged"
+            },
+            {
+              "row": "ListEventGroups",
+              "fields": {
+                "instrument_ids": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "runs-a-job-and-reads-its-answer",
+          "since": "v26",
+          "given": "the plugin asks the analytics component for a measure over accounts in its scope, answered inline when small and later when large",
+          "expect": [
+            {
+              "row": "ListMeasureDefinitions"
+            },
+            {
+              "row": "RunJob",
+              "fields": {
+                "job": {
+                  "account_ids": "<set>",
+                  "measures": "<set>"
+                }
+              }
+            },
+            {
+              "row": "JobFinished"
+            },
+            {
+              "row": "ReadJobAnswer",
+              "fields": {
+                "job_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "catches-up-finished-jobs",
+          "since": "v26",
+          "given": "the plugin lost a job's finishing and reads the jobs finished after the last sequence it saw",
+          "expect": [
+            {
+              "row": "ListFinishedJobs",
+              "fields": {
+                "after_sequence": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "queries-the-lake-within-bounds",
+          "since": "v26",
+          "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
+          "expect": [
+            {
+              "row": "QueryLake",
+              "fields": {
+                "kind": "<set>",
+                "subjects": "<set>",
+                "row_limit": "<set>"
               }
             }
           ]
