@@ -328,13 +328,23 @@ pub struct Rest {
 }
 
 impl Rest {
+    /// What every call to GitHub carries: this CLI's version, and a
+    /// User-Agent, without which GitHub's REST API refuses the request (403,
+    /// "Request forbidden by administrative rules").
+    pub(crate) fn headers() -> reqwest::header::HeaderMap {
+        let mut headers = crate::release::naming_this_version();
+        headers.insert(
+            reqwest::header::USER_AGENT,
+            reqwest::header::HeaderValue::from_str(&format!("meridian/{}", crate::release::VERSION))
+                .expect("the version is ASCII"),
+        );
+        headers
+    }
+
     pub(crate) fn client() -> Result<reqwest::Client, String> {
-        // GitHub's REST API refuses a request with no User-Agent (403,
-        // "Request forbidden by administrative rules").
         reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
-            .user_agent(format!("meridian/{}", crate::release::VERSION))
-            .default_headers(crate::release::naming_this_version())
+            .default_headers(Self::headers())
             .build()
             .map_err(|failed| failed.to_string())
     }

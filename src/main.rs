@@ -2963,18 +2963,14 @@ mod tests {
 
     #[test]
     fn the_release_commands_github_client_says_who_it_is() {
-        // GitHub refuses a REST request with no User-Agent (403); the client
-        // must carry one. Built here the way `Rest::client` builds it.
-        let request = super::plugin_release::Rest::client()
-            .unwrap()
-            .get("https://api.github.com/repos/o/r")
-            .build()
-            .unwrap();
-        let agent = request
-            .headers()
+        // GitHub refuses a REST request with no User-Agent (403); every call
+        // the release command makes carries one, with the CLI's version.
+        let headers = super::plugin_release::Rest::headers();
+        let agent = headers
             .get(reqwest::header::USER_AGENT)
             .map(|v| v.to_str().unwrap().to_string());
         assert_eq!(agent, Some(format!("meridian/{}", super::release::VERSION)));
+        assert!(headers.contains_key(super::release::VERSION_HEADER));
     }
 
     fn said(line: &str) -> Vec<String> {
