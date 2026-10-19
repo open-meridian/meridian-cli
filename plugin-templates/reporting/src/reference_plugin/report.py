@@ -15,6 +15,11 @@ that to the deployment's cash instrument (`resolve_identifier`, read-only
 for a `reporting` plugin from contract v19), rather than finding it among
 what the book happens to hold.
 
+From contract v26 it asks the analytics component for what it values
+(`market_value`), a job answered inline or later, each figure exact and
+named with what it was computed from (`meridian.analytics`); and it asks the
+lake one bounded query of the closes it shows (`lake_rows`).
+
 `meridian.suites.run("reporting", producers)` holds this to the role's
 suite (tests/test_suite.py), against a recorder standing in for the sidecar.
 """
@@ -26,6 +31,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import meridian
+from meridian import analytics
 from meridian.plugin.v1 import operations_pb2 as ops
 from meridian.roles import reporting
 
@@ -71,6 +77,8 @@ class Report:
     bars_heard: int = 0
     last_heard: str = ""
     datasets_read: list[str] = field(default_factory=list)
+    #: Its analytics jobs, answered inline or later (contract v26).
+    jobs: analytics.Jobs = field(default_factory=analytics.Jobs)
 
     async def datasets(self) -> list[str]:
         """The datasets this plugin may read, by name."""
@@ -190,6 +198,32 @@ class Report:
                 )
             )
         return rows
+
+    # ── The analytics component and the lake's query (contract v26) ─────
+
+    async def market_value(self, accounts: list[str]) -> analytics.Answer:
+        """Each account's market value by asset class, as the analytics
+        component computes it: exact, never recomputed here."""
+        known = analytics.measures_of(
+            (await self.plugin.list_measure_definitions()).definitions
+        )
+        by = (
+            ["asset_class"]
+            if "asset_class" in getattr(known.get("market_value"), "breakdowns", ())
+            else []
+        )
+        job = analytics.job(analytics.measure("market_value", by=by), accounts=accounts)
+        return await self.jobs.run(self.plugin, job)
+
+    async def lake_rows(self, subject: str) -> ops.QueryLakeResult:
+        """The closes the lake holds of one subject, its price alone, at most
+        100 rows: one bounded query, cut and said so past the limit."""
+        return await self.plugin.query_lake(
+            kind="prices",
+            subjects=[ops.SubjectRef(entity_id=subject)],
+            fields=["meridian.v1.Price.price"],
+            row_limit=100,
+        )
 
     # ── Heard ───────────────────────────────────────────────────────────
 

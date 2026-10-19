@@ -6,7 +6,8 @@
 //! Makefile) and compiled into the binary. So scaffolding needs no network and
 //! gives the same plugin every time, and `check-vendored-template` fails when
 //! this copy stops being the SDK's. With `--role` and `connectivity`,
-//! `custody`, `data`, `operations` or `reporting` it writes that role's template instead, from the
+//! `custody`, `data`, `operations`, `pricing` or `reporting` it writes that
+//! role's template instead, from the
 //! SDK's `templates/<role>/`, vendored the same way: a whole plugin holding the
 //! role, on the role's common part (spec/plugin-pages-follow-their-role), its
 //! tests running the role's suite where the template has one.
@@ -528,8 +529,9 @@ const REPORTING: [(&str, &str); 24] = [
 
 /// The connectivity template (SDK 0.30.0): a venue placed at through the
 /// SDK's `Trader`, its stand-in venue in memory, the Trading page and its
-/// tool, and storage for its trading notes.
-const CONNECTIVITY: [(&str, &str); 21] = [
+/// tool, and storage for its trading notes; from SDK 0.31.0 its tests run
+/// the connectivity suite.
+const CONNECTIVITY: [(&str, &str); 22] = [
     (
         ".claude/skills/develop-live/SKILL.md",
         include_str!("../plugin-templates/connectivity/.claude/skills/develop-live/SKILL.md"),
@@ -614,14 +616,117 @@ const CONNECTIVITY: [(&str, &str); 21] = [
         "tests/test_trading.py",
         include_str!("../plugin-templates/connectivity/tests/test_trading.py"),
     ),
+    (
+        "tests/test_suite.py",
+        include_str!("../plugin-templates/connectivity/tests/test_suite.py"),
+    ),
+];
+
+/// The pricing template (SDK 0.31.0, contract v26): the analytics
+/// component's batches answered through the SDK's `Pricer` over its own
+/// models, its Batches page, and its tests running the pricing suite.
+const PRICING: [(&str, &str); 23] = [
+    (
+        ".claude/skills/develop-live/SKILL.md",
+        include_str!("../plugin-templates/pricing/.claude/skills/develop-live/SKILL.md"),
+    ),
+    (
+        ".dockerignore",
+        include_str!("../plugin-templates/pricing/.dockerignore"),
+    ),
+    (
+        ".github/workflows/check.yaml",
+        include_str!("../plugin-templates/pricing/.github/workflows/check.yaml"),
+    ),
+    (
+        ".gitignore",
+        include_str!("../plugin-templates/pricing/.gitignore"),
+    ),
+    (
+        "AGENTS.md",
+        include_str!("../plugin-templates/pricing/AGENTS.md"),
+    ),
+    (
+        "CLAUDE.md",
+        include_str!("../plugin-templates/pricing/CLAUDE.md"),
+    ),
+    (
+        "Dockerfile",
+        include_str!("../plugin-templates/pricing/Dockerfile"),
+    ),
+    (
+        "README.md",
+        include_str!("../plugin-templates/pricing/README.md"),
+    ),
+    (
+        "docs/overview.md",
+        include_str!("../plugin-templates/pricing/docs/overview.md"),
+    ),
+    (
+        "docs/pages.md",
+        include_str!("../plugin-templates/pricing/docs/pages.md"),
+    ),
+    (
+        "docs/setup.md",
+        include_str!("../plugin-templates/pricing/docs/setup.md"),
+    ),
+    (
+        "docs/terms.md",
+        include_str!("../plugin-templates/pricing/docs/terms.md"),
+    ),
+    (
+        "docs/troubleshooting.md",
+        include_str!("../plugin-templates/pricing/docs/troubleshooting.md"),
+    ),
+    (
+        "hooks/pre-push",
+        include_str!("../plugin-templates/pricing/hooks/pre-push"),
+    ),
+    (
+        "pyproject.toml",
+        include_str!("../plugin-templates/pricing/pyproject.toml"),
+    ),
+    (
+        "src/reference_plugin/__init__.py",
+        include_str!("../plugin-templates/pricing/src/reference_plugin/__init__.py"),
+    ),
+    (
+        "src/reference_plugin/__main__.py",
+        include_str!("../plugin-templates/pricing/src/reference_plugin/__main__.py"),
+    ),
+    (
+        "src/reference_plugin/declaration.py",
+        include_str!("../plugin-templates/pricing/src/reference_plugin/declaration.py"),
+    ),
+    (
+        "src/reference_plugin/model.py",
+        include_str!("../plugin-templates/pricing/src/reference_plugin/model.py"),
+    ),
+    (
+        "src/reference_plugin/page.py",
+        include_str!("../plugin-templates/pricing/src/reference_plugin/page.py"),
+    ),
+    (
+        "src/reference_plugin/templates/batches.html",
+        include_str!("../plugin-templates/pricing/src/reference_plugin/templates/batches.html"),
+    ),
+    (
+        "tests/test_page.py",
+        include_str!("../plugin-templates/pricing/tests/test_page.py"),
+    ),
+    (
+        "tests/test_suite.py",
+        include_str!("../plugin-templates/pricing/tests/test_suite.py"),
+    ),
 ];
 
 /// The roles `plugin new --role` has a template for, each with its files.
-pub const ROLE_TEMPLATES: [(&str, &[(&str, &str)]); 5] = [
+pub const ROLE_TEMPLATES: [(&str, &[(&str, &str)]); 6] = [
     ("connectivity", &CONNECTIVITY),
     ("custody", &CUSTODY),
     ("data", &DATA),
     ("operations", &OPERATIONS),
+    ("pricing", &PRICING),
     ("reporting", &REPORTING),
 ];
 

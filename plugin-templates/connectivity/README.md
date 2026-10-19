@@ -19,6 +19,12 @@ with your venue's). How it reaches the venue -- an API, FIX -- is its own.
   for the connectivity role's admin (`enable_trading`, checked by
   `check_enable_trading`).
 
+Its tests run the `connectivity` suite the SDK carries (`tests/test_suite.py`),
+so `meridian plugin check --verified` passes on it as written: each case
+answered by the stand-in venue through the SDK's Trader, and the cases this
+venue never presents named with why. Replace the stand-in's answers with
+your venue's, and keep every case passing.
+
 Tests use fakes only: never a real broker, never a token.
 
     make ci-local     # what the plugin's CI runs

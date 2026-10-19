@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Pre-push gate for a plugin: CI-first (ruled 2026-10-13).
+#
+# A plugin's change lands through a pull request: push a branch, open the pull
+# request, and its CI (.github/workflows/check.yaml) is the first line; merge
+# when green. Pushing a branch therefore runs nothing here.
+#
+# A push straight to main skips the pull request, so it still runs the
+# plugin's check first: `meridian plugin check --run-tests`, the same check
+# its CI runs.
+#
+# Activate on a fresh clone with:  git config core.hooksPath hooks
+# --no-verify bypasses this. It is not recommended.
+
+set -euo pipefail
+
+to_main=""
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  [ "$remote_ref" = "refs/heads/main" ] && to_main=1
+done
+
+if [ -z "$to_main" ]; then
+  echo "pre-push: a branch push; CI on its pull request is the gate (CI-first)."
+  exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+echo "pre-push: a push straight to main; running meridian plugin check --run-tests"
+if ! meridian plugin check --run-tests; then
+  echo
+  echo "pre-push: BLOCKED -- meridian plugin check --run-tests failed."
+  echo "Land it through a pull request instead, or fix it locally."
+  exit 1
+fi

@@ -16,7 +16,7 @@ meridian down                # uninstall it, keeping its namespace unless asked
 meridian upgrade-deployment  # move it to a newer chart, in place, after checking it can
 meridian connect [<address>] # sign in to a deployment (default: the local one), and keep the session
 meridian sign-out            # end that session, here and at the deployment
-meridian plugin new <name>   # start a plugin from the SDK's reference plugin; --role custody, data, operations or reporting
+meridian plugin new <name>   # start a plugin from the SDK's reference plugin; --role connectivity, custody, data, operations, pricing or reporting
 meridian plugin check        # hold it to the framework's rules: pages, settings, SDK, tests
 meridian plugin migrate      # move it to a newer SDK: its pins, each release's rewrite, then check
 meridian plugin upload       # build it and put it in the deployment's catalogue
@@ -460,7 +460,8 @@ branch push, whose pull request's CI is the gate, and `meridian plugin check
 turns it on in the plugin's repository, and `.dockerignore` keeps it out of
 the image too.
 
-`--role` with `custody`, `data`, `operations` or `reporting` writes that
+`--role` with `connectivity`, `custody`, `data`, `operations`, `pricing` or
+`reporting` writes that
 role's template instead, from meridian-python's `templates/`: a whole plugin
 holding the role, built on the role's common part (`meridian.roles.<role>`,
 spec/plugin-pages-follow-their-role), so a person who knows the role knows the
@@ -483,7 +484,12 @@ balances pages, its confirmation checked by a read tool so an agent may
 prepare it for a person. The `reporting` plugin values the book's positions
 at the last close from the lake, and records nothing; it resolves its
 reporting currency by its ISO 4217 code, its tests run the reporting suite,
-and its Closes page is a read tool too, `read_report`. A role with no
+and its Closes page is a read tool too, `read_report`. The `pricing` plugin
+(SDK 0.31.0, contract v26) answers the analytics component's batches through
+the SDK's `Pricer` over its own models, its tests running the pricing suite;
+SDK 0.31.0's template also declares storage, which `edge-storage` fails,
+since `pricing` is no edge role. The `connectivity` plugin's tests run the
+connectivity suite from SDK 0.31.0. A role with no
 template of its own is refused: the reference plugin takes any role in its
 `pyproject.toml`. Contract v20 renamed three roles, `dgm` to `data`, `ccm` to
 `connectivity` and `match` to `confirmation`; the old names are no roles.
@@ -499,8 +505,8 @@ and from contract v22 the algorithms its autonomous work may name
 every key as printed, whole. `plugin check` holds the same declaration to
 that (`edge-storage`).
 `plugin check --verified` holds a plugin holding a role with a conformance
-suite (`custody`, `data` from contract v18, and `connectivity` from contract
-v22) to a test that runs the suite (`role-suite`), which `--run-tests` then
+suite (`custody`, `data` from contract v18, `connectivity` from contract
+v22, and `pricing` from contract v26) to a test that runs the suite (`role-suite`), which `--run-tests` then
 runs: a plugin holding the role is
 verified for it only by passing every case, though from contract v19 the
 SDK's runner lets a case about a kind of data the plugin declares it never
@@ -608,9 +614,11 @@ identifier it states, or follow the kept ID to the record it became with
 `meridian.CurrentIdMap`; one written as `<map>.current("<id>")` is followed
 already. A warning fails nothing, verified or not: it is printed with its
 rule, file and line, and listed under `warnings` in `--json`. The check reads
-meridian-schema's v25 `roles.json` and `suites.json` (3983435; from v24's,
-connectivity no longer reads the escape hatch, and the give-up's case is
-marked `about: give-ups`): `reference`
+meridian-schema's v26 `roles.json` and `suites.json` (309e093, as SDK 0.31.0
+vendors them; from v24's, connectivity no longer reads the escape hatch, and
+the give-up's case is marked `about: give-ups`): `pricing` is a role, not at
+the edge, with its suite; v26's event group, jobs, bounded lake query and
+agents' guard cases are in the suites that hold them; `reference`
 is a role, its suite in preview and not yet held by `--verified`;
 `roles-declared` knows v24's commands and the roles holding them (booking's,
 `set_allocation_instruction`, `report_give_up`, the alerts',
@@ -654,8 +662,7 @@ its CI checks with the meridian that wrote it (`MERIDIAN_VERSION`).
 
 ```
 meridian plugin key setup                       # git's SSH signing key, or a new one, registered
-meridian plugin release 0.19.0                  # the release PR, its merge, the tag, published
-meridian plugin release 0.19.0 --no-wait        # stop once the PR is open; run again to go on
+meridian plugin release 0.19.0                  # checked, the tag signed on main's head, published
 meridian plugin key register ~/.ssh/release.pub --organisation acme
 meridian plugin publish --registry community --tag v0.18.0 --organisation acme
 meridian plugin key list --organisation acme
@@ -688,18 +695,21 @@ a GPG key), and registers the public half on the organisation; somebody who
 is not an Owner or Admin is told to ask one, with the line to give them.
 `plugin new` offers it where git has no SSH signing key yet.
 
-`release <version>` releases the plugin here in one command, its merge a
-person's. It checks the checkout is on the default branch, clean and up to
-date with origin, that branch's last CI run green and the version higher
-than the last tag; opens the release PR (`pyproject.toml`'s version and the
-CHANGELOG heading, made in a worktree of its own, so the checkout is never
-switched) and waits for its CI and then its merge. Then it signs
-`v<version>` on the merge commit, pushes it, publishes it as `publish` does
-and prints the listing's address. `--no-wait` stops once the PR is open,
-and running it again resumes from wherever the release is. GitHub is asked
-through its API with your own GitHub sign-in: `GH_TOKEN` or `GITHUB_TOKEN`,
-else the credential git keeps for github.com; nothing else is installed for
-it. `download` writes a plugin bundle -- the image, its
+`release <version>` releases the plugin here in one command (ruling 323,
+from 0.1.49): it checks, signs and publishes, and opens no pull request and
+writes no file. The version bump and the CHANGELOG entry go in the change's
+own pull request: it raises `pyproject.toml`'s version and adds a
+`## <version>` heading to `CHANGELOG.md`, with no date and no
+"(unreleased)", since the date lives on the tag and the listing. `release`
+checks the checkout is on the default branch, clean and up to date with
+origin; the version higher than the last tag; `pyproject.toml` already at
+it; `CHANGELOG.md`'s `## <version>` heading there and undated; and that
+branch's last CI run green. Each refusal says what to do next. Then it signs
+`v<version>` on the branch's head, pushes it, publishes it as `publish` does
+and prints the listing's address; with the tag on origin already, it
+publishes that tag. GitHub is asked through its API with your own GitHub
+sign-in, to read the CI: `GH_TOKEN` or `GITHUB_TOKEN`, else the credential
+git keeps for github.com; nothing else is installed for it. `download` writes a plugin bundle -- the image, its
 referrers, its documentation and the platform's signed key status -- only
 once every digest and signature verifies against the platform's keys this
 release carries; `upload --bundle` carries it into a deployment that reaches
@@ -893,7 +903,8 @@ scaffold with the CI-first pre-push hook (`hooks/pre-push`, written
 executable) and the custody and reporting suites' tests meeting their v24
 cases, 0.29.0 (contract v25) from 0.1.46, and 0.30.0 (contract v25, the
 SDK's role helpers) from 0.1.47, with the `connectivity` template: a venue
-placed at through the SDK's `Trader`.
+placed at through the SDK's `Trader`, and 0.31.0 (contract v26) from 0.1.49,
+with the `pricing` template and the connectivity template's suite.
 
 ## Licence
 

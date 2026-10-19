@@ -12,13 +12,14 @@
 #     as advice; checked as verified, it fails role-suite, since no test of
 #     its runs the custody suite, and role-pages, since it has none of the
 #     role's common pages.
-#   - The `custody`, `data`, `operations` and `reporting` templates keep
-#     every rule, checked as verified too, on their roles' common parts; the
-#     custody, data and reporting templates' tests run their role's suite.
-#   - The `connectivity` template (SDK 0.30.0) keeps every rule, its tests
-#     running its adapter on the SDK's rig; checked as verified, it fails
-#     role-suite, since the connectivity suite is the plugin's to map to its
-#     own venue.
+#   - The `connectivity`, `custody`, `data`, `operations` and `reporting`
+#     templates keep every rule, checked as verified too, on their roles'
+#     common parts; the connectivity (from SDK 0.31.0), custody, data and
+#     reporting templates' tests run their role's suite.
+#   - The `pricing` template (SDK 0.31.0, contract v26) fails edge-storage
+#     alone: it declares Storage, and `pricing` is no edge role. Without that
+#     storage it keeps every rule, checked as verified, its tests running the
+#     pricing suite.
 #   - The `data` template with a float in its price path fails: its suite's
 #     cases, run by its own tests, catch the price recorded through a float.
 #   - A connectivity plugin that sends on a pause fails (build row 18 of
@@ -96,16 +97,28 @@ fi
 fails_saying reference "it holds \`custody\`, and no test runs the custody suite" --verified
 fails_saying reference "it holds \`custody\`, and declares no Account links page" --verified
 
-for role in custody data operations reporting; do
+for role in connectivity custody data operations reporting; do
     meridian plugin new "$role-plugin" --role "$role" --into "$role-plugin" >/dev/null
     install "$role-plugin"
     passes "$role-plugin" --verified --run-tests
 done
 
-meridian plugin new connectivity-plugin --role connectivity --into connectivity-plugin >/dev/null
-install connectivity-plugin
-passes connectivity-plugin --run-tests
-fails_saying connectivity-plugin "it holds \`connectivity\`, and no test runs the connectivity suite" --verified
+meridian plugin new pricing-plugin --role pricing --into pricing-plugin >/dev/null
+install pricing-plugin
+fails_saying pricing-plugin "the declaration asks for storage, and the plugin holds no edge role" --verified --run-tests
+if [ "$(grep -c '^  FAIL  ' pricing-plugin.out)" = 1 ]; then
+    say "ok    pricing-plugin: edge-storage is the one rule it fails"
+else
+    say "FAIL  pricing-plugin: it fails more than edge-storage:"
+    cat pricing-plugin.out
+    failed=1
+fi
+sed -i '/^    storage=Storage(kinds=(PRICING,)),$/d' pricing-plugin/src/pricing_plugin/declaration.py
+if grep -q 'storage=' pricing-plugin/src/pricing_plugin/declaration.py; then
+    say "FAIL  the fixture did not take the pricing plugin's storage out"
+    failed=1
+fi
+passes pricing-plugin --verified --run-tests
 
 # The fixture: the data plugin's vendor's JSON read with Python's floats,
 # every price passed through one on its way to the lake.

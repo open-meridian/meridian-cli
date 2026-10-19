@@ -137,6 +137,41 @@ async def alerts_heard_and_read(recorder: Recorder) -> None:
     await recorder.list_alerts(account_id="ACC-1")
 
 
+async def a_job_run_and_read(recorder: Recorder) -> None:
+    """Contract v26: the accounts' market value asked of the analytics
+    component, answered later, its finishing heard and its answer read."""
+    plugin = report(recorder)
+    recorder.answer(
+        "ListMeasureDefinitions",
+        lambda _: ops.ListMeasureDefinitionsResult(
+            definitions=[
+                ops.MeasureDefinition(
+                    definition="market_value", version=1, breakdowns=["asset_class"]
+                )
+            ]
+        ),
+    )
+    recorder.answer("RunJob", lambda _: ops.RunJobResult(answered_inline=False, job_id="JOB-1"))
+    recorder.answer("JobFinished", lambda _: ops.JobFinishedEvent(job_id="JOB-1", sequence=1))
+    recorder.answer("ReadJobAnswer", lambda _: ops.ReadJobAnswerResult(job_id="JOB-1"))
+    await recorder.receive(job_finished=plugin.jobs.heard)
+    answer = await plugin.market_value(["ACC-1"])
+    assert answer.job_id == "JOB-1"
+
+
+async def finished_jobs_caught_up(recorder: Recorder) -> None:
+    """Contract v26: the jobs finished after the last it saw, read after a loss."""
+    plugin = report(recorder)
+    plugin.jobs.sequence = 7
+    await plugin.jobs.catch_up(recorder)
+
+
+async def a_bounded_query(recorder: Recorder) -> None:
+    """Contract v26: one bounded query of the lake, a kind a reporting plugin
+    reads (prices, bars and outcomes only)."""
+    await report(recorder).lake_rows("LCL-1")
+
+
 PRODUCERS: dict[str, Producer] = {
     "reads-the-datasets-it-may-read": datasets,
     "reads-a-business-dates-closes": valued,
@@ -151,6 +186,9 @@ PRODUCERS: dict[str, Producer] = {
     "asks-for-a-settlement-date": asks_for_a_settlement_date,
     "hears-and-reads-bookings": bookings_heard_and_read,
     "hears-and-reads-alerts": alerts_heard_and_read,
+    "runs-a-job-and-reads-its-answer": a_job_run_and_read,
+    "catches-up-finished-jobs": finished_jobs_caught_up,
+    "queries-the-lake-within-bounds": a_bounded_query,
 }
 
 

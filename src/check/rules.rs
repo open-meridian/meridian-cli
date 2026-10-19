@@ -141,7 +141,7 @@ pub const TESTS_PASS: Rule = Rule {
 /// The roles a deployment has (decisions/020): meridian-design's
 /// matrix/roles.tsv, as this release of the CLI knows it. What a plugin may
 /// publish and subscribe to is its roles', and nothing else.
-pub const ROLES: [&str; 14] = [
+pub const ROLES: [&str; 15] = [
     "compliance",
     "confirmation",
     "connectivity",
@@ -151,6 +151,7 @@ pub const ROLES: [&str; 14] = [
     "oms",
     "operations",
     "portfolio",
+    "pricing",
     "reference",
     "reporting",
     "servicing",
@@ -160,6 +161,8 @@ pub const ROLES: [&str; 14] = [
 
 /// The roles at the edge, which alone may own the storage a deployment
 /// grants an instance for its raw external records (decisions/028).
+/// `pricing` (contract v26) is not among them: meridian-design's roles.yaml
+/// rules it `edge: false`, so a pricing plugin asks for no storage.
 pub const EDGE_ROLES: [&str; 7] = [
     "confirmation",
     "connectivity",
@@ -178,8 +181,10 @@ pub const EDGE_ROLES: [&str; 7] = [
 /// passing every case (spec/vendor-differences-have-a-place-in-the-contract,
 /// requirement 18): a connectivity plugin among them sending nothing new on a
 /// pause and cancelling at its venue on a stop, cases no plugin of the role
-/// may name not presented.
-pub const SUITES: [&str; 3] = ["custody", "data", "connectivity"];
+/// may name not presented; and `pricing` (contract v26, the v26 plan's 7b):
+/// each batch answered, every scenario, the built-in model's values, no
+/// sensitivity, and the batches waiting after a restart read.
+pub const SUITES: [&str; 4] = ["custody", "data", "connectivity", "pricing"];
 
 /// The rules only `--verified` holds a plugin to. A plugin holding a role
 /// with a suite and not passing it is not verified, and there is nothing to
@@ -969,9 +974,11 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at 3983435 (contract v25), byte
-/// for byte: each role's suite and its cases, every role's v24 cases on a
-/// replacement and the template catalogue among them. role-suite reads a
+/// meridian-schema's boundaries/suites.json at 309e093 (contract v26), byte
+/// for byte, as SDK 0.31.0 vendors it: each role's suite and its cases, every
+/// role's v24 cases on a replacement and the template catalogue among them,
+/// v26's event group, jobs, bounded lake query and agents' guard cases, and
+/// the pricing role's suite. role-suite reads a
 /// case's name and its markers alone, never what it expects, so an
 /// expectation written with the format's `any_of` (contract v23: each way's
 /// fields, in place of `fields`) is read as any other; matching what a plugin
@@ -2720,10 +2727,10 @@ fn runs_as_checked(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at 3983435 (contract v25), byte
+/// meridian-schema's boundaries/roles.json at 309e093 (contract v26), byte
 /// for byte: its `operations` say which roles hold each command, v24's
 /// booking (the oms's), the allocation instruction, the give-up, the alert and
-/// the reference role's template offer among them.
+/// the reference role's template offer among them, and v26's pricing role.
 const ROLES_JSON: &str = include_str!("roles.json");
 
 /// Each command a plugin may send, as the SDK names its call

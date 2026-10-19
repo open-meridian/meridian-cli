@@ -205,7 +205,9 @@ fn a_custody_plugin_from_the_template_keeps_every_rule_and_a_verified_one_runs_i
 
 #[test]
 fn each_roles_template_keeps_every_rule_verified_or_not() {
-    for role in ["custody", "data", "operations", "reporting"] {
+    // Connectivity's from SDK 0.31.0, its tests running the connectivity
+    // suite.
+    for role in ["connectivity", "custody", "data", "operations", "reporting"] {
         let plugin = Scaffolded::of_role(role, role);
         for report in [plugin.check(), plugin.check_verified()] {
             assert!(report.passed(), "{role}: {}", text(&report));
@@ -215,12 +217,10 @@ fn each_roles_template_keeps_every_rule_verified_or_not() {
 }
 
 #[test]
-fn the_connectivity_template_keeps_every_rule_and_is_told_to_run_its_suite_when_verified() {
-    // SDK 0.30.0's template tests its adapter on the SDK's rig; the
-    // connectivity suite is the plugin's to map to its venue.
-    let plugin = Scaffolded::of_role("connectivity", "connectivity");
-    let report = plugin.check();
-    assert!(report.passed(), "{}", text(&report));
+fn a_verified_connectivity_plugin_runs_the_connectivity_suite_in_its_tests() {
+    let plugin = Scaffolded::of_role("connectivity-no-suite", "connectivity");
+    std::fs::remove_file(plugin.path("tests/test_suite.py")).unwrap();
+    assert!(plugin.check().passed(), "not verified, it keeps every rule");
     let verified = plugin.check_verified();
     assert_eq!(
         failed_rules(&verified),
@@ -231,6 +231,50 @@ fn the_connectivity_template_keeps_every_rule_and_is_told_to_run_its_suite_when_
     assert_eq!(
         verified.failures[0].found,
         "it holds `connectivity`, and no test runs the connectivity suite"
+    );
+}
+
+/// `pricing` (contract v26) is no edge role: meridian-design's roles.yaml
+/// rules it `edge: false`. SDK 0.31.0's pricing template declares Storage
+/// all the same, and edge-storage fails it, alone, verified or not; without
+/// that storage it keeps every rule, its tests running the pricing suite.
+#[test]
+fn the_pricing_template_is_held_to_its_suite_and_fails_edge_storage_alone() {
+    assert!(super::rules::ROLES.contains(&"pricing"));
+    assert!(super::rules::SUITES.contains(&"pricing"));
+    assert!(!super::rules::EDGE_ROLES.contains(&"pricing"));
+    let plugin = Scaffolded::of_role("pricing", "pricing");
+    for report in [plugin.check(), plugin.check_verified()] {
+        assert_eq!(failed_rules(&report), ["edge-storage"], "{}", text(&report));
+        assert_eq!(
+            report.failures[0].found,
+            "the declaration asks for storage, and the plugin holds no edge role"
+        );
+        assert_eq!(
+            report.failures[0].file,
+            format!("src/{MODULE}/declaration.py")
+        );
+    }
+    plugin.replace(
+        &format!("src/{MODULE}/declaration.py"),
+        "    storage=Storage(kinds=(PRICING,)),\n",
+        "",
+    );
+    for report in [plugin.check(), plugin.check_verified()] {
+        assert!(report.passed(), "{}", text(&report));
+    }
+    // Its suite run, and asserted passed, is what verified holds it to.
+    std::fs::remove_file(plugin.path("tests/test_suite.py")).unwrap();
+    let verified = plugin.check_verified();
+    assert_eq!(
+        failed_rules(&verified),
+        ["role-suite"],
+        "{}",
+        text(&verified)
+    );
+    assert_eq!(
+        verified.failures[0].found,
+        "it holds `pricing`, and no test runs the pricing suite"
     );
 }
 
@@ -1596,10 +1640,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.30.0", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.31.0", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.30.0",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.31.0",
         ),
         (
             "tool-meridian",
@@ -2852,7 +2896,30 @@ fn a_reference_plugin_names_a_role_of_the_deployment_and_runs_no_suite_yet() {
 
 #[test]
 fn every_suite_holds_v24s_replacement_and_template_cases_which_every_plugin_passes() {
-    for role in super::rules::SUITES {
+    // Pricing's suite (contract v26) holds its own five cases alone: a
+    // pricing plugin answers the batches the analytics component routes to
+    // it, from what each batch carries.
+    let pricing: Vec<String> = super::rules::suite_cases("pricing")
+        .into_iter()
+        .map(|(name, optional)| {
+            assert!(!optional, "{name}: every pricing plugin passes it");
+            name
+        })
+        .collect();
+    assert_eq!(
+        pricing,
+        [
+            "answers-a-batch",
+            "answers-every-scenario-of-a-batch",
+            "equals-the-built-in-model",
+            "carries-no-sensitivity",
+            "reads-the-batches-waiting-after-a-restart",
+        ]
+    );
+    for role in super::rules::SUITES
+        .iter()
+        .filter(|role| **role != "pricing")
+    {
         let cases = super::rules::suite_cases(role);
         for case in [
             "hears-and-reads-a-replacement",
@@ -2873,6 +2940,27 @@ fn every_suite_holds_v24s_replacement_and_template_cases_which_every_plugin_pass
     assert!(connectivity
         .iter()
         .any(|(name, _)| name == "reports-a-give-up-rejected"));
+    // Contract v26: an event group heard and read in every role's suite but
+    // pricing's, and the agents' guard read where the role's suite has it.
+    for role in super::rules::SUITES
+        .iter()
+        .filter(|role| **role != "pricing")
+    {
+        assert!(
+            super::rules::suite_cases(role)
+                .iter()
+                .any(|(name, _)| name == "hears-and-reads-an-event-group"),
+            "{role}"
+        );
+    }
+    for role in ["compliance", "ems", "oms", "portfolio"] {
+        assert!(
+            super::rules::suite_cases(role)
+                .iter()
+                .any(|(name, _)| name == "reads-the-agents-guard"),
+            "{role}"
+        );
+    }
 }
 
 // ── replaced-ids-followed (contract v24; the one-ID spec's requirement 11) ──
@@ -3271,10 +3359,10 @@ fn a_plugin_on_an_older_sdk_is_advised_rather_than_failed() {
     let plugin = Scaffolded::tested("docs-older");
     plugin.replace(
         "pyproject.toml",
-        "open-meridian==0.30.0",
+        "open-meridian==0.31.0",
         "open-meridian==0.28.0",
     );
-    plugin.replace("Dockerfile", "plugin-python:0.30.0", "plugin-python:0.28.0");
+    plugin.replace("Dockerfile", "plugin-python:0.31.0", "plugin-python:0.28.0");
     std::fs::remove_dir_all(plugin.path("docs")).unwrap();
     let report = plugin.check();
     assert!(report.passed(), "{}", text(&report));

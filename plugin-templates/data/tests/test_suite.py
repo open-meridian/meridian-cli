@@ -160,6 +160,18 @@ async def asks_for_a_settlement_date(recorder: Recorder) -> None:
     )
 
 
+# The lake's bounded query (contract v26): one query of a kind the role
+# reads, naming the field it wants by its dictionary entry and a row limit --
+# here the closes it recorded of one subject, to compare with its vendor's.
+async def a_bounded_query(recorder: Recorder) -> None:
+    await recorder.query_lake(
+        kind="prices",
+        subjects=[ops.SubjectRef(entity_id="LCL-1")],
+        fields=["meridian.v1.Price.price"],
+        row_limit=100,
+    )
+
+
 PRODUCERS: dict[str, Producer] = {
     "a-daily-close": daily("BTC-USD"),
     "the-forming-day-restated": forming,
@@ -177,6 +189,7 @@ PRODUCERS: dict[str, Producer] = {
     "reads-its-datasets-licences": licences,
     "reads-a-calendar": reads_a_calendar,
     "asks-for-a-settlement-date": asks_for_a_settlement_date,
+    "queries-the-lake-within-bounds": a_bounded_query,
 }
 
 

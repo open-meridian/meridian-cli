@@ -1,0 +1,29 @@
+{% extends "meridian/base.html" %}
+{% block status %}
+<om-status data-om-header state="{{ 'warn' if data.unanswered else 'ok' }}" label="Batches">{{ data.answered }} answered.</om-status>
+{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-body">
+    <h2>Models</h2>
+    <p class="muted">The model ids this plugin answers for, once a deployment admin routes them to it.</p>
+    <p>{% for model in data.models %}<code>{{ model }}</code>{% if not loop.last %}, {% endif %}{% else %}None.{% endfor %}</p>
+  </div>
+</section>
+<section class="panel">
+  <div class="panel-body">
+    <h2>Batches</h2>
+    <dl>
+      <dt>Answered</dt><dd>{{ data.answered }}</dd>
+      <dt>Last sequence</dt><dd>{{ data.sequence }}</dd>
+    </dl>
+  </div>
+  <table class="one-line"><thead><tr><th>Unanswered batch</th><th>Why</th></tr></thead><tbody>
+  {% for each in data.unanswered %}
+    <tr><td><code>{{ each.batch_id }}</code></td><td>{{ each.why }}</td></tr>
+  {% else %}
+    <tr><td colspan="2">Every batch answered.</td></tr>
+  {% endfor %}
+  </tbody></table>
+</section>
+{% endblock %}
