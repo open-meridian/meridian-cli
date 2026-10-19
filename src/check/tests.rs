@@ -235,34 +235,38 @@ fn a_verified_connectivity_plugin_runs_the_connectivity_suite_in_its_tests() {
 }
 
 /// `pricing` (contract v26) is no edge role: meridian-design's roles.yaml
-/// rules it `edge: false`. SDK 0.31.0's pricing template declares Storage
-/// all the same, and edge-storage fails it, alone, verified or not; without
-/// that storage it keeps every rule, its tests running the pricing suite.
+/// rules it `edge: false`. From SDK 0.31.1 the pricing template declares no
+/// storage, so it keeps every rule, verified or not, its tests running the
+/// pricing suite; given storage, edge-storage fails it, alone.
 #[test]
-fn the_pricing_template_is_held_to_its_suite_and_fails_edge_storage_alone() {
+fn the_pricing_template_is_held_to_its_suite_and_asks_for_no_storage() {
     assert!(super::rules::ROLES.contains(&"pricing"));
     assert!(super::rules::SUITES.contains(&"pricing"));
     assert!(!super::rules::EDGE_ROLES.contains(&"pricing"));
     let plugin = Scaffolded::of_role("pricing", "pricing");
+    let declaration = format!("src/{MODULE}/declaration.py");
+    assert!(!plugin.read(&declaration).contains("Storage"));
+    for report in [plugin.check(), plugin.check_verified()] {
+        assert!(report.passed(), "{}", text(&report));
+    }
+    plugin.replace(
+        &declaration,
+        "DECLARATION = meridian.Declaration(\n",
+        "DECLARATION = meridian.Declaration(\n    storage=meridian.Storage(retention_days=30),\n",
+    );
     for report in [plugin.check(), plugin.check_verified()] {
         assert_eq!(failed_rules(&report), ["edge-storage"], "{}", text(&report));
         assert_eq!(
             report.failures[0].found,
             "the declaration asks for storage, and the plugin holds no edge role"
         );
-        assert_eq!(
-            report.failures[0].file,
-            format!("src/{MODULE}/declaration.py")
-        );
+        assert_eq!(report.failures[0].file, declaration);
     }
     plugin.replace(
-        &format!("src/{MODULE}/declaration.py"),
-        "    storage=Storage(kinds=(PRICING,)),\n",
+        &declaration,
+        "    storage=meridian.Storage(retention_days=30),\n",
         "",
     );
-    for report in [plugin.check(), plugin.check_verified()] {
-        assert!(report.passed(), "{}", text(&report));
-    }
     // Its suite run, and asserted passed, is what verified holds it to.
     std::fs::remove_file(plugin.path("tests/test_suite.py")).unwrap();
     let verified = plugin.check_verified();
@@ -1196,6 +1200,164 @@ fn a_page_of_its_own_comes_after_the_roles_in_its_tab_row() {
     );
 }
 
+/// The custody template with its own Account links, Statements and History
+/// pages and link routes gone, its Connections page kept, and `rest` in their
+/// place: the plugin the SDK's `custody-pages-onto-sdk` migration rule asks
+/// for when `rest` calls `custody.account_pages`.
+fn custody_on_sdk_pages(label: &str, rest: &str) -> Scaffolded {
+    let plugin = Scaffolded::of_role(label, "custody");
+    let text = plugin.read(&page_py());
+    let cut = text
+        .find("\n\n@pages.page(\n    \"/links\",")
+        .expect("the template's Account links page");
+    plugin.write(&page_py(), &format!("{}\n\n{rest}", &text[..cut]));
+    plugin
+}
+
+/// The custodian as `custody.account_pages` reads it
+/// (`meridian.roles.custody.CustodySource`).
+const CUSTODY_SOURCE: &str = "class Source:\n    \
+    vendor = \"Reference\"\n    \
+    credential = \"API key\"\n\n    \
+    def reached(self):\n        return [a.external_account_id for a in _custodian().accounts]\n\n    \
+    def account(self, number):\n        return custody.ExternalAccountRead(number, number, \"\")\n\n    \
+    def custodian(self):\n        return \"Reference custodian\"\n\n    \
+    def account_type(self, number):\n        return \"\"\n\n    \
+    def statement(self, number):\n        return None\n\n    \
+    def activities(self, number):\n        return []\n\n    \
+    def links(self):\n        return _links()\n\n\n";
+
+const WHAT: &str = "\"This plugin brings a custodian's accounts into this deployment\"";
+
+#[test]
+fn the_sdk_helpers_declaring_pages_are_read_from_the_vendored_sdk() {
+    // custody.account_pages, as sdk-roles/custody.py at SDK_REV declares it:
+    // read from the SDK's source, not a list kept here.
+    let custody: Vec<String> =
+        super::rules::sdk_helper_pages("meridian.roles.custody", "account_pages");
+    assert_eq!(
+        custody,
+        [
+            "page /links Account links read_account_links",
+            "route /links/check check_link_account",
+            "route /links link_account",
+            "page /statements Statements read_statements",
+            "page /history History read_account_activities",
+        ]
+    );
+    // Only a function of the SDK's declaring pages in its body is one: the
+    // data role's module shows its pages in a docstring, and declares none.
+    assert!(super::rules::sdk_helper_pages("meridian.roles.data", "figures").is_empty());
+}
+
+#[test]
+fn a_custody_plugin_on_the_sdks_pages_keeps_its_roles_common_pages() {
+    let call = format!("custody.account_pages(pages, Source, what={WHAT})\n");
+    let plugin = custody_on_sdk_pages("custody-sdk-pages", &format!("{CUSTODY_SOURCE}{call}"));
+    for report in [plugin.check(), plugin.check_verified()] {
+        assert!(report.passed(), "{}", text(&report));
+        assert!(
+            report
+                .advice
+                .iter()
+                .all(|advice| advice.rule != "role-pages"),
+            "{}",
+            text(&report)
+        );
+    }
+
+    // The helper imported by name, under a name of the plugin's own.
+    let plugin = custody_on_sdk_pages(
+        "custody-sdk-pages-named",
+        &format!(
+            "from meridian.roles.custody import account_pages as declare_custody\n\n\n\
+             {CUSTODY_SOURCE}declare_custody(pages, Source, what={WHAT})\n"
+        ),
+    );
+    assert!(
+        plugin.check_verified().passed(),
+        "{}",
+        text(&plugin.check_verified())
+    );
+
+    // And through the package, whole.
+    let plugin = custody_on_sdk_pages(
+        "custody-sdk-pages-whole",
+        &format!(
+            "{CUSTODY_SOURCE}meridian.roles.custody.account_pages(pages, Source, what={WHAT})\n"
+        ),
+    );
+    assert!(
+        plugin.check_verified().passed(),
+        "{}",
+        text(&plugin.check_verified())
+    );
+}
+
+#[test]
+fn a_custody_plugin_missing_the_sdks_pages_still_fails() {
+    let missing = [
+        "it holds `custody`, and declares no Account links page".to_string(),
+        "it holds `custody`, and declares no Statements page".into(),
+        "it holds `custody`, and declares no route named link_account".into(),
+    ];
+    let said = |plugin: &Scaffolded| -> Vec<String> {
+        role_pages_found(plugin)
+            .into_iter()
+            .map(|(found, _, _)| found)
+            .collect()
+    };
+
+    // No call: the helper's source alone declares nothing.
+    let plugin = custody_on_sdk_pages("custody-no-sdk-pages", CUSTODY_SOURCE);
+    assert_eq!(said(&plugin), missing);
+    let verified = plugin.check_verified();
+    for failure in &verified.failures {
+        assert!(
+            failure
+                .instead
+                .contains("or call the SDK's meridian.roles.custody.account_pages(pages, ...)"),
+            "{}",
+            failure.instead
+        );
+    }
+
+    // A call in a comment or a string is none, nor one to a function of the
+    // plugin's own by the same name.
+    let plugin = custody_on_sdk_pages(
+        "custody-sdk-pages-said",
+        &format!(
+            "{CUSTODY_SOURCE}# custody.account_pages(pages, Source, what={WHAT})\n\
+             NOTE = \"custody.account_pages(pages, Source)\"\n\n\n\
+             def account_pages(pages, source):\n    return None\n\n\n\
+             account_pages(pages, Source)\n"
+        ),
+    );
+    assert_eq!(said(&plugin), missing);
+
+    // A page of the plugin's own under Manage declared before the call: the
+    // helper registers the role's pages where it is called, after it.
+    let plugin = custody_on_sdk_pages(
+        "custody-sdk-pages-own-first",
+        &format!(
+            "@pages.page(\"/positions\", \"Positions\", levels=\"admin\")\n\
+             async def positions(request):\n    return pages.answer(\"connections.html\", None)\n\n\n\
+             {CUSTODY_SOURCE}custody.account_pages(pages, Source, what={WHAT})\n"
+        ),
+    );
+    let positions = line_of(&plugin, &page_py(), "\"/positions\", \"Positions\"");
+    assert_eq!(
+        role_pages_found(&plugin),
+        [(
+            "a page of the plugin's own, Positions, comes before the custody role's Account \
+             links page"
+                .to_string(),
+            page_py(),
+            positions
+        )]
+    );
+}
+
 #[test]
 fn a_plugin_keeps_the_common_settings_in_their_order() {
     let declaration = format!("src/{MODULE}/declaration.py");
@@ -1640,10 +1802,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.31.0", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.31.1", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.31.0",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.31.1",
         ),
         (
             "tool-meridian",
@@ -3359,10 +3521,10 @@ fn a_plugin_on_an_older_sdk_is_advised_rather_than_failed() {
     let plugin = Scaffolded::tested("docs-older");
     plugin.replace(
         "pyproject.toml",
-        "open-meridian==0.31.0",
+        "open-meridian==0.31.1",
         "open-meridian==0.28.0",
     );
-    plugin.replace("Dockerfile", "plugin-python:0.31.0", "plugin-python:0.28.0");
+    plugin.replace("Dockerfile", "plugin-python:0.31.1", "plugin-python:0.28.0");
     std::fs::remove_dir_all(plugin.path("docs")).unwrap();
     let report = plugin.check();
     assert!(report.passed(), "{}", text(&report));

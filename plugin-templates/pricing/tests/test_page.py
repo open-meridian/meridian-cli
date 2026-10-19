@@ -23,3 +23,11 @@ def test_batches_is_served_under_manage_alone_with_its_tool() -> None:
     answered = client.call_tool("read_batches", level="admin").data
     assert answered["models"] == ["quoted_price"]
     assert answered["answered"] == 0 and answered["unanswered"] == []
+
+
+def test_it_declares_no_storage() -> None:
+    """`pricing` is not a role at the edge (decisions/028): it keeps the last
+    batch it answered in memory, and holds no storage."""
+    from reference_plugin.declaration import DECLARATION
+
+    assert DECLARATION.storage is None
