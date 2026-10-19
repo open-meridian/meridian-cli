@@ -328,9 +328,12 @@ pub struct Rest {
 }
 
 impl Rest {
-    fn client() -> Result<reqwest::Client, String> {
+    pub(crate) fn client() -> Result<reqwest::Client, String> {
+        // GitHub's REST API refuses a request with no User-Agent (403,
+        // "Request forbidden by administrative rules").
         reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
+            .user_agent(format!("meridian/{}", crate::release::VERSION))
             .default_headers(crate::release::naming_this_version())
             .build()
             .map_err(|failed| failed.to_string())
