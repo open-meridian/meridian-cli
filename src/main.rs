@@ -542,9 +542,12 @@ fn parse(said: Vec<String>) -> Result<Arguments, String> {
             flags.push((flag.to_string(), value.to_string()));
             continue;
         }
-        // `up --release <name>` names a Helm release; `plugin dev --release`
-        // releases the code, and takes nothing.
-        if argument == "--release" && command == "plugin" {
+        // `up --release <name>` and `plugin gc --release <name>` name a Helm
+        // release; `plugin dev --release` releases the code, and takes nothing.
+        if argument == "--release"
+            && command == "plugin"
+            && words.first().is_some_and(|w| w == "dev")
+        {
             switches.push(argument);
             continue;
         }
@@ -2952,6 +2955,25 @@ mod tests {
         assert!(details.set("--details"));
         let gc = parse(said("plugin gc --yes")).unwrap();
         assert_eq!(gc.words, ["gc"]);
+        // `plugin gc --release <name>` names a Helm release, as `up` does;
+        // only `plugin dev --release` takes nothing.
+        let named = parse(said("plugin gc --release meridian --yes")).unwrap();
+        assert_eq!(named.words, ["gc"]);
+        assert_eq!(named.value("--release", "--release"), Some("meridian"));
+        let dev = parse(said("plugin dev --instance x --release")).unwrap();
+        assert!(dev.set("--release"));
+    }
+
+    #[test]
+    fn the_release_commands_github_client_says_who_it_is() {
+        // GitHub refuses a REST request with no User-Agent (403); every call
+        // the release command makes carries one, with the CLI's version.
+        let headers = super::plugin_release::Rest::headers();
+        let agent = headers
+            .get(reqwest::header::USER_AGENT)
+            .map(|v| v.to_str().unwrap().to_string());
+        assert_eq!(agent, Some(format!("meridian/{}", super::release::VERSION)));
+        assert!(headers.contains_key(super::release::VERSION_HEADER));
     }
 
     fn said(line: &str) -> Vec<String> {
