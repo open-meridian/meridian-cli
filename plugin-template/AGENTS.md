@@ -318,11 +318,14 @@ came in `meridian` 0.1.15; with an older one, the person runs
   `meridian plugin check --run-tests` on every pull request and every push
   to main.
 - **A change lands through a pull request** (CI-first): push a branch, open
-  the pull request, and merge once its CI is green. The pre-push hook
-  (`hooks/pre-push`, activated once with `git config core.hooksPath hooks`)
-  runs nothing for a branch push, and runs `meridian plugin check
-  --run-tests` before a push straight to main. Never bypass it with
-  `--no-verify`.
+  the pull request, and merge once its CI is green. The same pull request
+  raises `version` in `pyproject.toml` and adds the change to `CHANGELOG.md`
+  under a heading for that version, `## X.Y.Z`, with no date and no
+  "(unreleased)": the date lives on the release tag and the listing. A
+  version is never replaced. The pre-push hook (`hooks/pre-push`, activated
+  once with `git config core.hooksPath hooks`) runs nothing for a branch push
+  or a tag push, and runs `meridian plugin check --run-tests` before a push
+  straight to main. Never bypass it with `--no-verify`.
 
 What the check cannot decide stays advice, below: which component fits, the
 page's layout, custom properties the kit does not define, figures as strings,
@@ -626,3 +629,23 @@ instance. It is then an ordinary version in the deployment's catalogue.
 
 Stop the background `plugin dev`. The instance keeps running, live, as it was.
 `meridian plugin stop reference-plugin` ends it, which is the person's call.
+
+## Publish it to a registry
+
+To list a version on the platform's registry, publish a signed release tag
+of it:
+
+1. Once: `meridian plugin key setup`. It makes git's SSH signing key ready,
+   or a new one, sets git to sign tags with it, and registers its public half
+   on the organisation. Somebody who is not the organisation's Owner or Admin
+   is told to ask one, with the line to give them.
+2. Then, once the change's pull request is merged and main's CI is green:
+   `meridian plugin release X.Y.Z`, the version `pyproject.toml` and
+   `CHANGELOG.md` already say. It checks the checkout is on main, clean and
+   up to date; X.Y.Z is higher than the last release tag; `pyproject.toml`
+   says X.Y.Z; `CHANGELOG.md` has its `## X.Y.Z` heading; and main's CI is
+   green. Then it signs `vX.Y.Z` on main's head, pushes it, publishes it and
+   follows the build until it is listed, queued for review, or refused. It
+   opens no pull request and changes no file; each refusal says what to do
+   next. It reads main's CI with the person's GitHub sign-in: `GH_TOKEN` or
+   `GITHUB_TOKEN`, else the credential git keeps for github.com.

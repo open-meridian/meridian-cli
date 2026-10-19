@@ -5,6 +5,9 @@
 # request, and its CI (.github/workflows/check.yaml) is the first line; merge
 # when green. Pushing a branch therefore runs nothing here.
 #
+# A tag push runs nothing either: a release tag is signed on a main whose CI
+# `meridian plugin release` checked, and publishing it checks it again.
+#
 # A push straight to main skips the pull request, so it still runs the
 # plugin's check first: `meridian plugin check --run-tests`, the same check
 # its CI runs.
@@ -15,12 +18,20 @@
 set -euo pipefail
 
 to_main=""
+tags=""
 while read -r _local_ref _local_sha remote_ref _remote_sha; do
-  [ "$remote_ref" = "refs/heads/main" ] && to_main=1
+  case "$remote_ref" in
+    refs/heads/main) to_main=1 ;;
+    refs/tags/*) tags="$tags ${remote_ref#refs/tags/}" ;;
+  esac
 done
 
 if [ -z "$to_main" ]; then
-  echo "pre-push: a branch push; CI on its pull request is the gate (CI-first)."
+  if [ -n "$tags" ]; then
+    echo "pre-push: a tag push (${tags# }); nothing runs here. \`meridian plugin release\` checked main's CI before signing it, and publishing runs \`meridian plugin check\` before the platform builds it."
+  else
+    echo "pre-push: a branch push; CI on its pull request is the gate (CI-first)."
+  fi
   exit 0
 fi
 

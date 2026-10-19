@@ -4,8 +4,10 @@ one.
 It connects to the sidecar it is launched beside, declaring its page, and
 runs the SDK's Pricer over its models (model.py): the batches still waiting
 after the last sequence it answered, then each batch routed to it, answered
-whole, until it is stopped. The last sequence answered is kept in the
-storage the deployment grants it.
+whole, until it is stopped. The last sequence answered is kept in memory:
+`pricing` is not a role at the edge and holds no storage (decisions/028), so
+after a restart it reads every batch still waiting, and a batch answered
+twice is harmless, named by its hash.
 """
 
 import asyncio
@@ -13,7 +15,6 @@ import logging
 import signal
 
 import meridian
-from meridian import edge
 from meridian.roles import pricing
 
 from .declaration import DECLARATION, PORT
@@ -31,9 +32,7 @@ async def run() -> None:
 
     async with await meridian.connect(declaration=DECLARATION) as plugin:
         log.info("registered as %s", plugin.identity.instance_id)
-        granted = edge.storage_dir()
-        kept = pricing.Sequence(granted / "pricing.json" if granted is not None else None)
-        pricer = pricing.Pricer(plugin, MODELS, sequence=kept)
+        pricer = pricing.Pricer(plugin, MODELS, sequence=pricing.Sequence())
         running["pricer"] = pricer
         answering = asyncio.create_task(pricer.run())
         served = pages.serve(plugin, PORT)

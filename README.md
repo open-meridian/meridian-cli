@@ -487,8 +487,8 @@ reporting currency by its ISO 4217 code, its tests run the reporting suite,
 and its Closes page is a read tool too, `read_report`. The `pricing` plugin
 (SDK 0.31.0, contract v26) answers the analytics component's batches through
 the SDK's `Pricer` over its own models, its tests running the pricing suite;
-SDK 0.31.0's template also declares storage, which `edge-storage` fails,
-since `pricing` is no edge role. The `connectivity` plugin's tests run the
+it asks for no storage, since `pricing` is no edge role, and keeps the last
+batch it answered in memory. The `connectivity` plugin's tests run the
 connectivity suite from SDK 0.31.0. A role with no
 template of its own is refused: the reference plugin takes any role in its
 `pyproject.toml`. Contract v20 renamed three roles, `dgm` to `data`, `ccm` to
@@ -556,7 +556,17 @@ operations plugin's Breaks, Reconciliations and Opening balances and its
 `confirm_opening_balance`; a reporting plugin's `reporting_currency`; and a
 custody plugin keeping raw records (a `RecordKind` declared) titles its page
 for them Raw records, under Open and View. The rest the templates offer stays
-a candidate until a second plugin of the role needs it. Whatever roles it
+a candidate until a second plugin of the role needs it. A page or route the
+SDK declares for the plugin counts as declared: where the plugin calls one of
+the SDK's helpers that declares pages on its `Pages`, as
+`custody.account_pages(pages, Source, what=...)` declares custody's Account
+links, Statements and History and `link_account` (the SDK's
+`custody-pages-onto-sdk` migration), the rule holds what the helper declares,
+placed where the plugin calls it. What each helper declares is read from the
+SDK's own source at the vendored revision: `make vendor-template` copies every
+module under meridian-python's `src/meridian/roles` that decorates a page,
+route or tool to `sdk-roles/`, compiled into the binary, and
+`check-vendored-template` fails when it drifts. Whatever roles it
 holds, every act -- a route that changes something, offered to agents --
 names its check tool (`checked_by=`), a read route (`reads=True`) the plugin
 declares, so an agent may prepare the act for a person to make (contract
@@ -885,7 +895,8 @@ A version tag, `v<version>` (the version in `Cargo.toml`), publishes a release: 
 binary per target (macOS and Linux, each on x86_64 and arm64), each with its
 `.sha256`, which `install.sh` and `meridian upgrade` fetch. Nothing is
 published from a merge to `main`. `plugin new`'s templates are vendored from
-meridian-python's `template/` and `templates/` at a pinned commit (`make vendor-template`;
+meridian-python's `template/` and `templates/` at a pinned commit (`make vendor-template`,
+which copies the role modules declaring pages to `sdk-roles/` beside them;
 `check-vendored-template` fails when it drifts), so a release carries the SDK
 version the new plugin pins: 0.20.0 from 0.1.35, 0.21.0 from 0.1.36, 0.22.0
 (contract v18) from 0.1.37, with the `dgm` and `reporting`
@@ -903,8 +914,11 @@ scaffold with the CI-first pre-push hook (`hooks/pre-push`, written
 executable) and the custody and reporting suites' tests meeting their v24
 cases, 0.29.0 (contract v25) from 0.1.46, and 0.30.0 (contract v25, the
 SDK's role helpers) from 0.1.47, with the `connectivity` template: a venue
-placed at through the SDK's `Trader`, and 0.31.0 (contract v26) from 0.1.49,
-with the `pricing` template and the connectivity template's suite.
+placed at through the SDK's `Trader`, 0.31.0 (contract v26) from 0.1.49,
+with the `pricing` template and the connectivity template's suite, and 0.31.1
+from 0.1.50, the pricing template asking for no storage, each `AGENTS.md`
+saying how a version is published to a registry with a signed release tag
+(ruling 322), and the pre-push hook saying a tag push runs nothing.
 
 ## Licence
 

@@ -1942,10 +1942,311 @@ fn acts_checked(declared: &[Declaration], constants: &HashMap<String, String>) -
     failures
 }
 
+// The SDK's role modules declaring pages on a plugin's behalf, as the
+// vendoring copies them to sdk-roles/ at SDK_REV (build.rs compiles each in).
+include!(concat!(env!("OUT_DIR"), "/sdk_roles.rs"));
+
+/// sdk-roles/, read as the rules read a plugin: each module at its path in
+/// the SDK's source, `meridian/roles/<path>`.
+static SDK: LazyLock<Plugin> = LazyLock::new(|| Plugin {
+    root: std::path::PathBuf::new(),
+    files: SDK_ROLES
+        .iter()
+        .map(|(path, text)| Source {
+            path: format!("meridian/roles/{path}"),
+            text: (*text).to_string(),
+        })
+        .collect(),
+    verified: false,
+});
+
+/// A function of the SDK's that declares pages and routes on the `Pages` a
+/// plugin hands it (`meridian.roles.custody.account_pages(pages, ...)`).
+struct Helper {
+    /// The modules it is reached through: its own, dotted
+    /// (`meridian.roles.custody`), and, in a private module (`_pages`), the
+    /// package holding it.
+    modules: Vec<String>,
+    name: String,
+    /// What it declares, in its order, each argument a string constant of its
+    /// module names written as that string.
+    declared: Vec<Declaration<'static>>,
+}
+
+/// The SDK's helpers declaring pages: every top-level function of
+/// sdk-roles/ with a page, route or tool decorated in its body, in code
+/// rather than a docstring.
+static HELPERS: LazyLock<Vec<Helper>> = LazyLock::new(|| {
+    static DECORATOR: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"@\s*[A-Za-z_][A-Za-z0-9_.]*\.(page|route|tool)\s*\(").unwrap()
+    });
+    static DEF: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?:async[ \t]+)?def[ \t]+([A-Za-z_][A-Za-z0-9_]*)").unwrap()
+    });
+    static CONSTANT: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r#"(?m)^([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?::[^=\n]*)?=[ \t]*["']([^"'\\\n]+)["'][ \t]*$"#,
+        )
+        .unwrap()
+    });
+    let all = declarations(&SDK);
+    let mut helpers = Vec::new();
+    for source in python(&SDK) {
+        let code = python_code(&source.text);
+        let code_lines: Vec<&str> = code.lines().collect();
+        let constants: HashMap<String, String> = CONSTANT
+            .captures_iter(&python_uncommented(&source.text))
+            .map(|bound| (bound[1].to_string(), bound[2].to_string()))
+            .collect();
+        // Each top-level function, from its `def` to the next statement at
+        // the module's level.
+        let top: Vec<(usize, Option<String>)> = python_statements(&code)
+            .into_iter()
+            .filter(|(_, statement)| !statement.starts_with([' ', '\t', '\n']))
+            .map(|(line, statement)| (line, DEF.captures(&statement).map(|def| def[1].to_string())))
+            .collect();
+        let dotted = source
+            .path
+            .trim_end_matches(".py")
+            .trim_end_matches("/__init__")
+            .replace('/', ".");
+        let mut modules = vec![dotted.clone()];
+        if let Some((package, module)) = dotted.rsplit_once('.') {
+            if module.starts_with('_') {
+                modules.push(package.to_string());
+            }
+        }
+        for (at, (start, name)) in top.iter().enumerate() {
+            let Some(name) = name else { continue };
+            let end = top.get(at + 1).map_or(usize::MAX, |(next, _)| *next);
+            let declared: Vec<Declaration<'static>> = all
+                .iter()
+                .filter(|declaration| {
+                    std::ptr::eq(declaration.source, source)
+                        && declaration.kind != "setting"
+                        && declaration.line > *start
+                        && declaration.line < end
+                        && code_lines
+                            .get(declaration.line - 1)
+                            .is_some_and(|line| DECORATOR.is_match(line))
+                })
+                .map(|declaration| Declaration {
+                    source: declaration.source,
+                    kind: declaration.kind,
+                    line: declaration.line,
+                    arguments: constants_written(&declaration.arguments, &constants),
+                    body: None,
+                    view: declaration.view.clone(),
+                })
+                .collect();
+            if !declared.is_empty() {
+                helpers.push(Helper {
+                    modules: modules.clone(),
+                    name: name.clone(),
+                    declared,
+                });
+            }
+        }
+    }
+    helpers
+});
+
+/// A call's arguments with each that is a string constant of the module, or
+/// a sum of them and plain strings, written as that string: `ACCOUNT_LINKS`
+/// as `"/links"`, `ACCOUNT_LINKS + _CHECK` as `"/links/check"`.
+fn constants_written(arguments: &str, constants: &HashMap<String, String>) -> String {
+    static KEYWORD: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?s)^([A-Za-z_][A-Za-z0-9_]*\s*=)\s*([^=].*)$").unwrap());
+    static PLAIN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"^(?:"([^"'\\{]*)"|'([^"'\\{]*)')$"#).unwrap());
+    let string = |term: &str| -> Option<String> {
+        let term = term.trim();
+        if is_identifier(term) {
+            return constants.get(term).cloned();
+        }
+        let plain = PLAIN.captures(term)?;
+        Some(plain.get(1).or(plain.get(2))?.as_str().to_string())
+    };
+    split_arguments(arguments)
+        .into_iter()
+        .map(|part| {
+            let (named, value) = KEYWORD
+                .captures(part)
+                .map(|kw| (kw[1].to_string(), kw[2].trim().to_string()))
+                .unwrap_or_else(|| (String::new(), part.to_string()));
+            let summed: Option<String> = (!value.starts_with(['"', '\'']))
+                .then(|| value.split('+').map(string).collect::<Option<String>>())
+                .flatten();
+            match summed {
+                Some(string) => format!("{named}{string:?}"),
+                None => format!("{named}{value}"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// What an SDK helper declares, each `<kind> <path> [<title>] <tool>`, for
+/// the tests: nothing where it is no helper declaring pages.
+#[cfg(test)]
+pub(crate) fn sdk_helper_pages(module: &str, name: &str) -> Vec<String> {
+    let none = HashMap::new();
+    HELPERS
+        .iter()
+        .filter(|helper| helper.name == name && helper.modules.iter().any(|m| m == module))
+        .flat_map(|helper| helper.declared.iter())
+        .map(|declaration| {
+            let path = string_named(first_argument(&declaration.arguments), &none);
+            let title = (declaration.kind == "page")
+                .then(|| title_of(declaration, &none))
+                .flatten();
+            let tool =
+                keyword(&declaration.arguments, "name").and_then(|tool| string_named(tool, &none));
+            [Some(declaration.kind.to_string()), path, title, tool]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect()
+}
+
+/// The names a module of the SDK's is reached by in a plugin's module, from
+/// its imports: each the prefix a call to one of its functions is written
+/// with (`custody.` after `from meridian.roles import custody`,
+/// `meridian.roles.custody.` after `import meridian`), or, imported by name
+/// (`from meridian.roles.custody import account_pages as declare`), the name
+/// the function is called by.
+fn reached_as(code: &str, module: &str, function: &str) -> Vec<String> {
+    static IMPORT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)^import\s+(.+)$").unwrap());
+    static FROM: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?s)^from\s+([A-Za-z_][A-Za-z0-9_.]*)\s+import\s+(.+)$").unwrap()
+    });
+    let item = |text: &str| -> Option<(String, Option<String>)> {
+        let mut words = text.split_whitespace();
+        let name = words.next()?.to_string();
+        match (words.next(), words.next()) {
+            (Some("as"), Some(alias)) => Some((name, Some(alias.to_string()))),
+            _ => Some((name, None)),
+        }
+    };
+    let mut found = Vec::new();
+    for (_, statement) in python_statements(code) {
+        let statement = statement.trim();
+        if let Some(import) = IMPORT.captures(statement) {
+            for (name, alias) in import[1].split(',').filter_map(item) {
+                match alias {
+                    Some(alias) if name == module => found.push(format!("{alias}.")),
+                    None if module == name || module.starts_with(&format!("{name}.")) => {
+                        found.push(format!("{module}."))
+                    }
+                    _ => {}
+                }
+            }
+        } else if let Some(from) = FROM.captures(statement) {
+            let package = &from[1];
+            let names = from[2].trim().trim_start_matches('(').trim_end_matches(')');
+            for (name, alias) in names.split(',').filter_map(item) {
+                let bound = alias.unwrap_or_else(|| name.clone());
+                let whole = format!("{package}.{name}");
+                if name == "*" && package == module {
+                    found.push(function.to_string());
+                } else if package == module && name == function {
+                    found.push(bound);
+                } else if whole == module {
+                    found.push(format!("{bound}."));
+                } else if let Some(rest) = module.strip_prefix(&format!("{whole}.")) {
+                    found.push(format!("{bound}.{rest}."));
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The pages and routes the SDK declares for the plugin where it calls one
+/// of the SDK's helpers declaring them (`custody.account_pages(pages, ...)`),
+/// each as the helper declares it, placed at the call: the helper registers
+/// them, in its order, when the plugin's module calls it.
+fn sdk_declared(plugin: &Plugin) -> Vec<Declaration<'_>> {
+    let mut found = Vec::new();
+    for source in python(plugin) {
+        let code = python_code(&source.text);
+        for helper in HELPERS.iter() {
+            let mut calls: Vec<usize> = Vec::new();
+            for module in &helper.modules {
+                for written in reached_as(&code, module, &helper.name) {
+                    let called = if written.ends_with('.') {
+                        format!("{written}{}", helper.name)
+                    } else {
+                        written
+                    };
+                    let call = Regex::new(&format!(
+                        r"(?:^|[^A-Za-z0-9_.])({})\s*\(",
+                        regex::escape(&called)
+                    ))
+                    .expect("a call's pattern");
+                    for at in call.captures_iter(&code) {
+                        let start = at.get(1).expect("matched").start();
+                        if code[..start].trim_end().ends_with("def") {
+                            continue;
+                        }
+                        calls.push(start);
+                    }
+                }
+            }
+            calls.sort_unstable();
+            calls.dedup();
+            for start in calls {
+                let line = line_at(&code, start);
+                found.extend(helper.declared.iter().map(|declaration| Declaration {
+                    source,
+                    kind: declaration.kind,
+                    line,
+                    arguments: declaration.arguments.clone(),
+                    body: None,
+                    view: declaration.view.clone(),
+                }));
+            }
+        }
+    }
+    found
+}
+
+/// The SDK's helpers declaring what `wanted` holds of, as a plugin calls
+/// them, said after what to declare instead: `; or call the SDK's
+/// meridian.roles.custody.account_pages(pages, ...), which declares it`.
+fn or_helper(wanted: impl Fn(&Declaration) -> bool) -> String {
+    let helpers: Vec<String> = HELPERS
+        .iter()
+        .filter(|helper| helper.declared.iter().any(&wanted))
+        .map(|helper| {
+            let module = helper.modules.last().expect("a helper's own module");
+            format!("{module}.{}(pages, ...)", helper.name)
+        })
+        .collect();
+    if helpers.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; or call the SDK's {}, which declares it",
+            helpers.join(" or ")
+        )
+    }
+}
+
+/// A page's title, as written or through a constant.
+fn title_of(declaration: &Declaration, constants: &HashMap<String, String>) -> Option<String> {
+    keyword(&declaration.arguments, "title")
+        .or_else(|| positional(&declaration.arguments, 1))
+        .and_then(|title| string_named(title, constants))
+}
+
 fn role_pages(plugin: &Plugin) -> Vec<Failure> {
     const ID: &str = "role-pages";
     let (held, _) = declared(plugin);
-    let declared_all = declarations(plugin);
+    let mut declared_all = declarations(plugin);
+    declared_all.extend(sdk_declared(plugin));
     let constants = bound_strings(plugin);
     let mut failures = acts_checked(&declared_all, &constants);
     let parts: Vec<&CommonPart> = COMMON
@@ -1965,9 +2266,7 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
         .into_iter()
         .filter(|declaration| declaration.kind == "page")
         .map(|declaration| {
-            let title = keyword(&declaration.arguments, "title")
-                .or_else(|| positional(&declaration.arguments, 1))
-                .and_then(|title| string_named(title, &constants));
+            let title = title_of(&declaration, &constants);
             let path = keyword(&declaration.arguments, "path")
                 .or_else(|| positional(&declaration.arguments, 0))
                 .and_then(|path| string_named(path, &constants));
@@ -2027,12 +2326,17 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
                 .filter(|page| page.title.as_deref() == Some(common.title))
                 .collect();
             let Some(&page) = titled.first() else {
+                let none = HashMap::new();
+                let helper = or_helper(|declaration| {
+                    declaration.kind == "page"
+                        && title_of(declaration, &none).as_deref() == Some(common.title)
+                });
                 failures.push(failure(
                     ID,
                     &pages_file,
                     0,
                     format!("it holds `{role}`, and declares no {} page", common.title),
-                    &declare,
+                    &format!("{declare}{helper}"),
                 ));
                 continue;
             };
@@ -2225,13 +2529,19 @@ fn role_pages(plugin: &Plugin) -> Vec<Failure> {
             .iter()
             .filter(|act| !tools.iter().any(|tool| tool == *act))
         {
+            let helper = or_helper(|declaration| {
+                declaration.kind == "route"
+                    && keyword(&declaration.arguments, "name")
+                        .is_some_and(|name| name.trim_matches(['"', '\'']) == *act)
+            });
             failures.push(failure(
                 ID,
                 &pages_file,
                 0,
                 format!("it holds `{role}`, and declares no route named {act}"),
                 &format!(
-                    "the route whose tool is `{act}`, by that name (`name=\"{act}\"`): {template}"
+                    "the route whose tool is `{act}`, by that name (`name=\"{act}\"`): \
+                     {template}{helper}"
                 ),
             ));
         }

@@ -53,30 +53,48 @@ ci-mirror-check:
 # template from its templates/, copied to plugin-templates/ the same way. The
 # templates live beside the SDK they are written against and are tested there;
 # this copy is held to them the way the SDK's bindings are held to the schema.
-# meridian-python v0.31.0 (SDK 0.31.0, contract v26; open-meridian/meridian-python#11).
-SDK_REV  := 20ec34561e1afe739f21f10f05c3e006dc9076f2
+#
+# With them, the SDK's role modules that declare pages on a plugin's behalf
+# (a helper such as `custody.account_pages`, decorating `@pages.page(...)` and
+# `@pages.route(...)` inside it), every file under src/meridian/roles holding
+# such a decorator, copied to sdk-roles/ at their paths there: `role-pages`
+# reads the pages and routes each helper declares from them, so a plugin
+# calling one is held to what the SDK at SDK_REV declares, not a typed list.
+# meridian-python v0.31.1 (SDK 0.31.1, contract v26; open-meridian/meridian-python#12).
+SDK_REV  := 89b4c487462939e43c3a83118a478a9abaf3518f
 SDK_REPO := https://github.com/open-meridian/meridian-python.git
 SCRATCH  := .sdk-scratch
+SDK_ROLES := $(SCRATCH)/src/meridian/roles
 
+# The template, the templates and src/meridian/roles at SDK_REV in
+# $(SCRATCH), and the role modules declaring pages staged in
+# $(SCRATCH)/sdk-roles.
 define fetch_template
 	rm -rf $(SCRATCH) && git init -q $(SCRATCH) \
 	&& git -C $(SCRATCH) fetch -q --depth 1 $(SDK_REPO) $(SDK_REV) \
-	&& git -C $(SCRATCH) checkout -q FETCH_HEAD -- template templates
+	&& git -C $(SCRATCH) checkout -q FETCH_HEAD -- template templates src/meridian/roles \
+	&& mkdir -p $(SCRATCH)/sdk-roles \
+	&& for f in $$(grep -rlE '^[[:space:]]*@[A-Za-z_.]*\.(page|route|tool)\(' --include='*.py' $(SDK_ROLES) | sort); do \
+		at="$${f#$(SDK_ROLES)/}"; mkdir -p "$(SCRATCH)/sdk-roles/$$(dirname "$$at")" \
+		&& cp "$$f" "$(SCRATCH)/sdk-roles/$$at" || exit 1; \
+	done
 endef
 
 vendor-template:
 	@$(fetch_template)
-	@rm -rf plugin-template plugin-templates \
+	@rm -rf plugin-template plugin-templates sdk-roles \
 		&& cp -R $(SCRATCH)/template plugin-template && cp -R $(SCRATCH)/templates plugin-templates \
+		&& cp -R $(SCRATCH)/sdk-roles sdk-roles \
 		&& rm -rf $(SCRATCH)
-	@echo "vendor-template: plugin-template and plugin-templates are meridian-python's template and templates at $(SDK_REV)"
+	@echo "vendor-template: plugin-template, plugin-templates and sdk-roles are meridian-python's template, templates and page-declaring role modules at $(SDK_REV)"
 
 check-vendored-template:
 	@$(fetch_template) || { echo "check-vendored-template: could not fetch meridian-python at $(SDK_REV)" >&2; rm -rf $(SCRATCH); exit 1; }
-	@if diff -r $(SCRATCH)/template plugin-template >/dev/null && diff -r $(SCRATCH)/templates plugin-templates >/dev/null; then \
-		rm -rf $(SCRATCH); echo "check-vendored-template OK: the scaffolds are meridian-python's template and templates at $(SDK_REV)"; \
+	@if diff -r $(SCRATCH)/template plugin-template >/dev/null && diff -r $(SCRATCH)/templates plugin-templates >/dev/null \
+		&& diff -r $(SCRATCH)/sdk-roles sdk-roles >/dev/null; then \
+		rm -rf $(SCRATCH); echo "check-vendored-template OK: the scaffolds and sdk-roles are meridian-python's at $(SDK_REV)"; \
 	else \
-		rm -rf $(SCRATCH); echo "check-vendored-template FAILED: plugin-template or plugin-templates is not meridian-python's at $(SDK_REV). Run 'make vendor-template'." >&2; exit 1; \
+		rm -rf $(SCRATCH); echo "check-vendored-template FAILED: plugin-template, plugin-templates or sdk-roles is not meridian-python's at $(SDK_REV). Run 'make vendor-template'." >&2; exit 1; \
 	fi
 
 build:
@@ -133,9 +151,10 @@ check-install:
 # Each scaffold `plugin new` writes, made by the release binary, its tests run
 # for real against the SDK it pins (installed from meridian-python at SDK_REV):
 # the reference plugin, it given custody (every rule, the role's common part as
-# advice; role-suite and role-pages failing only when verified), the custody,
-# data, operations and reporting templates verified, the custody, data and
-# reporting ones with their suites, the data template with a float in its
+# advice; role-suite and role-pages failing only when verified), the
+# connectivity, custody, data, operations, pricing and reporting templates
+# verified, the connectivity, custody, data, pricing and reporting ones with
+# their suites, the data template with a float in its
 # price path failing, and a connectivity plugin acknowledging a placement after
 # a pause on it failing its suite. The check's own tests have no Python.
 check-scaffolds:

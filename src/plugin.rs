@@ -624,7 +624,8 @@ const CONNECTIVITY: [(&str, &str); 22] = [
 
 /// The pricing template (SDK 0.31.0, contract v26): the analytics
 /// component's batches answered through the SDK's `Pricer` over its own
-/// models, its Batches page, and its tests running the pricing suite.
+/// models, its Batches page, and its tests running the pricing suite; from
+/// SDK 0.31.1 it asks for no storage, keeping its last batch in memory.
 const PRICING: [(&str, &str); 23] = [
     (
         ".claude/skills/develop-live/SKILL.md",

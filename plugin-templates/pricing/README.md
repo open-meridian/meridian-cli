@@ -7,9 +7,10 @@ scenario a batch names, from exactly the market objects the batch carries.
 
 Its whole work is the SDK's (`meridian.roles.pricing.Pricer`): each batch
 answered whole, under each unit's scenario, with no sensitivity until a model
-declares one (from v28); and after a restart the batches still waiting, read
-from the last sequence it answered, kept in the storage the deployment grants
-it. The plugin keeps what is its own: its models (`model.py`). This one
+declares one (from v28); and after a restart every batch still waiting, since
+it keeps the last sequence it answered in memory: `pricing` is not a role at
+the edge, so it holds no storage (decisions/028), and a batch answered twice
+is harmless. The plugin keeps what is its own: its models (`model.py`). This one
 implements `quoted_price` with the built-in model's own computation, so its
 answers equal the built-in implementation's exactly; replace it with yours.
 
