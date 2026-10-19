@@ -544,7 +544,10 @@ fn parse(said: Vec<String>) -> Result<Arguments, String> {
         }
         // `up --release <name>` and `plugin gc --release <name>` name a Helm
         // release; `plugin dev --release` releases the code, and takes nothing.
-        if argument == "--release" && command == "plugin" && words.first().is_some_and(|w| w == "dev") {
+        if argument == "--release"
+            && command == "plugin"
+            && words.first().is_some_and(|w| w == "dev")
+        {
             switches.push(argument);
             continue;
         }

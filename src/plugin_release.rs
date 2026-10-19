@@ -335,8 +335,11 @@ impl Rest {
         let mut headers = crate::release::naming_this_version();
         headers.insert(
             reqwest::header::USER_AGENT,
-            reqwest::header::HeaderValue::from_str(&format!("meridian/{}", crate::release::VERSION))
-                .expect("the version is ASCII"),
+            reqwest::header::HeaderValue::from_str(&format!(
+                "meridian/{}",
+                crate::release::VERSION
+            ))
+            .expect("the version is ASCII"),
         );
         headers
     }
