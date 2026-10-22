@@ -73,7 +73,9 @@
           "ReportVenueCatalogue",
           "ReportValueDateRoll",
           "ReportGiveUp",
-          "ReportMissingVenue"
+          "ReportMissingVenue",
+          "ReportLatency",
+          "ReportPlacementQuote"
         ],
         "reads": [
           "ResolveIdentifier",
@@ -183,7 +185,9 @@
           "ReadJobAnswer",
           "ListEventGroups",
           "ReadAgentOrdersDemoOnly",
-          "QueryLake"
+          "QueryLake",
+          "ListRates",
+          "ListExecutionCosts"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -202,7 +206,9 @@
           "BarsRecorded",
           "OutcomesRecorded",
           "JobFinished",
-          "EventGroupChanged"
+          "EventGroupChanged",
+          "RatesRecorded",
+          "LivenessRecorded"
         ]
       }
     },
@@ -378,7 +384,10 @@
           "RecordQuotes",
           "RecordOutcomes",
           "DeclineWant",
-          "ReportEventGroup"
+          "ReportEventGroup",
+          "ReportLatency",
+          "RecordRates",
+          "RecordLiveness"
         ],
         "reads": [
           "ResolveIdentifier",
@@ -463,7 +472,9 @@
           "ReportExecution",
           "MapVenueAccount",
           "AcceptExecution",
-          "DontKnowExecution"
+          "DontKnowExecution",
+          "ReportLatency",
+          "PickPlacementQuote"
         ],
         "reads": [
           "ResolveInstrument",
@@ -483,7 +494,8 @@
           "ListDatasets",
           "ListEventGroups",
           "ReadAgentOrdersDemoOnly",
-          "QueryLake"
+          "QueryLake",
+          "ListExecutionCosts"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -495,7 +507,8 @@
           "ReportVenueCatalogue",
           "TradesRecorded",
           "QuotesRecorded",
-          "EventGroupChanged"
+          "EventGroupChanged",
+          "LivenessRecorded"
         ]
       }
     },
@@ -608,6 +621,7 @@
           "ReportExecution",
           "AcknowledgeFlag",
           "RecordLocateUse",
+          "SetAllocationInstruction",
           "BookOrder",
           "HandOffBooking",
           "CorrectBooking",
@@ -632,7 +646,8 @@
           "ListTemplates",
           "ReadTemplate",
           "ListEventGroups",
-          "ReadAgentOrdersDemoOnly"
+          "ReadAgentOrdersDemoOnly",
+          "ListExecutionCosts"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -726,9 +741,11 @@
           "ListReplacements",
           "ListTemplates",
           "ReadTemplate",
+          "ListPrices",
           "ListOutcomes",
           "ListEventGroups",
-          "QueryLake"
+          "QueryLake",
+          "ListExecutionCosts"
         ],
         "hears": [
           "StatementRecorded",
@@ -827,7 +844,9 @@
           "ReadJobAnswer",
           "ListEventGroups",
           "ReadAgentOrdersDemoOnly",
-          "QueryLake"
+          "QueryLake",
+          "ListRates",
+          "ListExecutionCosts"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -844,7 +863,9 @@
           "BarsRecorded",
           "OutcomesRecorded",
           "JobFinished",
-          "EventGroupChanged"
+          "EventGroupChanged",
+          "RatesRecorded",
+          "LivenessRecorded"
         ]
       }
     },
@@ -916,7 +937,9 @@
           "ListFinishedJobs",
           "ReadJobAnswer",
           "ListEventGroups",
-          "QueryLake"
+          "QueryLake",
+          "ListRates",
+          "ListExecutionCosts"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -932,7 +955,9 @@
           "BarsRecorded",
           "OutcomesRecorded",
           "JobFinished",
-          "EventGroupChanged"
+          "EventGroupChanged",
+          "RatesRecorded",
+          "LivenessRecorded"
         ]
       }
     },
@@ -1066,7 +1091,9 @@
           "ListFinishedJobs",
           "ReadJobAnswer",
           "ListEventGroups",
-          "QueryLake"
+          "QueryLake",
+          "ListRates",
+          "ListExecutionCosts"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -1076,7 +1103,9 @@
           "QuotesRecorded",
           "OutcomesRecorded",
           "JobFinished",
-          "EventGroupChanged"
+          "EventGroupChanged",
+          "RatesRecorded",
+          "LivenessRecorded"
         ]
       }
     },
@@ -1802,6 +1831,25 @@
       "stability": "preview"
     },
     {
+      "name": "ListExecutionCosts",
+      "step": "W10.11",
+      "title": "Record and read execution costs",
+      "kind": "query",
+      "topic": "platform.lake.query.list-execution-costs",
+      "roles": {
+        "reads": [
+          "compliance",
+          "ems",
+          "oms",
+          "operations",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ListFinishedJobs",
       "step": "W12.4",
       "title": "Finish a job later, and read its answer",
@@ -1923,6 +1971,7 @@
       "roles": {
         "reads": [
           "compliance",
+          "operations",
           "portfolio",
           "reporting",
           "signal"
@@ -1939,6 +1988,22 @@
       "roles": {
         "reads": [
           "ems",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ListRates",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-rates",
+      "roles": {
+        "reads": [
+          "compliance",
+          "portfolio",
+          "reporting",
           "signal"
         ]
       },
@@ -2055,6 +2120,23 @@
       "stability": "stable"
     },
     {
+      "name": "LivenessRecorded",
+      "step": "W10.5",
+      "title": "Record, sequence and publish each row",
+      "kind": "event",
+      "topic": "platform.lake.{dataset}.event.liveness-recorded",
+      "roles": {
+        "hears": [
+          "compliance",
+          "ems",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "LocateUpdated",
       "step": "W11.18",
       "title": "Record a locate and the prime's answer",
@@ -2139,6 +2221,19 @@
           "portfolio",
           "reporting",
           "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "PickPlacementQuote",
+      "step": "W11.41",
+      "title": "Pick a quote received on an RFQ placement",
+      "kind": "command",
+      "topic": "platform.book.command.pick-placement-quote",
+      "roles": {
+        "publishes": [
+          "ems"
         ]
       },
       "stability": "preview"
@@ -2262,6 +2357,22 @@
       "roles": {
         "publishes": [
           "compliance"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RatesRecorded",
+      "step": "W10.5",
+      "title": "Record, sequence and publish each row",
+      "kind": "event",
+      "topic": "platform.lake.{dataset}.event.rates-recorded",
+      "roles": {
+        "hears": [
+          "compliance",
+          "portfolio",
+          "reporting",
+          "signal"
         ]
       },
       "stability": "preview"
@@ -2527,6 +2638,19 @@
       "stability": "stable"
     },
     {
+      "name": "RecordLiveness",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-liveness",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "RecordLocate",
       "step": "W11.18",
       "title": "Record a locate and the prime's answer",
@@ -2611,6 +2735,19 @@
       "title": "Record prices, bars, trades and quotes in batches",
       "kind": "command",
       "topic": "platform.lake.command.record-quotes",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RecordRates",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-rates",
       "roles": {
         "publishes": [
           "data"
@@ -2752,6 +2889,21 @@
       "stability": "preview"
     },
     {
+      "name": "ReportLatency",
+      "step": "W4.16",
+      "title": "Report a session's latency and a hop's data age",
+      "kind": "command",
+      "topic": "platform.deployment.command.report-latency",
+      "roles": {
+        "publishes": [
+          "connectivity",
+          "data",
+          "ems"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ReportMissingInstrument",
       "step": "W3.2",
       "title": "Report an ambiguous resolution",
@@ -2792,6 +2944,19 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "ReportPlacementQuote",
+      "step": "W11.40",
+      "title": "Record a quote received on an RFQ placement",
+      "kind": "command",
+      "topic": "platform.book.command.report-placement-quote",
+      "roles": {
+        "publishes": [
+          "connectivity"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "ReportSyncStatus",
@@ -2956,6 +3121,7 @@
       "topic": "platform.book.command.set-allocation-instruction",
       "roles": {
         "publishes": [
+          "oms",
           "operations",
           "portfolio"
         ]

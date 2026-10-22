@@ -98,6 +98,12 @@ NOT_PRESENTED = {
     "re-reports-a-charge-on-the-accepted-placement": "the stand-in venue charges nothing",
     "reports-a-value-date-roll": "the stand-in venue rolls no spot position",
     "reports-a-give-up-rejected": "the stand-in venue clears every order it fills",
+    "records-a-dealers-quote-on-an-rfq-placement": "the stand-in venue takes no RFQ",
+    # Ruling 518: about `latency` until v28. The SDK's Trader records the
+    # session's round trip and sends no ReportLatency yet.
+    "reports-a-sessions-round-trip": (
+        "core receives ReportLatency from contract v28, ruling 515"
+    ),
 }
 
 
