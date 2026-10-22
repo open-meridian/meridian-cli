@@ -172,6 +172,42 @@ async def a_bounded_query(recorder: Recorder) -> None:
     await report(recorder).lake_rows("LCL-1")
 
 
+async def a_curve_read(recorder: Recorder) -> None:
+    """Contract v27: a rate curve's points for a business date."""
+    await report(recorder).curve("INS-PAR", DAY)
+
+
+async def a_rate_heard(recorder: Recorder) -> None:
+    plugin = report(recorder)
+    recorder.answer(
+        "RatesRecorded",
+        lambda _: ops.RatesRecordedEvent(
+            rate=ops.Rate(meta=ops.ObservationMeta(source=ops.Source(dataset="rates-1:par")))
+        ),
+    )
+    await recorder.receive(rates_recorded=plugin.on_rate, subjects=["INS-PAR"])
+    assert plugin.rates_heard == 1
+
+
+async def a_liveness_heard(recorder: Recorder) -> None:
+    """Contract v27: a stream's heartbeat, its quotes unchanged, confirms
+    the prices in force."""
+    plugin = report(recorder)
+    recorder.answer(
+        "LivenessRecorded",
+        lambda _: ops.LivenessRecordedEvent(
+            liveness=ops.DatasetLiveness(dataset="data-1:live", alive_at_ns=7)
+        ),
+    )
+    await recorder.receive(liveness_recorded=plugin.liveness.heard)
+    assert plugin.liveness.at("data-1:live") == 7
+
+
+async def costs_read(recorder: Recorder) -> None:
+    """Contract v27: an account's costs against arrival for a trade date."""
+    await report(recorder).costs("ACC-1", DAY)
+
+
 PRODUCERS: dict[str, Producer] = {
     "reads-the-datasets-it-may-read": datasets,
     "reads-a-business-dates-closes": valued,
@@ -189,6 +225,10 @@ PRODUCERS: dict[str, Producer] = {
     "runs-a-job-and-reads-its-answer": a_job_run_and_read,
     "catches-up-finished-jobs": finished_jobs_caught_up,
     "queries-the-lake-within-bounds": a_bounded_query,
+    "reads-a-curve-for-a-date": a_curve_read,
+    "hears-a-rate-recorded": a_rate_heard,
+    "hears-a-datasets-liveness": a_liveness_heard,
+    "reads-an-accounts-execution-costs": costs_read,
 }
 
 

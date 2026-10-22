@@ -72,9 +72,28 @@ streams, its transport:
   streamed and, where the broker reads its history, a range and a gap read
   back; the plugin subclasses `Feed`, naming its source and converting its
   broker's trade conditions;
+- `meridian.roles.data.rates` (0.32.0, contract v27; ruling 345) -- the
+  lake's rates slice: a publisher's fixings, averages, index levels and
+  curves' points as `Rate` rows, subjects resolved by the identifiers it
+  states, a same-day revision the next version of its row key, a tenor not
+  published no row; and a reader's curve for a date (`read_curve`);
 - `meridian.roles.data.testing` -- the lake as a test stands it in, and the
   data suite's producers for each, so a plugin runs the suite unchanged
   against its own conversion.
+
+**Latency and liveness** (0.32.0, contract v27): given the plugin's
+`roles.Latency` (`Wants.latency`), every row recorded unasked or for a
+standing want has its age at the `edge` hop recorded, its feed delay --
+recorded, not yet reported: the suite's `reports-its-feed-delay` is about
+`latency`, not presented until contract v28 (rulings 515 and 518); a
+stream's heartbeat with no price
+changed, or a poll, is the dataset's liveness (`Wants.liveness`,
+`RecordLiveness`), which confirms the values in force; Connection's
+"Sessions" section shows each session's `SessionLatency`
+(`ConnectionRead.session_latency`). A dataset declares its delay
+(`DatasetDeclaration.declared_delay_ns`) and its admin its staleness
+(`meridian.dataset_thresholds()`), and the plugin admin its ceilings
+(`meridian.session_ceilings()`).
 
 How a plugin talks to its venue -- an API client, a WebSocket, FIX -- is its
 own, never here.

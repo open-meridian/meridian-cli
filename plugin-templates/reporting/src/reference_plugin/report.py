@@ -20,6 +20,13 @@ From contract v26 it asks the analytics component for what it values
 named with what it was computed from (`meridian.analytics`); and it asks the
 lake one bounded query of the closes it shows (`lake_rows`).
 
+From contract v27 it reads a rate curve's points for a date (`curve`, the
+SDK's `rates.read_curve`), hears each rate the lake records and each
+dataset's liveness (a stream's heartbeat, which confirms the prices in
+force; `roles.Liveness`), and reads an account's execution costs against
+the standard benchmarks for a trade date (`costs`), which the analytics
+component records in the lake.
+
 `meridian.suites.run("reporting", producers)` holds this to the role's
 suite (tests/test_suite.py), against a recorder standing in for the sidecar.
 """
@@ -33,7 +40,8 @@ from decimal import Decimal
 import meridian
 from meridian import analytics
 from meridian.plugin.v1 import operations_pb2 as ops
-from meridian.roles import reporting
+from meridian.roles import Liveness, reporting
+from meridian.roles.data import rates
 
 NS = 1_000_000_000
 
@@ -79,6 +87,9 @@ class Report:
     datasets_read: list[str] = field(default_factory=list)
     #: Its analytics jobs, answered inline or later (contract v26).
     jobs: analytics.Jobs = field(default_factory=analytics.Jobs)
+    #: Contract v27: the rates heard, and each dataset's latest liveness.
+    rates_heard: int = 0
+    liveness: Liveness = field(default_factory=Liveness)
 
     async def datasets(self) -> list[str]:
         """The datasets this plugin may read, by name."""
@@ -224,6 +235,32 @@ class Report:
             fields=["meridian.v1.Price.price"],
             row_limit=100,
         )
+
+    # ── Rates and execution costs (contract v27) ──────────────────────
+
+    async def curve(self, subject: str, day: date) -> list[ops.Rate]:
+        """A rate curve's points for a business date, in tenor order, from
+        the deployment's default sources."""
+        return await rates.read_curve(self.plugin, subject, day)
+
+    async def costs(self, account: str, day: date) -> list[ops.ExecutionCost]:
+        """An account's execution costs for a trade date, against arrival
+        and the other standard benchmarks, every page read."""
+        out: list[ops.ExecutionCost] = []
+        cursor = ""
+        while True:
+            page = await self.plugin.list_execution_costs(
+                account_id=account, trade_date=day, cursor=cursor
+            )
+            out.extend(page.costs)
+            cursor = page.next_cursor
+            if not cursor:
+                return out
+
+    async def on_rate(self, heard: meridian.Heard[ops.RatesRecordedEvent]) -> None:
+        """A rate the lake recorded, for a subject this plugin reads."""
+        self.rates_heard += 1
+        self.last_heard = heard.message.rate.meta.source.dataset
 
     # ── Heard ───────────────────────────────────────────────────────────
 

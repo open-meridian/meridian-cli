@@ -15,9 +15,11 @@ recorded or synthetic exchange with it, and keep every case passing.
 A case about a kind of data (its `about`) the plugin declares it never
 publishes is not presented, with why, rather than mapped: this plugin's one
 dataset is daily closes and bars (declaration.py), so it states no trades,
-no quotes and no event contract's outcomes. Declare a dataset of trades,
-quotes or outcomes and those cases are required again, and fail until each
-is mapped.
+no quotes, no event contract's outcomes and no rates, and it is pulled,
+never streamed. Declare a dataset of trades, quotes, outcomes or rates, or
+stream one, and those cases are required again, and fail until each is
+mapped. From contract v27 the lake's bounded query is about trades too: a
+plugin recording none marks it not presented.
 """
 
 from __future__ import annotations
@@ -160,18 +162,6 @@ async def asks_for_a_settlement_date(recorder: Recorder) -> None:
     )
 
 
-# The lake's bounded query (contract v26): one query of a kind the role
-# reads, naming the field it wants by its dictionary entry and a row limit --
-# here the closes it recorded of one subject, to compare with its vendor's.
-async def a_bounded_query(recorder: Recorder) -> None:
-    await recorder.query_lake(
-        kind="prices",
-        subjects=[ops.SubjectRef(entity_id="LCL-1")],
-        fields=["meridian.v1.Price.price"],
-        row_limit=100,
-    )
-
-
 PRODUCERS: dict[str, Producer] = {
     "a-daily-close": daily("BTC-USD"),
     "the-forming-day-restated": forming,
@@ -189,7 +179,6 @@ PRODUCERS: dict[str, Producer] = {
     "reads-its-datasets-licences": licences,
     "reads-a-calendar": reads_a_calendar,
     "asks-for-a-settlement-date": asks_for_a_settlement_date,
-    "queries-the-lake-within-bounds": a_bounded_query,
 }
 
 
@@ -201,14 +190,30 @@ KINDS = {
     "quotes": "meridian.v1.Quote",
     "outcomes": "meridian.v1.Outcome",
     "disputed outcomes": "meridian.v1.Outcome",
+    "rates": "meridian.v1.Rate",
 }
 DECLARED = {kind for dataset in DECLARATION.catalogue for kind in dataset.data_types}
+STREAMED = any(
+    mode == ops.OBSERVATION_MODE_STREAM
+    for dataset in DECLARATION.catalogue
+    for mode in dataset.modes
+)
 
 NOT_PRESENTED: dict[str, str] = {
     case.name: f"its datasets publish daily closes and bars, and no {case.about}"
     for case in suite("data").cases
     if case.about in KINDS and KINDS[case.about] not in DECLARED
 }
+if not STREAMED:
+    NOT_PRESENTED["records-a-datasets-liveness"] = (
+        "its datasets are pulled when wanted, never streamed"
+    )
+# Ruling 518: a case about `latency` (its feed delay) waits for contract v28.
+# The SDK records each row's age at the edge (`Wants.latency`) and sends no
+# ReportLatency yet.
+for case in suite("data").cases:
+    if case.about == "latency":
+        NOT_PRESENTED[case.name] = "core receives ReportLatency from contract v28, ruling 515"
 
 
 def test_every_case_of_the_data_suite_passes() -> None:

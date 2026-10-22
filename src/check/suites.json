@@ -6,7 +6,7 @@
     {
       "role": "compliance",
       "since": "v18",
-      "says": "A compliance plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it acknowledges an error-account alert for a person, raises its own, and hears and reads bookings and alerts. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue, and decides an order on a local record, which no price check can run on. From contract v26 it hears and reads event groups, runs analytics jobs and reads their answers, reads the agents' guard, and queries the lake within bounds.\n",
+      "says": "A compliance plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it acknowledges an error-account alert for a person, raises its own, and hears and reads bookings and alerts. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue, and decides an order on a local record, which no price check can run on. From contract v26 it hears and reads event groups, runs analytics jobs and reads their answers, reads the agents' guard, and queries the lake within bounds. From contract v27 it reads a curve for a date, hears a rate recorded and a dataset's liveness, and reads an account's execution costs.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -472,6 +472,54 @@
               }
             }
           ]
+        },
+        {
+          "name": "reads-a-curve-for-a-date",
+          "since": "v27",
+          "given": "the plugin needs a rate curve's points for a business date",
+          "expect": [
+            {
+              "row": "ListRates",
+              "fields": {
+                "subjects": "<set>",
+                "business_date": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-rate-recorded",
+          "since": "v27",
+          "given": "the lake records a rate for a subject the plugin asked for",
+          "expect": [
+            {
+              "row": "RatesRecorded"
+            }
+          ]
+        },
+        {
+          "name": "hears-a-datasets-liveness",
+          "since": "v27",
+          "given": "a stream entitled to the plugin sends a heartbeat while its quotes are unchanged",
+          "expect": [
+            {
+              "row": "LivenessRecorded"
+            }
+          ]
+        },
+        {
+          "name": "reads-an-accounts-execution-costs",
+          "since": "v27",
+          "given": "the plugin shows an account's costs against arrival for a trade date",
+          "expect": [
+            {
+              "row": "ListExecutionCosts",
+              "fields": {
+                "account_id": "<set>",
+                "trade_date": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
@@ -576,7 +624,7 @@
     {
       "role": "connectivity",
       "since": "v22",
-      "says": "A connectivity plugin passing every case sends the placements naming its instance and no other, with what its ems set in the venue's account field; reports every acknowledgement, rejection, restatement, fill, bust and charge in the contract's meanings, each with the raw record it was converted from and the venue's text only where no contract reason maps; marks an unconverted status outcome unknown and resolves it by asking, never by sending again; derives an execution ID the same way twice; states every fill's settlement date, the venue's or the date read's; sends nothing new on a pause and cancels at its venue on a stop, reporting each cancel as a fact; and publishes its venue's catalogue. A case about calendars, settlement dates, locates or compliance waits (`about`, contract v22) a plugin whose work never uses them marks not presented, with why, and a case about a fill's place of execution (`about_field`) one whose venue never states it; and a case about venue-originated fills, charges without a fill, busts or value-date rolls (`about`, contract v23) one whose venue never originates a fill, never charges a fee with no fill, never busts or corrects a fill, or settles its trades rather than rolling them. From contract v24 it reports a prime broker's answer to a give-up. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups.\n",
+      "says": "A connectivity plugin passing every case sends the placements naming its instance and no other, with what its ems set in the venue's account field; reports every acknowledgement, rejection, restatement, fill, bust and charge in the contract's meanings, each with the raw record it was converted from and the venue's text only where no contract reason maps; marks an unconverted status outcome unknown and resolves it by asking, never by sending again; derives an execution ID the same way twice; states every fill's settlement date, the venue's or the date read's; sends nothing new on a pause and cancels at its venue on a stop, reporting each cancel as a fact; and publishes its venue's catalogue. A case about calendars, settlement dates, locates or compliance waits (`about`, contract v22) a plugin whose work never uses them marks not presented, with why, and a case about a fill's place of execution (`about_field`) one whose venue never states it; and a case about venue-originated fills, charges without a fill, busts or value-date rolls (`about`, contract v23) one whose venue never originates a fill, never charges a fee with no fill, never busts or corrects a fill, or settles its trades rather than rolling them. From contract v24 it reports a prime broker's answer to a give-up. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups. From contract v27 it records a dealer's quote on the firm's RFQ placement -- a case about RFQs (`about`) a plugin whose venue takes none marks not presented -- and reports its session's round trip.\n",
       "cases": [
         {
           "name": "acknowledges-a-placement-naming-it",
@@ -1131,6 +1179,44 @@
               "row": "ListEventGroups",
               "fields": {
                 "instrument_ids": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "records-a-dealers-quote-on-an-rfq-placement",
+          "since": "v27",
+          "given": "a dealer answers the firm's RFQ placement with a firm offer valid for 15 seconds",
+          "about": "rfqs",
+          "expect": [
+            {
+              "row": "ReportPlacementQuote",
+              "fields": {
+                "placement_id": "<set>",
+                "dealer_id": "<set>",
+                "side": "<set>",
+                "price": "<set>",
+                "outcome": "PLACEMENT_QUOTE_OUTCOME_OPEN"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reports-a-sessions-round-trip",
+          "since": "v27",
+          "about": "latency",
+          "given": "the plugin's session to its venue is open for 10 seconds",
+          "expect": [
+            {
+              "row": "ReportLatency",
+              "fields": {
+                "snapshots": [
+                  {
+                    "session": "<set>",
+                    "metric": "LATENCY_METRIC_RTT",
+                    "histogram": "<set>"
+                  }
+                ]
               }
             }
           ]
@@ -2166,7 +2252,7 @@
     {
       "role": "data",
       "since": "v18",
-      "says": "A data plugin passing every case records each source's prices and bars exactly, under its dataset, its business date, its source's times and its raw record; restates a forming day under the same row key and sends an identical repeat unchanged; resolves every subject and venue before it records, reporting what does not resolve, and reads the record of a subject another source resolved to name it in its own; names a price in a token by the token's own cash instrument, never a fiat code; and records what a want asks, or declines it per subject. From v19 it records each trade it publishes with the platform's trade attributes, converted at the edge, and the side that took liquidity where its source says it, a withdrawal as a new version; and each quote it publishes with the sides its source states; and keeps a standing want of a streamed dataset current. A case about a kind of data the plugin declares it never publishes is not presented, with why. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why; and a case about outcomes or disputed outcomes (`about`, contract v23) a plugin with no event contracts, or whose source has no disputes, marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, reports its venue's event groups as stated -- a case about outcomes (`about`) a plugin serving no event contract marks not presented -- and queries the lake within bounds.\n",
+      "says": "A data plugin passing every case records each source's prices and bars exactly, under its dataset, its business date, its source's times and its raw record; restates a forming day under the same row key and sends an identical repeat unchanged; resolves every subject and venue before it records, reporting what does not resolve, and reads the record of a subject another source resolved to name it in its own; names a price in a token by the token's own cash instrument, never a fiat code; and records what a want asks, or declines it per subject. From v19 it records each trade it publishes with the platform's trade attributes, converted at the edge, and the side that took liquidity where its source says it, a withdrawal as a new version; and each quote it publishes with the sides its source states; and keeps a standing want of a streamed dataset current. A case about a kind of data the plugin declares it never publishes is not presented, with why. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why; and a case about outcomes or disputed outcomes (`about`, contract v23) a plugin with no event contracts, or whose source has no disputes, marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, reports its venue's event groups as stated -- a case about outcomes (`about`) a plugin serving no event contract marks not presented -- and queries the lake within bounds. From contract v27 it records rates -- a case about rates (`about`) a plugin serving none marks not presented -- records a stream's liveness (`about: streams`), and reports its feed delay; and it marks the lake query not presented, with why, where it records no trades.\n",
       "cases": [
         {
           "name": "a-daily-close",
@@ -2875,6 +2961,7 @@
         {
           "name": "queries-the-lake-within-bounds",
           "since": "v26",
+          "about": "trades",
           "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
           "expect": [
             {
@@ -2886,13 +2973,195 @@
               }
             }
           ]
+        },
+        {
+          "name": "a-rate-fixing",
+          "since": "v27",
+          "about": "rates",
+          "given": "the source publishes a reference rate's daily fixing with its volume, percentiles and convention",
+          "expect": [
+            {
+              "row": "RecordRates",
+              "fields": {
+                "rates": [
+                  {
+                    "kind": "RATE_KIND_FIXING",
+                    "value": "<set>",
+                    "convention": "<set>",
+                    "percentiles": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "a-same-day-revision",
+          "since": "v27",
+          "about": "rates",
+          "given": "the source revises a fixing the same day, with a later published time",
+          "expect": [
+            {
+              "row": "RecordRates",
+              "fields": {
+                "rates": [
+                  {
+                    "meta": {
+                      "row_key": "<same>"
+                    },
+                    "value": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "a-curve-for-a-date",
+          "since": "v27",
+          "about": "rates",
+          "given": "the source publishes a curve's points for a date, its tenor set changed from the day before",
+          "expect": [
+            {
+              "row": "RecordRates",
+              "fields": {
+                "rates": [
+                  {
+                    "kind": "RATE_KIND_PAR_YIELD",
+                    "tenor": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "a-tenor-not-published",
+          "since": "v27",
+          "about": "rates",
+          "given": "the source publishes no point for one of the curve's usual tenors on a date",
+          "expect": [
+            {
+              "row": "RecordRates",
+              "fields": {
+                "rates": [
+                  {
+                    "tenor": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "two-conventions-one-tenor",
+          "since": "v27",
+          "about": "rates",
+          "given": "the source publishes a bill's discount rate and its coupon-equivalent yield for one tenor",
+          "expect": [
+            {
+              "row": "RecordRates",
+              "fields": {
+                "rates": [
+                  {
+                    "kind": "RATE_KIND_DISCOUNT"
+                  },
+                  {
+                    "kind": "RATE_KIND_COUPON_EQUIVALENT"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "an-index-level",
+          "since": "v27",
+          "about": "rates",
+          "given": "the source publishes an index's level",
+          "expect": [
+            {
+              "row": "RecordRates",
+              "fields": {
+                "rates": [
+                  {
+                    "kind": "RATE_KIND_INDEX_LEVEL",
+                    "value": {
+                      "unit": "VALUE_UNIT_INDEX"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "a-curve-point-from-another-source",
+          "since": "v27",
+          "about": "rates",
+          "given": "the source publishes a single-point series that is a curve's point another source also publishes",
+          "expect": [
+            {
+              "row": "RecordRates",
+              "fields": {
+                "rates": [
+                  {
+                    "meta": {
+                      "subjects": "<set>"
+                    },
+                    "tenor": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "records-a-datasets-liveness",
+          "since": "v27",
+          "about": "streams",
+          "given": "the source's stream sends a heartbeat and no price changes",
+          "expect": [
+            {
+              "row": "RecordLiveness",
+              "fields": {
+                "liveness": [
+                  {
+                    "dataset": "<set>",
+                    "alive_at_ns": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "reports-its-feed-delay",
+          "since": "v27",
+          "about": "latency",
+          "given": "the plugin parses its source's messages for 10 seconds",
+          "expect": [
+            {
+              "row": "ReportLatency",
+              "fields": {
+                "snapshots": [
+                  {
+                    "dataset": "<set>",
+                    "hop": "AGE_HOP_EDGE",
+                    "metric": "LATENCY_METRIC_AGE",
+                    "histogram": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "ems",
       "since": "v19",
-      "says": "An ems plugin passing every case learns the datasets it may read, reads trades over a range and the latest quotes from the deployment's default sources unless it names others, hears every trade and the latest quotes the lake records after, narrowed to the subjects it asked for, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, reads the agents' guard, meets the guard's five cases on an agent's placement and accept, and queries the lake within bounds.\n",
+      "says": "An ems plugin passing every case learns the datasets it may read, reads trades over a range and the latest quotes from the deployment's default sources unless it names others, hears every trade and the latest quotes the lake records after, narrowed to the subjects it asked for, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, reads the agents' guard, meets the guard's five cases on an agent's placement and accept, and queries the lake within bounds. From contract v27 it hears a dataset's liveness, reports its pre-trade check's data age, reads an account's execution costs and picks a quote on its RFQ placement.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -3408,13 +3677,72 @@
               }
             }
           ]
+        },
+        {
+          "name": "hears-a-datasets-liveness",
+          "since": "v27",
+          "given": "a stream entitled to the plugin sends a heartbeat while its quotes are unchanged",
+          "expect": [
+            {
+              "row": "LivenessRecorded"
+            }
+          ]
+        },
+        {
+          "name": "reports-its-pre-trade-checks-data-age",
+          "since": "v27",
+          "about": "latency",
+          "given": "the plugin checks reference prices before placements over 10 seconds",
+          "expect": [
+            {
+              "row": "ReportLatency",
+              "fields": {
+                "snapshots": [
+                  {
+                    "dataset": "<set>",
+                    "hop": "AGE_HOP_EMS_CHECK",
+                    "metric": "LATENCY_METRIC_AGE",
+                    "histogram": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-an-accounts-execution-costs",
+          "since": "v27",
+          "given": "the plugin shows an account's costs against arrival for a trade date",
+          "expect": [
+            {
+              "row": "ListExecutionCosts",
+              "fields": {
+                "account_id": "<set>",
+                "trade_date": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "picks-a-quote-on-its-rfq-placement",
+          "since": "v27",
+          "given": "two dealers' quotes stand on the plugin's RFQ placement and a person picks the second best",
+          "expect": [
+            {
+              "row": "PickPlacementQuote",
+              "fields": {
+                "placement_id": "<set>",
+                "quote_id": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "oms",
       "since": "v22",
-      "says": "An oms plugin passing every case releases a proposed order through the gate for a person or its service account, asks for changes, claims, holds and pauses, decides an approval its policy asks of it, records a telephoned order and a manual execution for a person, acknowledges a late fact, records a locate's use, reads the venue's catalogue, and seeds by a read and hears what follows of orders, placements, executions, locates and the trading instructions. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it books an order's executions to its instructed accounts, a block at its average price with the residual on a named allocation and an overfill's excess on the error account, cancels and rebooks before the hand-off, sees a booking held after a bust, records a sleeve cross, and hears and reads bookings and a held booking's alert. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups and reads the agents' guard.\n",
+      "says": "An oms plugin passing every case releases a proposed order through the gate for a person or its service account, asks for changes, claims, holds and pauses, decides an approval its policy asks of it, records a telephoned order and a manual execution for a person, acknowledges a late fact, records a locate's use, reads the venue's catalogue, and seeds by a read and hears what follows of orders, placements, executions, locates and the trading instructions. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it books an order's executions to its instructed accounts, a block at its average price with the residual on a named allocation and an overfill's excess on the error account, cancels and rebooks before the hand-off, sees a booking held after a bust, records a sleeve cross, and hears and reads bookings and a held booking's alert. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups and reads the agents' guard. From contract v27 it reads an account's execution costs and sets a block member's allocation instruction.\n",
       "cases": [
         {
           "name": "proposes-an-order",
@@ -3926,13 +4254,42 @@
               "row": "ReadAgentOrdersDemoOnly"
             }
           ]
+        },
+        {
+          "name": "reads-an-accounts-execution-costs",
+          "since": "v27",
+          "given": "the plugin shows an account's costs against arrival for a trade date",
+          "expect": [
+            {
+              "row": "ListExecutionCosts",
+              "fields": {
+                "account_id": "<set>",
+                "trade_date": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "sets-a-block-members-allocation-instruction",
+          "since": "v27",
+          "given": "a person moves part of a block member's allocation to another account before booking",
+          "expect": [
+            {
+              "row": "SetAllocationInstruction",
+              "fields": {
+                "order_id": "<set>",
+                "allocation_instruction": "<set>",
+                "reason": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "operations",
       "since": "v14",
-      "says": "An operations plugin passing every case reads the account's activity when it reconciles, hears each activity recorded, and offers the activity that explains a break as its candidate cause, linked by value, under the category that fits; it books nothing from activity and confirms nothing without a person. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it corrects a handed-off booking, names an unsettled allocation as a break's cause, sets a client's allocation instruction where the firm is its custodian, and hears and reads bookings and a held booking's alert. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups and queries the lake within bounds.\n",
+      "says": "An operations plugin passing every case reads the account's activity when it reconciles, hears each activity recorded, and offers the activity that explains a break as its candidate cause, linked by value, under the category that fits; it books nothing from activity and confirms nothing without a person. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it corrects a handed-off booking, names an unsettled allocation as a break's cause, sets a client's allocation instruction where the firm is its custodian, and hears and reads bookings and a held booking's alert. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups and queries the lake within bounds. From contract v27 it reads an account's execution costs and a trade date's FX close.\n",
       "cases": [
         {
           "name": "income-reinvested-explains-a-quantity-gained",
@@ -4311,13 +4668,44 @@
               }
             }
           ]
+        },
+        {
+          "name": "reads-an-accounts-execution-costs",
+          "since": "v27",
+          "given": "the plugin shows an account's costs against arrival for a trade date",
+          "expect": [
+            {
+              "row": "ListExecutionCosts",
+              "fields": {
+                "account_id": "<set>",
+                "trade_date": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-a-trade-dates-fx-close",
+          "since": "v27",
+          "given": "the plugin values a foreign-cash cost basis at the trade date's FX close",
+          "expect": [
+            {
+              "row": "ListPrices",
+              "fields": {
+                "subjects": "<set>",
+                "kinds": [
+                  "PRICE_KIND_CLOSE"
+                ],
+                "business_date": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
     {
       "role": "portfolio",
       "since": "v18",
-      "says": "A portfolio plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it amends an order's allocation instruction and hears and reads bookings. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, runs analytics jobs and reads their answers, reads the agents' guard, and queries the lake within bounds.\n",
+      "says": "A portfolio plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it amends an order's allocation instruction and hears and reads bookings. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, runs analytics jobs and reads their answers, reads the agents' guard, and queries the lake within bounds. From contract v27 it reads a curve for a date, hears a rate recorded and a dataset's liveness, and reads an account's execution costs.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -4676,6 +5064,54 @@
               }
             }
           ]
+        },
+        {
+          "name": "reads-a-curve-for-a-date",
+          "since": "v27",
+          "given": "the plugin needs a rate curve's points for a business date",
+          "expect": [
+            {
+              "row": "ListRates",
+              "fields": {
+                "subjects": "<set>",
+                "business_date": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-rate-recorded",
+          "since": "v27",
+          "given": "the lake records a rate for a subject the plugin asked for",
+          "expect": [
+            {
+              "row": "RatesRecorded"
+            }
+          ]
+        },
+        {
+          "name": "hears-a-datasets-liveness",
+          "since": "v27",
+          "given": "a stream entitled to the plugin sends a heartbeat while its quotes are unchanged",
+          "expect": [
+            {
+              "row": "LivenessRecorded"
+            }
+          ]
+        },
+        {
+          "name": "reads-an-accounts-execution-costs",
+          "since": "v27",
+          "given": "the plugin shows an account's costs against arrival for a trade date",
+          "expect": [
+            {
+              "row": "ListExecutionCosts",
+              "fields": {
+                "account_id": "<set>",
+                "trade_date": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
@@ -4921,7 +5357,7 @@
     {
       "role": "reporting",
       "since": "v18",
-      "says": "A reporting plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. From v19 it names an instrument by an identifier, such as its reporting currency by its ISO 4217 code, and has it resolved to the deployment's record, which mints nothing. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears and reads bookings and alerts. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, runs analytics jobs and reads their answers, and queries the lake within bounds, prices, bars and outcomes only.\n",
+      "says": "A reporting plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; it records nothing in the lake. From v19 it names an instrument by an identifier, such as its reporting currency by its ISO 4217 code, and has it resolved to the deployment's record, which mints nothing. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears and reads bookings and alerts. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, runs analytics jobs and reads their answers, and queries the lake within bounds, prices, bars and outcomes only. From contract v27 it reads a curve for a date, hears a rate recorded and a dataset's liveness, and reads an account's execution costs.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -5214,6 +5650,54 @@
               }
             }
           ]
+        },
+        {
+          "name": "reads-a-curve-for-a-date",
+          "since": "v27",
+          "given": "the plugin needs a rate curve's points for a business date",
+          "expect": [
+            {
+              "row": "ListRates",
+              "fields": {
+                "subjects": "<set>",
+                "business_date": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-rate-recorded",
+          "since": "v27",
+          "given": "the lake records a rate for a subject the plugin asked for",
+          "expect": [
+            {
+              "row": "RatesRecorded"
+            }
+          ]
+        },
+        {
+          "name": "hears-a-datasets-liveness",
+          "since": "v27",
+          "given": "a stream entitled to the plugin sends a heartbeat while its quotes are unchanged",
+          "expect": [
+            {
+              "row": "LivenessRecorded"
+            }
+          ]
+        },
+        {
+          "name": "reads-an-accounts-execution-costs",
+          "since": "v27",
+          "given": "the plugin shows an account's costs against arrival for a trade date",
+          "expect": [
+            {
+              "row": "ListExecutionCosts",
+              "fields": {
+                "account_id": "<set>",
+                "trade_date": "<set>"
+              }
+            }
+          ]
         }
       ]
     },
@@ -5386,7 +5870,7 @@
     {
       "role": "signal",
       "since": "v18",
-      "says": "A signal plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; from v19 it reads trades over a range and the latest quotes, hears every trade and the latest quotes recorded after, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, runs analytics jobs and reads their answers, and queries the lake within bounds.\n",
+      "says": "A signal plugin passing every case learns the datasets it may read, reads prices and bars by subject, a business date or a range, from the deployment's default sources unless it names others, and hears what the lake records after, narrowed to the subjects it asked for; from v19 it reads trades over a range and the latest quotes, hears every trade and the latest quotes recorded after, and catches up the trades it lost after the watermark it last saw; it records nothing in the lake. A case about calendars or settlement dates (`about`, contract v22) a plugin whose work never uses them marks not presented, with why. From contract v24 it hears an instrument replaced, catches up on replacements, and reads the template catalogue. From contract v26 it hears and reads event groups, runs analytics jobs and reads their answers, and queries the lake within bounds. From contract v27 it reads a curve for a date, hears a rate recorded and a dataset's liveness, and reads an account's execution costs.\n",
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
@@ -5651,6 +6135,54 @@
                 "kind": "<set>",
                 "subjects": "<set>",
                 "row_limit": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "reads-a-curve-for-a-date",
+          "since": "v27",
+          "given": "the plugin needs a rate curve's points for a business date",
+          "expect": [
+            {
+              "row": "ListRates",
+              "fields": {
+                "subjects": "<set>",
+                "business_date": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-rate-recorded",
+          "since": "v27",
+          "given": "the lake records a rate for a subject the plugin asked for",
+          "expect": [
+            {
+              "row": "RatesRecorded"
+            }
+          ]
+        },
+        {
+          "name": "hears-a-datasets-liveness",
+          "since": "v27",
+          "given": "a stream entitled to the plugin sends a heartbeat while its quotes are unchanged",
+          "expect": [
+            {
+              "row": "LivenessRecorded"
+            }
+          ]
+        },
+        {
+          "name": "reads-an-accounts-execution-costs",
+          "since": "v27",
+          "given": "the plugin shows an account's costs against arrival for a trade date",
+          "expect": [
+            {
+              "row": "ListExecutionCosts",
+              "fields": {
+                "account_id": "<set>",
+                "trade_date": "<set>"
               }
             }
           ]

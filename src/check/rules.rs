@@ -974,11 +974,13 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at 309e093 (contract v26), byte
-/// for byte, as SDK 0.31.0 vendors it: each role's suite and its cases, every
+/// meridian-schema's boundaries/suites.json at 4069608 (contract v27), byte
+/// for byte, as SDK 0.32.0 vendors it: each role's suite and its cases, every
 /// role's v24 cases on a replacement and the template catalogue among them,
-/// v26's event group, jobs, bounded lake query and agents' guard cases, and
-/// the pricing role's suite. role-suite reads a
+/// v26's event group, jobs, bounded lake query and agents' guard cases, the
+/// pricing role's suite, and v27's rates, liveness, placement-type and quote
+/// cases, the three latency reports marked `about: latency` until contract
+/// v28 (ruling 518), which a plugin names not presented. role-suite reads a
 /// case's name and its markers alone, never what it expects, so an
 /// expectation written with the format's `any_of` (contract v23: each way's
 /// fields, in place of `fields`) is read as any other; matching what a plugin
@@ -3037,10 +3039,11 @@ fn runs_as_checked(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at 309e093 (contract v26), byte
+/// meridian-schema's boundaries/roles.json at 4069608 (contract v27), byte
 /// for byte: its `operations` say which roles hold each command, v24's
 /// booking (the oms's), the allocation instruction, the give-up, the alert and
-/// the reference role's template offer among them, and v26's pricing role.
+/// the reference role's template offer among them, v26's pricing role, and
+/// v27's rates, liveness, latency and placement quotes.
 const ROLES_JSON: &str = include_str!("roles.json");
 
 /// Each command a plugin may send, as the SDK names its call
@@ -3882,6 +3885,49 @@ fn string_named(argument: &str, constants: &HashMap<String, String>) -> Option<S
         _ => constants
             .get(argument.rsplit('.').next().unwrap_or(argument))
             .cloned(),
+    }
+}
+
+// ── The declared display name (ruling 353) ──────────────────────────────
+
+/// The display name the plugin declares, `meridian.Interface(title=...)`,
+/// written as a string or through a constant bound to one, its spaces
+/// folded as the platform folds them: what `meridian plugin publish` sends
+/// as the request's `declared_title`. None where the plugin declares no
+/// interface, declares more than one title, or the text cannot say (an
+/// f-string, a value computed): the field is optional, and the builder then
+/// holds the image to nothing.
+pub fn declared_title(plugin: &Plugin) -> Option<String> {
+    static INTERFACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bInterface\s*\(").unwrap());
+    let constants = bound_strings(plugin);
+    let mut titles: Vec<String> = Vec::new();
+    for source in python(plugin) {
+        let text = python_uncommented(&source.text);
+        let code = python_code(&source.text);
+        let code_lines: Vec<&str> = code.lines().collect();
+        for found in INTERFACE.find_iter(&text) {
+            // In code, not a docstring's words.
+            let line = line_at(&text, found.start());
+            if !code_lines
+                .get(line - 1)
+                .is_some_and(|code| INTERFACE.is_match(code))
+            {
+                continue;
+            }
+            let arguments = enclosed(&text[found.end()..]);
+            let Some(title) = keyword(arguments, "title") else {
+                continue;
+            };
+            let title = string_named(title, &constants)?;
+            let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !titles.contains(&title) {
+                titles.push(title);
+            }
+        }
+    }
+    match titles.as_slice() {
+        [one] if !one.is_empty() => Some(one.clone()),
+        _ => None,
     }
 }
 

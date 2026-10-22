@@ -786,6 +786,11 @@ fn only_the_connectivity_suites_marked_cases_may_be_named_not_presented() {
         // Contract v25: the give-up's answer, `about: give-ups` (decision 12),
         // which a venue that takes no give-ups never presents.
         "reports-a-give-up-rejected",
+        // Contract v27: a dealer's quote on an RFQ placement (`about: rfqs`),
+        // which a venue taking no RFQ never presents; and the session's round
+        // trip, `about: latency` until contract v28 (ruling 518).
+        "records-a-dealers-quote-on-an-rfq-placement",
+        "reports-a-sessions-round-trip",
     ];
     for (case, may) in &cases {
         assert_eq!(*may, marked.contains(&case.as_str()), "{case}");
@@ -1248,6 +1253,130 @@ fn the_sdk_helpers_declaring_pages_are_read_from_the_vendored_sdk() {
     // Only a function of the SDK's declaring pages in its body is one: the
     // data role's module shows its pages in a docstring, and declares none.
     assert!(super::rules::sdk_helper_pages("meridian.roles.data", "figures").is_empty());
+
+    // Connectivity's helpers (SDK 0.32.0), in a private module and reached
+    // through its package, their descriptions f-strings: Trading apart, or
+    // one Connection for data and connectivity (457), and Raw records.
+    for module in [
+        "meridian.roles.connectivity",
+        "meridian.roles.connectivity._pages",
+    ] {
+        assert_eq!(
+            super::rules::sdk_helper_pages(module, "trading_pages"),
+            [
+                "page /admin/connections Trading read_trading",
+                "route /admin/connections/enable-trading enable_trading",
+                "route /admin/connections/enable-trading/check check_enable_trading",
+            ]
+        );
+        assert_eq!(
+            super::rules::sdk_helper_pages(module, "connection_pages"),
+            [
+                "page / Connection read_connection",
+                "route /enable-trading enable_trading",
+                "route /enable-trading/check check_enable_trading",
+            ]
+        );
+        assert_eq!(
+            super::rules::sdk_helper_pages(module, "raw_records_page"),
+            ["page /raw Raw records"]
+        );
+    }
+}
+
+/// The data template holding connectivity too, its own Connection page gone
+/// and `call` in its place: one Connection for both roles, declared by the
+/// SDK's `connectivity.connection_pages` (0.32.0; 457).
+fn data_and_connectivity_on_sdk_pages(label: &str, call: &str) -> Scaffolded {
+    let plugin = Scaffolded::of_role(label, "data");
+    plugin.replace(
+        "pyproject.toml",
+        "roles = [\"data\"]",
+        "roles = [\"data\", \"connectivity\"]",
+    );
+    let text = plugin.read(&page_py());
+    let start = text
+        .find("\n\n@pages.page(\n    \"/\", \"Connection\"")
+        .expect("the template's Connection page");
+    let end = text
+        .find("\n\n@pages.page(\n    \"/datasets\"")
+        .expect("the template's Datasets page");
+    plugin.write(
+        &page_py(),
+        &format!(
+            "{}\n\nfrom meridian.roles import connectivity\n\n\n{call}{}",
+            &text[..start],
+            &text[end..]
+        ),
+    );
+    plugin
+}
+
+#[test]
+fn a_plugin_holding_data_and_connectivity_on_one_connection_is_not_flagged() {
+    // connection_pages declares the data role's Connection at `/` for both
+    // roles, answering data.ConnectionRead (its `trading` and
+    // `session_latency` optional): no Trading page of its own is wanted.
+    let call = "async def _connection(request):\n    \
+                return connection_read(_converter(request))\n\n\n\
+                connectivity.connection_pages(\n    pages,\n    lambda: None,\n    _connection,\n    \
+                venue=\"Reference\",\n    credentials=lambda: [],\n    \
+                environment=lambda: \"Paper\",\n    environment_setting=lambda: \"\",\n)";
+    let plugin = data_and_connectivity_on_sdk_pages("data-connectivity-sdk-pages", call);
+    plugin.replace(
+        &page_py(),
+        "levels=\"admin\", answers=data.DatasetsRead",
+        "levels=\"admin\", roles=\"data\", answers=data.DatasetsRead",
+    );
+    let report = plugin.check();
+    assert!(report.passed(), "{}", text(&report));
+    // As verified, only the connectivity suite this sketch does not run.
+    assert_eq!(
+        failed_rules(&plugin.check_verified()),
+        ["role-suite"],
+        "{}",
+        text(&plugin.check_verified())
+    );
+    for report in [plugin.check(), plugin.check_verified()] {
+        assert!(
+            report
+                .failures
+                .iter()
+                .all(|failure| failure.rule != "role-pages"),
+            "{}",
+            text(&report)
+        );
+        assert!(
+            report
+                .advice
+                .iter()
+                .all(|advice| advice.rule != "role-pages"),
+            "{}",
+            text(&report)
+        );
+    }
+
+    // Without the call, the data role's Connection is missing, and the
+    // refusal names the SDK's helper declaring it.
+    let plugin = data_and_connectivity_on_sdk_pages("data-connectivity-no-sdk-pages", "");
+    let verified = plugin.check_verified();
+    let missing: Vec<&Failure> = verified
+        .failures
+        .iter()
+        .filter(|failure| failure.rule == "role-pages")
+        .collect();
+    assert_eq!(missing.len(), 1, "{}", text(&verified));
+    assert_eq!(
+        missing[0].found,
+        "it holds `data`, and declares no Connection page"
+    );
+    assert!(
+        missing[0]
+            .instead
+            .contains("meridian.roles.connectivity.connection_pages(pages, ...)"),
+        "{}",
+        missing[0].instead
+    );
 }
 
 #[test]
@@ -1802,10 +1931,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.31.1", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.32.0", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.31.1",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.32.0",
         ),
         (
             "tool-meridian",
@@ -2992,10 +3121,11 @@ fn the_roles_and_commands_are_roles_jsons() {
             &["oms", "operations"][..],
         ),
         ("RecordSleeveCross", "record_sleeve_cross", &["oms"][..]),
+        // From contract v27 the oms sets it too (an allocation at booking).
         (
             "SetAllocationInstruction",
             "set_allocation_instruction",
-            &["operations", "portfolio"][..],
+            &["oms", "operations", "portfolio"][..],
         ),
         (
             "ReportGiveUp",
@@ -3521,10 +3651,10 @@ fn a_plugin_on_an_older_sdk_is_advised_rather_than_failed() {
     let plugin = Scaffolded::tested("docs-older");
     plugin.replace(
         "pyproject.toml",
-        "open-meridian==0.31.1",
+        "open-meridian==0.32.0",
         "open-meridian==0.28.0",
     );
-    plugin.replace("Dockerfile", "plugin-python:0.31.1", "plugin-python:0.28.0");
+    plugin.replace("Dockerfile", "plugin-python:0.32.0", "plugin-python:0.28.0");
     std::fs::remove_dir_all(plugin.path("docs")).unwrap();
     let report = plugin.check();
     assert!(report.passed(), "{}", text(&report));

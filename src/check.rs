@@ -23,7 +23,7 @@ mod rules;
 #[cfg(test)]
 mod tests;
 
-pub use rules::{BUNDLE_BYTES, EDGE_ROLES, ROLES, RULES, SECTIONS, SECTION_BYTES};
+pub use rules::{declared_title, BUNDLE_BYTES, EDGE_ROLES, ROLES, RULES, SECTIONS, SECTION_BYTES};
 
 /// One of the plugin's files, as text. `path` is relative to the plugin's
 /// directory, with `/` between its parts on every system.

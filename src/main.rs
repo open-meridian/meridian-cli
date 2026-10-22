@@ -16,6 +16,7 @@ mod down;
 #[cfg(test)]
 mod fake_http;
 mod gc;
+mod install;
 mod live;
 mod machine;
 mod migrate;
@@ -93,6 +94,14 @@ meridian -- bringing a Meridian deployment up
                              a deployment that reaches nothing
   meridian plugin upload --bundle <file>
                              carry a plugin bundle into the deployment's catalogue
+  meridian plugin install <organisation>/<plugin>[@<version>] --note <why>
+                             install a listed version into the deployment, as Browse
+                             does; without @version, the one Browse shows. Launches
+                             nothing
+  meridian plugin install --pack <pack> --note <why>
+                             install a starter pack's members, each its own install:
+                             a bare <pack> is open-meridian's. Shown version by
+                             version, then asked; launches nothing
   meridian connect [<address>]
                              sign in to a deployment's dashboard and let this computer
                              act as you, for up to 90 days
@@ -269,6 +278,22 @@ GITHUB_TOKEN, else the credential git keeps for github.com
                             30m)
       --details             publish: every check's full text, where it prints one line
                             a check that fits the terminal
+
+plugin install: through the session meridian connect keeps (--deployment names one),
+as the deployment's admin; --pack and a listing without @version read the platform's
+catalogue through the platform sign-in. Exits 0 when every member asked for is
+installed or held, 1 when one failed (each named) or nothing was approved
+      --note <why>          why, kept with each install. Required
+      --registry <r>        a listing: community or verified (default: with @version,
+                            community; without, the one Browse shows)
+      --pack <pack>         a starter pack, organisation/pack, or a bare name for
+                            open-meridian's
+      --with <plugin>       --pack: also install this `choose` member (a listing, or
+                            its plugin part); repeatable
+      --without <plugin>    --pack: leave out this preselected member; repeatable
+      --yes                 install without being asked; an unnamed `choose` member
+                            is not installed. Where there is no terminal, nothing is
+                            installed without it
 
 status, logs: read-only; the components and logs through kubectl and the release through
 helm, as doctor and backup read them, and status's book health from the deployment,
@@ -456,7 +481,7 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 32] = [
+const TAKES_A_VALUE: [&str; 36] = [
     "--to-revision",
     "--registry",
     "--tag",
@@ -489,6 +514,10 @@ const TAKES_A_VALUE: [&str; 32] = [
     "--first-run-code",
     "--port",
     "--archive",
+    "--note",
+    "--pack",
+    "--with",
+    "--without",
 ];
 
 /// Everything else, which takes no value. An unknown one is refused rather
@@ -701,6 +730,9 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
     if words.first() == Some(&"download") {
         return download_command(arguments, &words, &platform_of(arguments)).await;
     }
+    if words.first() == Some(&"install") {
+        return install_command(arguments, &words, &platform_of(arguments)).await;
+    }
     if let Some(&verb) = words.first() {
         if matches!(verb, "upload" | "list" | "launch" | "stop") {
             return catalogue_command(arguments, &words).await;
@@ -729,7 +761,7 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
             }
         }
         _ => {
-            eprintln!("meridian: plugin takes `new <name>`, `check`, `migrate`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events`, `open`, `publish`, `release <version>`, `key` or `download`\n\n{USAGE}");
+            eprintln!("meridian: plugin takes `new <name>`, `check`, `migrate`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events`, `open`, `publish`, `release <version>`, `key`, `download` or `install`\n\n{USAGE}");
             2
         }
     }
@@ -992,6 +1024,183 @@ async fn catalogue_command(arguments: &Arguments, words: &[&str]) -> i32 {
         }
         Err(failed) => {
             eprintln!("meridian plugin {}: {}", words[0], failed.said());
+            failed.code()
+        }
+    }
+}
+
+/// `meridian plugin install <organisation>/<plugin>[@<version>]` and
+/// `--pack <pack>` (spec/starter-packs, requirements 28 to 30): exits 0 when
+/// everything asked for is installed or held, 1 when a member failed or
+/// nothing was approved, 2 when asked wrongly, 3 without a session.
+async fn install_command(arguments: &Arguments, words: &[&str], platform: &str) -> i32 {
+    use std::io::IsTerminal as _;
+    let pack = arguments.value("--pack", "--pack");
+    let with = arguments.every("--with", "--with");
+    let without = arguments.every("--without", "--without");
+    let given = match (words, pack) {
+        (["install"], Some(_)) => None,
+        (["install", listing], None) => Some(*listing),
+        _ => {
+            eprintln!("meridian plugin install: takes one listing, <organisation>/<plugin>[@<version>], or --pack <pack>\n\n{USAGE}");
+            return 2;
+        }
+    };
+    if pack.is_none() && !(with.is_empty() && without.is_empty()) {
+        eprintln!(
+            "meridian plugin install: --with and --without pick a pack's members, with --pack"
+        );
+        return 2;
+    }
+    let registry = arguments.value("--registry", "--registry");
+    if registry.is_some_and(|r| !matches!(r, "community" | "verified")) {
+        eprintln!("meridian plugin install: --registry is community or verified");
+        return 2;
+    }
+    if pack.is_some() && registry.is_some() {
+        eprintln!("meridian plugin install: --registry names a listing's registry; a pack names each member's");
+        return 2;
+    }
+    let Some(note) = arguments
+        .value("--note", "--note")
+        .map(str::trim)
+        .filter(|note| !note.is_empty())
+    else {
+        eprintln!("meridian plugin install: --note <why> is required: the deployment keeps it with each install");
+        return 2;
+    };
+    let named = match given.map(install::listing_named).transpose() {
+        Ok(named) => named,
+        Err(refused) => {
+            eprintln!("meridian plugin install: {refused}");
+            return 2;
+        }
+    };
+    let pack_name = match pack.map(install::pack_name).transpose() {
+        Ok(name) => name,
+        Err(refused) => {
+            eprintln!("meridian plugin install: {refused}");
+            return 2;
+        }
+    };
+    let reads_catalogue = pack_name.is_some() || named.as_ref().is_some_and(|(_, v)| v.is_none());
+    if reads_catalogue && !install::CATALOGUE_FOR_A_PERSON {
+        let what = match &named {
+            Some((listing, _)) => format!("{listing} without @<version>"),
+            None => "--pack".to_string(),
+        };
+        eprintln!(
+            "meridian plugin install: {what} {}",
+            install::CATALOGUE_NOT_YET
+        );
+        return 1;
+    }
+    let held = match held_session(arguments) {
+        Ok(held) => held,
+        Err(refusal) => {
+            eprintln!("meridian plugin install: {refusal}");
+            return 3;
+        }
+    };
+    let address = held.address().to_string();
+    let catalogue = if reads_catalogue {
+        let read = match signed_in(platform).await {
+            Ok(session) => install::read_catalogue(&session).await,
+            Err(failed) => Err(failed),
+        };
+        match read {
+            Ok(catalogue) => Some(catalogue),
+            Err(failed) => {
+                eprintln!("meridian plugin install: {failed}");
+                return 1;
+            }
+        }
+    } else {
+        None
+    };
+    let yes = arguments.set("--yes");
+    let approve = |question: &str| yes || approved(question);
+    let mut say = |line: &str| eprintln!("{line}");
+
+    if let Some(name) = pack_name {
+        let catalogue = catalogue.expect("read for a pack");
+        let asking = |member: &install::Member, version: &str| {
+            approved(&format!(
+                "Also install {} {version} ({}, {})?",
+                member.listing, member.group, member.registry
+            ))
+        };
+        let ask: Option<install::Ask> = (!yes && std::io::stdin().is_terminal()).then_some(&asking);
+        let asked = install::PackAsked {
+            pack: &name,
+            picks: install::Picks {
+                with: &with,
+                without: &without,
+                ask,
+            },
+            note,
+        };
+        return match install::install_pack(&address, &held, &catalogue, &asked, &approve, &mut say)
+            .await
+        {
+            Ok(done) => {
+                print!("{}", install::checklist(&done));
+                if done.failed.is_empty() {
+                    0
+                } else {
+                    1
+                }
+            }
+            Err(failed) => {
+                eprintln!("meridian plugin install: {}", failed.said());
+                failed.code()
+            }
+        };
+    }
+
+    let (listing, version) = named.expect("a listing, where no pack is named");
+    let (version, registry) = match version {
+        Some(version) => (version, registry.unwrap_or("").to_string()),
+        None => {
+            let catalogue = catalogue.expect("read for a listing without a version");
+            match install::latest(&catalogue, &listing, registry) {
+                Some(found) => found,
+                None => {
+                    eprintln!(
+                        "meridian plugin install: the platform's catalogue offers no version of {listing}{}",
+                        registry.map(|r| format!(" in {r}")).unwrap_or_default()
+                    );
+                    return 1;
+                }
+            }
+        }
+    };
+    let shown = if registry.is_empty() {
+        "community"
+    } else {
+        registry.as_str()
+    };
+    say(&format!("{listing} {version} ({shown}), into {address}"));
+    if !approve("Install it?") {
+        eprintln!("meridian plugin install: not approved, so nothing was installed. Where there is no terminal to ask at, --yes approves");
+        return 1;
+    }
+    match install::install_one(&address, &held, &listing, &version, &registry, note).await {
+        Ok(recorded) => {
+            print!(
+                "{}",
+                install::checklist(&install::Done {
+                    ready: vec![recorded],
+                    failed: Vec::new(),
+                })
+            );
+            0
+        }
+        Err(failed) => {
+            eprintln!(
+                "meridian plugin install: {listing} {version}: {}",
+                failed.said()
+            );
             failed.code()
         }
     }
@@ -1573,7 +1782,12 @@ async fn published(asked: &registry::Publish, platform: &str, verb: &str) -> i32
         Ok(build) => {
             print!("{}", registry::said(&build, platform, &asked.shown));
             match build["state"].as_str() {
-                Some("PLUGIN_BUILD_STATE_REFUSED") => 1,
+                Some("PLUGIN_BUILD_STATE_REFUSED") => {
+                    if let Some(mismatch) = registry::title_mismatch(&build) {
+                        eprint!("{mismatch}");
+                    }
+                    1
+                }
                 Some("PLUGIN_BUILD_STATE_IN_REVIEW") => {
                     if let Some(listing) = build["listing"].as_str() {
                         println!("  its listing, once reviewed: {platform}/plugins/{listing}");
@@ -2971,6 +3185,41 @@ mod tests {
 
     fn said(line: &str) -> Vec<String> {
         line.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn install_takes_a_listing_or_a_pack_and_its_picks() {
+        // spec/starter-packs, requirements 28 and 29.
+        let pack = parse(said(
+            "plugin install --pack crypto --with plugin-coinbase --with plugin-kraken \
+             --without plugin-public-feed --note desk --yes",
+        ))
+        .unwrap();
+        assert_eq!(pack.words, ["install"]);
+        assert_eq!(pack.value("--pack", "--pack"), Some("crypto"));
+        assert_eq!(
+            pack.every("--with", "--with"),
+            ["plugin-coinbase", "plugin-kraken"]
+        );
+        assert_eq!(pack.every("--without", "--without"), ["plugin-public-feed"]);
+        assert_eq!(pack.value("--note", "--note"), Some("desk"));
+        assert!(pack.set("--yes"));
+        let one = parse(said(
+            "plugin install open-meridian/plugin-coinbase@1.2.0 --registry verified --note=desk",
+        ))
+        .unwrap();
+        assert_eq!(
+            one.words,
+            ["install", "open-meridian/plugin-coinbase@1.2.0"]
+        );
+        assert_eq!(one.value("--registry", "--registry"), Some("verified"));
+        let help = help_for("plugin", &["install".to_string()]);
+        assert!(
+            help.contains("meridian plugin install --pack <pack> --note <why>"),
+            "{help}"
+        );
+        assert!(help.contains("--without <plugin>"), "{help}");
+        assert!(!help.contains("plugin download"), "{help}");
     }
 
     #[test]
