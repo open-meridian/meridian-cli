@@ -624,11 +624,13 @@ identifier it states, or follow the kept ID to the record it became with
 `meridian.CurrentIdMap`; one written as `<map>.current("<id>")` is followed
 already. A warning fails nothing, verified or not: it is printed with its
 rule, file and line, and listed under `warnings` in `--json`. The check reads
-meridian-schema's v26 `roles.json` and `suites.json` (309e093, as SDK 0.31.0
+meridian-schema's v27 `roles.json` and `suites.json` (4069608, as SDK 0.32.0
 vendors them; from v24's, connectivity no longer reads the escape hatch, and
 the give-up's case is marked `about: give-ups`): `pricing` is a role, not at
 the edge, with its suite; v26's event group, jobs, bounded lake query and
-agents' guard cases are in the suites that hold them; `reference`
+agents' guard cases, and v27's rates, liveness and RFQ quote cases, are in
+the suites that hold them, the latency reports' cases marked `about:
+latency` and so named not presented until contract v28; `reference`
 is a role, its suite in preview and not yet held by `--verified`;
 `roles-declared` knows v24's commands and the roles holding them (booking's,
 `set_allocation_instruction`, `report_give_up`, the alerts',
@@ -668,6 +670,42 @@ the digest the declaration names, and says where the version's
 documentation is read; `plugin new` writes a prompt for each section, and
 its CI checks with the meridian that wrote it (`MERIDIAN_VERSION`).
 
+### Installing a listed plugin or a starter pack
+
+```
+meridian plugin install open-meridian/plugin-coinbase@1.2.0 --note "the crypto desk"
+meridian plugin install open-meridian/plugin-coinbase --note "the crypto desk"
+meridian plugin install --pack crypto --with plugin-coinbase --note "the crypto desk"
+meridian plugin install --pack crypto --with plugin-coinbase --without plugin-public-feed \
+    --note "the crypto desk" --yes
+```
+
+`install` puts a version the registries list into the connected deployment
+as the dashboard's Browse does, as its deployment admin, and launches
+nothing. `<organisation>/<plugin>@<version>` installs that version, from
+`--registry` where given (community otherwise); without `@version` it
+installs the one Browse shows, the newest offered release, verified first.
+`--note` is required: the deployment keeps it with the install.
+
+`--pack` installs a starter pack's members, each its own install. A bare
+name is `open-meridian`'s, so `crypto` is `open-meridian/crypto`. Each member
+resolves to its newest offered release at or above the pack's minimum for it;
+one with none offered is Unavailable and left out. Members the curator
+preselected are installed, and members to choose are not: `--with <plugin>`
+adds one and `--without <plugin>` leaves out a preselected one, each
+repeatable, by its listing or its plugin part, and a name that is not a
+member is refused before anything is installed. At a terminal, each member
+to choose that you did not name is asked about. A member the deployment
+holds already is never moved: at or above the pack's version it counts as
+installed, and below it the line says `Installed 0.3.0; 0.5.1 offered`. The
+plan is shown version by version and asked about first; `--yes` approves it
+without asking, and installs no member to choose that you did not name.
+Each member's line says installed or why it failed, the rest go on past a
+failure, and the end lists `meridian plugin launch` for each member ready
+to launch; the command exits 1 when one failed, naming it. `--pack` and a
+listing without `@version` read the platform's catalogue with your platform
+sign-in.
+
 ## The registries (contract v25)
 
 ```
@@ -694,7 +732,12 @@ and the listing's address once it is listed. It builds, signs and pushes
 nothing. Its push token is held while the build is followed, and narrowed
 again only within a minute of its end; where the platform will not narrow the
 sign-in's token, the browser is opened for one narrowed sign-in, once a
-publish at most.
+publish at most. From 0.1.51 (contract v27) it sends the display name the
+plugin's code declares (`meridian.Interface(title=...)`, as written or
+through a constant), and the builder refuses a build whose image declares
+another: the refusal is said plainly, with both names. A publish while two
+of the organisation's builds are running is queued, said so, and followed
+until it settles; a 429 is the organisation's daily cap of publishes.
 
 `key setup` makes the key release tags are signed with ready in one step:
 git's configured SSH signing key, or one `ssh-keygen` makes (`-t ed25519`, a
@@ -915,10 +958,19 @@ executable) and the custody and reporting suites' tests meeting their v24
 cases, 0.29.0 (contract v25) from 0.1.46, and 0.30.0 (contract v25, the
 SDK's role helpers) from 0.1.47, with the `connectivity` template: a venue
 placed at through the SDK's `Trader`, 0.31.0 (contract v26) from 0.1.49,
-with the `pricing` template and the connectivity template's suite, and 0.31.1
+with the `pricing` template and the connectivity template's suite, 0.31.1
 from 0.1.50, the pricing template asking for no storage, each `AGENTS.md`
 saying how a version is published to a registry with a signed release tag
-(ruling 322), and the pre-push hook saying a tag push runs nothing.
+(ruling 322), and the pre-push hook saying a tag push runs nothing, and
+0.32.0 (contract v27) from 0.1.51, the data, reporting and connectivity
+templates' suites meeting their v27 cases, the three latency reports' cases
+(`about: latency`) marked not presented, with why, until core receives them
+in contract v28 (ruling 518), and `sdk-roles/` carrying connectivity's page
+helpers (`trading_pages`, `connection_pages`, `raw_records_page`), which
+`role-pages` reads: a plugin holding data and connectivity on one
+Connection, from `connection_pages`, needs no Trading page of its own.
+0.1.51 also moves rustls-webpki to 0.103.16 and webpki-roots and
+webpki-root-certs to 1.0.10, for RUSTSEC-2026-0381 to 0383 (ruling 509).
 
 ## Licence
 
