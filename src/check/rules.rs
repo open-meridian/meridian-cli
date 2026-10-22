@@ -3898,8 +3898,7 @@ fn string_named(argument: &str, constants: &HashMap<String, String>) -> Option<S
 /// f-string, a value computed): the field is optional, and the builder then
 /// holds the image to nothing.
 pub fn declared_title(plugin: &Plugin) -> Option<String> {
-    static INTERFACE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\bInterface\s*\(").unwrap());
+    static INTERFACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bInterface\s*\(").unwrap());
     let constants = bound_strings(plugin);
     let mut titles: Vec<String> = Vec::new();
     for source in python(plugin) {

@@ -941,7 +941,8 @@ pub fn declared(catalogue: &serde_json::Value, name: &str, version: &str) -> Opt
         .find_map(|v| (v["name"] == name && v["version"] == version).then(|| strings(&v["roles"])))
 }
 
-async fn post(
+/// A terminal route's POST with the session, its answer as JSON.
+pub(crate) async fn post(
     address: &str,
     session: &Credential,
     path: &str,
