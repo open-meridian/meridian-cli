@@ -1573,7 +1573,12 @@ async fn published(asked: &registry::Publish, platform: &str, verb: &str) -> i32
         Ok(build) => {
             print!("{}", registry::said(&build, platform, &asked.shown));
             match build["state"].as_str() {
-                Some("PLUGIN_BUILD_STATE_REFUSED") => 1,
+                Some("PLUGIN_BUILD_STATE_REFUSED") => {
+                    if let Some(mismatch) = registry::title_mismatch(&build) {
+                        eprint!("{mismatch}");
+                    }
+                    1
+                }
                 Some("PLUGIN_BUILD_STATE_IN_REVIEW") => {
                     if let Some(listing) = build["listing"].as_str() {
                         println!("  its listing, once reviewed: {platform}/plugins/{listing}");

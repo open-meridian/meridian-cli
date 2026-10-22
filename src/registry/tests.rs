@@ -140,7 +140,89 @@ fn the_preflight_finds_the_plugin_its_version_and_its_repository() {
             plugin: "venue-desk".into(),
             version: "0.1.0".into(),
             repository: "https://github.com/acme/plugin-venue-desk".into(),
+            declared_title: Some("Reference plugin".into()),
         }
+    );
+}
+
+#[test]
+fn the_declared_display_name_is_read_from_the_interface_its_code_declares() {
+    let scratch = Scratch::new("declared-title");
+    let dir = plugin(&scratch);
+    let title = |dir: &Path| crate::check::declared_title(&crate::check::read(dir).unwrap());
+    // Through the constant the template binds (`TITLE`).
+    assert_eq!(title(&dir).as_deref(), Some("Reference plugin"));
+    // Written in place, its spaces folded as the platform folds them; a
+    // docstring or comment naming another is no declaration.
+    let declaration = dir.join("src/venue_desk/declaration.py");
+    let text = std::fs::read_to_string(&declaration).unwrap();
+    std::fs::write(
+        &declaration,
+        text.replace("title=TITLE", "title=\"Venue   desk\"")
+            + "\n\n\"\"\"meridian.Interface(port=1, title=\"Other\")\"\"\"\n\
+               # meridian.Interface(title=\"Commented\")\n",
+    )
+    .unwrap();
+    assert_eq!(title(&dir).as_deref(), Some("Venue desk"));
+    // Not said where the text cannot say it: an f-string.
+    std::fs::write(
+        &declaration,
+        text.replace("title=TITLE", "title=f\"{TITLE} desk\""),
+    )
+    .unwrap();
+    assert_eq!(title(&dir), None);
+}
+
+#[test]
+fn a_refused_display_name_and_a_queued_build_are_said_plainly() {
+    let refused = serde_json::json!({
+        "build_id": "BLD-2", "listing": "acme/venue-desk", "version": "0.1.1",
+        "registry": "community", "state": "PLUGIN_BUILD_STATE_REFUSED",
+        "declared_title": "Venue desk",
+        "findings": [
+            {"check": "tag signature", "severity": "BUILD_FINDING_SEVERITY_PASSED",
+             "detail": "signed by a registered, active key of acme"},
+            {"check": "attestations", "severity": "BUILD_FINDING_SEVERITY_BLOCKED",
+             "detail": "declaration: its display name is 'Reference plugin', not 'Venue desk' as \
+                        the publish request declared"},
+        ],
+    });
+    let said = title_mismatch(&refused).expect("said");
+    assert!(
+        said.starts_with(
+            "The build was refused because the display name the built plugin declares is not \
+             the one this publish sent (\"Venue desk\"): declaration: its display name is \
+             'Reference plugin', not 'Venue desk'"
+        ),
+        "{said}"
+    );
+    // Any other refusal, or a listed build, is not one.
+    let mut other = refused.clone();
+    other["findings"][1]["detail"] = "provenance: no provenance attestation".into();
+    assert_eq!(title_mismatch(&other), None);
+    let mut listed = refused.clone();
+    listed["state"] = "PLUGIN_BUILD_STATE_LISTED".into();
+    assert_eq!(title_mismatch(&listed), None);
+
+    let mut queued = refused.clone();
+    queued["state"] = "PLUGIN_BUILD_STATE_QUEUED".into();
+    assert!(queued_said(&queued).unwrap().contains("queued"));
+    assert_eq!(queued_said(&listed), None);
+}
+
+#[test]
+fn a_429_is_the_daily_cap_of_publishes() {
+    let said = refusal(
+        "https://open-meridian.com",
+        reqwest::StatusCode::TOO_MANY_REQUESTS,
+        r#"{"error": "acme has asked for 20 builds today"}"#,
+    );
+    assert!(
+        said.starts_with(
+            "https://open-meridian.com refused (429 Too Many Requests): acme has asked for 20 \
+             builds today. That is the organisation's daily cap of publishes"
+        ),
+        "{said}"
     );
 }
 
@@ -413,6 +495,7 @@ async fn a_publish_signs_in_narrows_its_token_and_follows_the_build_until_it_is_
         serde_json::json!({
             "organisation": "acme", "plugin": "venue-desk", "registry": "community",
             "repository": "https://github.com/acme/plugin-venue-desk", "tag": "v0.1.0",
+            "declared_title": "Reference plugin",
         })
     );
 

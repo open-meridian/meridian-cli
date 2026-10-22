@@ -3888,6 +3888,50 @@ fn string_named(argument: &str, constants: &HashMap<String, String>) -> Option<S
     }
 }
 
+// ── The declared display name (ruling 353) ──────────────────────────────
+
+/// The display name the plugin declares, `meridian.Interface(title=...)`,
+/// written as a string or through a constant bound to one, its spaces
+/// folded as the platform folds them: what `meridian plugin publish` sends
+/// as the request's `declared_title`. None where the plugin declares no
+/// interface, declares more than one title, or the text cannot say (an
+/// f-string, a value computed): the field is optional, and the builder then
+/// holds the image to nothing.
+pub fn declared_title(plugin: &Plugin) -> Option<String> {
+    static INTERFACE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\bInterface\s*\(").unwrap());
+    let constants = bound_strings(plugin);
+    let mut titles: Vec<String> = Vec::new();
+    for source in python(plugin) {
+        let text = python_uncommented(&source.text);
+        let code = python_code(&source.text);
+        let code_lines: Vec<&str> = code.lines().collect();
+        for found in INTERFACE.find_iter(&text) {
+            // In code, not a docstring's words.
+            let line = line_at(&text, found.start());
+            if !code_lines
+                .get(line - 1)
+                .is_some_and(|code| INTERFACE.is_match(code))
+            {
+                continue;
+            }
+            let arguments = enclosed(&text[found.end()..]);
+            let Some(title) = keyword(arguments, "title") else {
+                continue;
+            };
+            let title = string_named(title, &constants)?;
+            let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !titles.contains(&title) {
+                titles.push(title);
+            }
+        }
+    }
+    match titles.as_slice() {
+        [one] if !one.is_empty() => Some(one.clone()),
+        _ => None,
+    }
+}
+
 // ── secrets-kept ─────────────────────────────────────────────────────────
 
 /// A setting declared `secret=True`: its name, and the constant it is

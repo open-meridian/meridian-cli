@@ -468,6 +468,14 @@ fn refusal(platform: &str, status: reqwest::StatusCode, body: &str) -> String {
         .unwrap_or_else(|| body.trim().to_string());
     match status.as_u16() {
         401 => format!("{platform} did not take the sign-in ({words}): run the command again"),
+        // From contract v27 the publishing API answers 429 for one thing:
+        // the organisation's daily cap of publishes (ruling 321; a publish
+        // over the concurrent cap is queued instead).
+        429 => format!(
+            "{platform} refused ({status}): {words}. That is the organisation's daily cap of \
+             publishes: nothing was built, and a publish goes ahead once a day has passed since \
+             the earliest of them"
+        ),
         _ => format!("{platform} refused ({status}): {words}"),
     }
 }
@@ -685,6 +693,9 @@ pub struct Ready {
     pub plugin: String,
     pub version: String,
     pub repository: String,
+    /// The display name its declaration gives (`meridian.Interface(title=)`),
+    /// sent as `declared_title` where the code says it (ruling 353).
+    pub declared_title: Option<String>,
 }
 
 /// The pre-flight (requirement 12): what the platform would refuse, refused
@@ -742,10 +753,14 @@ pub fn preflight(asked: &Publish, repository: &dyn Repository) -> Result<Ready, 
         ));
     }
     let repository = github_repository(&repository.origin(&asked.dir)?)?;
+    let declared_title = crate::check::read(&asked.dir)
+        .ok()
+        .and_then(|plugin| crate::check::declared_title(&plugin));
     Ok(Ready {
         plugin: metadata.name,
         version: version.to_string(),
         repository,
+        declared_title,
     })
 }
 
@@ -763,6 +778,47 @@ fn state_word(state: &str) -> &str {
         "PLUGIN_BUILD_STATE_REFUSED" => "refused",
         other => other,
     }
+}
+
+/// A refused build's blocked `attestations` finding naming the display name:
+/// the built image's declaration gives another than the publish declared
+/// (ruling 353). Said plainly, with what to do; None for any other build.
+pub fn title_mismatch(build: &serde_json::Value) -> Option<String> {
+    if build["state"] != "PLUGIN_BUILD_STATE_REFUSED" {
+        return None;
+    }
+    let finding = build["findings"].as_array()?.iter().find(|finding| {
+        finding["check"] == "attestations"
+            && finding["severity"] == "BUILD_FINDING_SEVERITY_BLOCKED"
+            && finding["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("display name"))
+    })?;
+    let (_, full) = detail_parts(finding["detail"].as_str().unwrap_or_default());
+    let said = full
+        .split(';')
+        .map(str::trim)
+        .find(|part| part.contains("display name"))
+        .unwrap_or(full);
+    let declared = build["declared_title"].as_str().unwrap_or_default();
+    Some(format!(
+        "The build was refused because the display name the built plugin declares is not the \
+         one this publish sent{}: {said}. The tag holds the code that was built: change \
+         `meridian.Interface(title=...)` there or here so the two agree, then publish a new tag.\n",
+        if declared.is_empty() {
+            String::new()
+        } else {
+            format!(" (\"{declared}\")")
+        }
+    ))
+}
+
+/// What a queued build waits for (ruling 321), said once as it is queued.
+pub fn queued_said(build: &serde_json::Value) -> Option<&'static str> {
+    (build["state"] == "PLUGIN_BUILD_STATE_QUEUED").then_some(
+        "  queued: it starts when the builder takes it up, or, while two of the \
+         organisation's builds are running, when one of them ends. Followed until it settles.\n",
+    )
 }
 
 /// Whether a build is done with: listed, in review, or refused.
@@ -910,13 +966,16 @@ pub async fn publish(
     let push = signed_in
         .push_token(&asked.organisation, &ready.plugin)
         .await?;
-    let asked_for = serde_json::json!({
+    let mut asked_for = serde_json::json!({
         "organisation": asked.organisation,
         "plugin": ready.plugin,
         "registry": asked.registry,
         "repository": ready.repository,
         "tag": asked.tag,
     });
+    if let Some(title) = &ready.declared_title {
+        asked_for["declared_title"] = serde_json::Value::String(title.clone());
+    }
     let path = format!(
         "/api/v1/registry/organisations/{}/plugins/{}/versions",
         asked.organisation, ready.plugin
@@ -935,6 +994,9 @@ pub async fn publish(
         .ok_or_else(|| format!("{platform} answered the publish with no build"))?
         .to_string();
     eprint!("{}", said(&build, &platform, &asked.shown));
+    if let Some(queued) = queued_said(&build) {
+        eprint!("{queued}");
+    }
     let started = tokio::time::Instant::now();
     while !settled(&build) {
         if started.elapsed() >= asked.follow_for {
