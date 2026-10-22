@@ -480,14 +480,15 @@ fn refusal(platform: &str, status: reqwest::StatusCode, body: &str) -> String {
     }
 }
 
-/// One request to the publishing API with `bearer`, its answer as JSON.
-pub async fn call(
+/// One request to the publishing API with `bearer`: its status and text,
+/// whatever the status.
+pub async fn send(
     platform: &str,
     method: reqwest::Method,
     path: &str,
     bearer: &str,
     body: Option<&serde_json::Value>,
-) -> Result<serde_json::Value, String> {
+) -> Result<(reqwest::StatusCode, String), String> {
     let mut request = client()?
         .request(method, format!("{platform}{path}"))
         .bearer_auth(bearer);
@@ -501,7 +502,18 @@ pub async fn call(
         .await
         .map_err(|failed| format!("could not reach {platform}: {failed}"))?;
     let status = answer.status();
-    let text = answer.text().await.unwrap_or_default();
+    Ok((status, answer.text().await.unwrap_or_default()))
+}
+
+/// One request to the publishing API with `bearer`, its answer as JSON.
+pub async fn call(
+    platform: &str,
+    method: reqwest::Method,
+    path: &str,
+    bearer: &str,
+    body: Option<&serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let (status, text) = send(platform, method, path, bearer, body).await?;
     if !status.is_success() {
         return Err(refusal(platform, status, &text));
     }

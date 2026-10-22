@@ -43,9 +43,10 @@ use crate::live::Failed;
 pub const FIRST_PARTY: &str = "open-meridian";
 
 /// Whether the platform answers its catalogue (`GET
-/// /api/v1/registry/catalogue`) for a person's sign-in. `--pack` and a
-/// listing named without `@version` read it; where it is not answered they
-/// refuse with [`CATALOGUE_NOT_YET`], and the rest of this module stays.
+/// /api/v1/registry/catalogue`) for a person's sign-in, as ruling 525 has it
+/// do. `--pack` and a listing named without `@version` read it; switched
+/// off, they refuse with [`CATALOGUE_NOT_YET`], and the rest of this module
+/// stays.
 pub const CATALOGUE_FOR_A_PERSON: bool = true;
 
 /// What `--pack` and a listing without a version say where the platform's
@@ -597,21 +598,31 @@ pub fn to_install(rows: &[Row]) -> Vec<(String, String, String)> {
 
 // ── Acting ───────────────────────────────────────────────────────────────
 
+/// What a platform that takes only a deployment's assertion at its
+/// catalogue says to the CLI, before ruling 525's platform release.
+pub const CATALOGUE_REFUSED: &str = "this platform does not yet let the CLI read its catalogue";
+
 /// The platform's catalogue (`PullCatalogueReply`), read with the person's
-/// sign-in.
+/// sign-in (ruling 525): the bearer is fresh, so a 401 or 403 is a platform
+/// that does not take it at its catalogue yet, said in one line.
 pub async fn read_catalogue(
     signed_in: &crate::registry::SignedIn,
 ) -> Result<serde_json::Value, String> {
     let platform = signed_in.platform().to_string();
     let bearer = signed_in.bearer().await?;
-    crate::registry::call(
-        &platform,
-        reqwest::Method::GET,
-        CATALOGUE_PATH,
-        &bearer,
-        None,
-    )
-    .await
+    catalogue_at(&platform, &bearer).await
+}
+
+/// The catalogue at `platform`, read with `bearer`.
+pub async fn catalogue_at(platform: &str, bearer: &str) -> Result<serde_json::Value, String> {
+    let (status, text) =
+        crate::registry::send(platform, reqwest::Method::GET, CATALOGUE_PATH, bearer, None).await?;
+    match status.as_u16() {
+        401 | 403 => Err(format!("{platform}: {CATALOGUE_REFUSED}")),
+        _ if !status.is_success() => Err(format!("{platform} refused ({status}): {}", text.trim())),
+        _ => serde_json::from_str(&text)
+            .map_err(|failed| format!("{platform}'s catalogue is unreadable: {failed}")),
+    }
 }
 
 /// One listed version installed through the deployment's own install (W8.10):

@@ -1111,7 +1111,7 @@ async fn install_command(arguments: &Arguments, words: &[&str], platform: &str) 
         match read {
             Ok(catalogue) => Some(catalogue),
             Err(failed) => {
-                eprintln!("meridian plugin install: the platform's catalogue: {failed}");
+                eprintln!("meridian plugin install: {failed}");
                 return 1;
             }
         }

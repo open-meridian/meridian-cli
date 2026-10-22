@@ -664,3 +664,20 @@ async fn one_listed_version_is_installed_through_the_deployments_install() {
         .said()
         .contains("the listing statement does not verify"));
 }
+
+#[tokio::test]
+async fn the_catalogue_is_read_with_the_persons_bearer_and_an_older_platform_said_plainly() {
+    let (platform, kept) = serve(|asked: &Asked| match asked.header("authorization") {
+        Some("Bearer A-1") => Reply::json(200, catalogue()),
+        _ => Reply::json(401, serde_json::json!({"error": "not authenticated"})),
+    })
+    .await;
+    let read = catalogue_at(&platform, "A-1").await.unwrap();
+    assert_eq!(read["packs"][0]["pack"], "open-meridian/crypto");
+    assert_eq!(kept.lock().unwrap()[0].path, CATALOGUE_PATH);
+    // A platform taking only a deployment's assertion there.
+    assert_eq!(
+        catalogue_at(&platform, "A-old").await.unwrap_err(),
+        format!("{platform}: this platform does not yet let the CLI read its catalogue")
+    );
+}
