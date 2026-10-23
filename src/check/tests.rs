@@ -477,6 +477,32 @@ fn a_case_not_presented_is_one_the_suite_lets_a_source_never_present() {
 }
 
 #[test]
+fn a_rates_only_plugin_names_the_closes_cases_not_presented() {
+    // Ruling 537 (meridian-schema bc31b00, SDK 0.32.1): an-exact-price and
+    // a-want-recorded-against are about closes, so a data plugin publishing
+    // only rates names them not presented, with why, and passes as verified.
+    let cases = super::rules::suite_cases("data");
+    for name in ["an-exact-price", "a-want-recorded-against"] {
+        assert_eq!(
+            cases
+                .iter()
+                .find(|(case, _)| case == name)
+                .map(|(_, may)| *may),
+            Some(true),
+            "{name}"
+        );
+    }
+    let plugin = Scaffolded::of_role("data-rates-only", "data");
+    plugin.replace(
+        "tests/test_suite.py",
+        "not_presented=NOT_PRESENTED,",
+        "not_presented={\n        **NOT_PRESENTED,\n        \"an-exact-price\": \"its datasets publish rates, and no closes\",\n        \"a-want-recorded-against\": \"its datasets publish rates, and no closes\",\n    },",
+    );
+    let verified = plugin.check_verified();
+    assert!(verified.passed(), "{}", text(&verified));
+}
+
+#[test]
 fn the_suites_are_suites_jsons() {
     for role in super::rules::SUITES {
         assert!(
@@ -1931,10 +1957,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.32.0", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.32.1", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.32.0",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.32.1",
         ),
         (
             "tool-meridian",
@@ -3651,10 +3677,10 @@ fn a_plugin_on_an_older_sdk_is_advised_rather_than_failed() {
     let plugin = Scaffolded::tested("docs-older");
     plugin.replace(
         "pyproject.toml",
-        "open-meridian==0.32.0",
+        "open-meridian==0.32.1",
         "open-meridian==0.28.0",
     );
-    plugin.replace("Dockerfile", "plugin-python:0.32.0", "plugin-python:0.28.0");
+    plugin.replace("Dockerfile", "plugin-python:0.32.1", "plugin-python:0.28.0");
     std::fs::remove_dir_all(plugin.path("docs")).unwrap();
     let report = plugin.check();
     assert!(report.passed(), "{}", text(&report));
