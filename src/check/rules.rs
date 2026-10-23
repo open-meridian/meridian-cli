@@ -974,13 +974,15 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at 4069608 (contract v27), byte
-/// for byte, as SDK 0.32.0 vendors it: each role's suite and its cases, every
+/// meridian-schema's boundaries/suites.json at bc31b00 (contract v27), byte
+/// for byte, as SDK 0.32.1 vendors it: each role's suite and its cases, every
 /// role's v24 cases on a replacement and the template catalogue among them,
 /// v26's event group, jobs, bounded lake query and agents' guard cases, the
 /// pricing role's suite, and v27's rates, liveness, placement-type and quote
 /// cases, the three latency reports marked `about: latency` until contract
-/// v28 (ruling 518), which a plugin names not presented. role-suite reads a
+/// v28 (ruling 518), which a plugin names not presented, and from bc31b00
+/// the data suite's an-exact-price and a-want-recorded-against about closes
+/// (ruling 537), which a plugin publishing none names not presented. role-suite reads a
 /// case's name and its markers alone, never what it expects, so an
 /// expectation written with the format's `any_of` (contract v23: each way's
 /// fields, in place of `fields`) is read as any other; matching what a plugin
@@ -3039,7 +3041,7 @@ fn runs_as_checked(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at 4069608 (contract v27), byte
+/// meridian-schema's boundaries/roles.json at bc31b00 (contract v27), byte
 /// for byte: its `operations` say which roles hold each command, v24's
 /// booking (the oms's), the allocation instruction, the give-up, the alert and
 /// the reference role's template offer among them, v26's pricing role, and

@@ -2312,6 +2312,7 @@
         },
         {
           "name": "an-exact-price",
+          "about": "closes",
           "given": "the source states a price with more decimal places than a binary float holds",
           "expect": [
             {
@@ -2440,6 +2441,7 @@
         },
         {
           "name": "a-want-recorded-against",
+          "about": "closes",
           "given": "the lake wants a business date's closes for subjects the source covers",
           "expect": [
             {

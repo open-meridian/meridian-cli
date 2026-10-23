@@ -624,7 +624,7 @@ identifier it states, or follow the kept ID to the record it became with
 `meridian.CurrentIdMap`; one written as `<map>.current("<id>")` is followed
 already. A warning fails nothing, verified or not: it is printed with its
 rule, file and line, and listed under `warnings` in `--json`. The check reads
-meridian-schema's v27 `roles.json` and `suites.json` (4069608, as SDK 0.32.0
+meridian-schema's v27 `roles.json` and `suites.json` (bc31b00, as SDK 0.32.1
 vendors them; from v24's, connectivity no longer reads the escape hatch, and
 the give-up's case is marked `about: give-ups`): `pricing` is a role, not at
 the edge, with its suite; v26's event group, jobs, bounded lake query and
@@ -971,6 +971,10 @@ helpers (`trading_pages`, `connection_pages`, `raw_records_page`), which
 Connection, from `connection_pages`, needs no Trading page of its own.
 0.1.51 also moves rustls-webpki to 0.103.16 and webpki-roots and
 webpki-root-certs to 1.0.10, for RUSTSEC-2026-0381 to 0383 (ruling 509).
+0.32.1 from 0.1.52 (ruling 537): the data suite's `an-exact-price` and
+`a-want-recorded-against` are about closes, so a data plugin publishing
+only rates names them not presented, with why, and passes `plugin check
+--verified`.
 
 ## Licence
 

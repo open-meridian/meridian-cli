@@ -60,8 +60,8 @@ ci-mirror-check:
 # such a decorator, copied to sdk-roles/ at their paths there: `role-pages`
 # reads the pages and routes each helper declares from them, so a plugin
 # calling one is held to what the SDK at SDK_REV declares, not a typed list.
-# meridian-python v0.32.0 (SDK 0.32.0, contract v27; open-meridian/meridian-python#13).
-SDK_REV  := 8d21510ee85d3e4db1205ba18579757a5fce117a
+# meridian-python v0.32.1 (SDK 0.32.1, contract v27, ruling 537).
+SDK_REV  := 2eade08593a9b3549d86dfc0f8df0ee2e4c1ec8d
 SDK_REPO := https://github.com/open-meridian/meridian-python.git
 SCRATCH  := .sdk-scratch
 SDK_ROLES := $(SCRATCH)/src/meridian/roles
