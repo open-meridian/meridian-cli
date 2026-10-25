@@ -13,7 +13,7 @@ As you change what the plugin reports, keep every case passing.
 from __future__ import annotations
 
 from datetime import date
-from typing import cast
+from typing import Any, cast
 
 import meridian
 from meridian.plugin.v1 import operations_pb2 as ops
@@ -208,6 +208,59 @@ async def costs_read(recorder: Recorder) -> None:
     await report(recorder).costs("ACC-1", DAY)
 
 
+# Contract v28: chains, lifecycle, derived series, saved scenarios and the
+# filings slice, read and heard through the plugin's own reads.
+AAPL, APPLE = "INS-AAPL", "ENT-APPLE"
+
+
+def hearing(row: str, message: Any, arm: str, kind: str, counted: str) -> Producer:
+    """A row heard on the plugin's own handler (`on_<kind>`), counted."""
+
+    async def produce(recorder: Recorder) -> None:
+        plugin = report(recorder)
+        recorder.answer(row, lambda _: message)
+        await recorder.receive(**{arm: getattr(plugin, f"on_{kind}")}, subjects=[AAPL])
+        assert getattr(plugin, counted) == 1
+
+    return produce
+
+
+async def open_interest(recorder: Recorder) -> None:
+    await report(recorder).open_interest(AAPL, DAY)
+
+
+async def lifecycle_read(recorder: Recorder) -> None:
+    await report(recorder).lifecycle("ACC-1", DAY, DAY)
+
+
+async def derived_read(recorder: Recorder) -> None:
+    await report(recorder).derived(AAPL, "iv30", DAY, DAY)
+
+
+async def scenarios_read(recorder: Recorder) -> None:
+    await report(recorder).scenarios("grid:price-by-date")
+
+
+async def filings_read(recorder: Recorder) -> None:
+    await report(recorder).filings(APPLE)
+
+
+async def facts_read(recorder: Recorder) -> None:
+    await report(recorder).facts(APPLE, "us-gaap:EarningsPerShareBasic")
+
+
+async def holders_read(recorder: Recorder) -> None:
+    await report(recorder).holders(AAPL, DAY)
+
+
+async def dividends_read(recorder: Recorder) -> None:
+    await report(recorder).dividends(AAPL, DAY)
+
+
+async def ratings_read(recorder: Recorder) -> None:
+    await report(recorder).ratings(APPLE)
+
+
 PRODUCERS: dict[str, Producer] = {
     "reads-the-datasets-it-may-read": datasets,
     "reads-a-business-dates-closes": valued,
@@ -229,6 +282,43 @@ PRODUCERS: dict[str, Producer] = {
     "hears-a-rate-recorded": a_rate_heard,
     "hears-a-datasets-liveness": a_liveness_heard,
     "reads-an-accounts-execution-costs": costs_read,
+    "reads-open-interest-for-a-chain": open_interest,
+    "hears-a-statistic-recorded": hearing(
+        "StatisticsRecorded",
+        ops.StatisticsRecordedEvent(statistic=ops.Statistic()),
+        "statistics_recorded",
+        "statistic",
+        "statistics_heard",
+    ),
+    "reads-an-accounts-lifecycle-events": lifecycle_read,
+    "hears-a-lifecycle-event-recorded": hearing(
+        "LifecycleEventRecorded",
+        ops.LifecycleEventRecordedEvent(event=ops.LifecycleEvent()),
+        "lifecycle_event_recorded",
+        "lifecycle_event",
+        "lifecycle_heard",
+    ),
+    "reads-a-derived-series": derived_read,
+    "reads-a-saved-scenario-set": scenarios_read,
+    "reads-a-companys-filings": filings_read,
+    "reads-reported-facts": facts_read,
+    "reads-who-holds-a-security": holders_read,
+    "reads-declared-dividends": dividends_read,
+    "reads-a-rating-history": ratings_read,
+    "hears-a-filing-recorded": hearing(
+        "FilingsRecorded",
+        ops.FilingsRecordedEvent(filing=ops.Filing()),
+        "filings_recorded",
+        "filing",
+        "filings_heard",
+    ),
+    "hears-a-dividend-declared": hearing(
+        "CorporateActionsRecorded",
+        ops.CorporateActionsRecordedEvent(action=ops.CorporateActionAnnounced()),
+        "corporate_actions_recorded",
+        "dividend",
+        "dividends_heard",
+    ),
 }
 
 

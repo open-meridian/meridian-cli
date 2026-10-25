@@ -554,6 +554,53 @@ fn the_suites_are_suites_jsons() {
 }
 
 #[test]
+fn v28s_cases_are_about_what_a_plugin_may_never_touch_and_latency_is_required_again() {
+    // Contract v28 (meridian-schema dcca81b, SDK 0.33.0). Ruling 602: each new
+    // case is `about` a kind of data or work a plugin may never publish or do,
+    // so one that does none names it not presented; and ruling 518: the three
+    // latency reports lose their `about: latency`, and every plugin of the
+    // role passes them.
+    let optional = |role: &str, name: &str| {
+        super::rules::suite_cases(role)
+            .into_iter()
+            .find(|(case, _)| case == name)
+            .map(|(_, may)| may)
+    };
+    for (role, name) in [
+        ("data", "records-a-chains-series"),
+        ("data", "records-open-interest"),
+        ("data", "a-chain-row-is-never-resolved"),
+        ("data", "a-filing-recorded"),
+        ("data", "a-fact-restated"),
+        ("data", "a-fact-confirmed"),
+        ("data", "resolves-a-filer"),
+        ("data", "a-complete-holdings-report"),
+        ("data", "a-cusip-used-as-key"),
+        ("data", "a-stake-crossed"),
+        ("data", "a-dividend-declared"),
+        ("data", "a-rating-action"),
+        ("data", "a-crossed-quote-is-recorded-invalid"),
+        ("data", "a-duplicate-is-recorded-suspicious"),
+        ("data", "rows-after-a-gap-are-suspicious"),
+        ("custody", "reports-an-assignment"),
+        ("connectivity", "reports-an-expiry"),
+        ("connectivity", "reports-a-package-fill"),
+        ("servicing", "proposes-an-exercise-by-exception"),
+        ("signal", "records-a-derived-series"),
+        ("signal", "saves-a-scenario-set"),
+        ("signal", "escalates-an-outlier"),
+    ] {
+        assert_eq!(optional(role, name), Some(true), "{role}: {name}");
+    }
+    for (role, name) in [
+        ("connectivity", "reports-a-sessions-round-trip"),
+        ("data", "reports-its-feed-delay"),
+    ] {
+        assert_eq!(optional(role, name), Some(false), "{role}: {name}");
+    }
+}
+
+#[test]
 fn records_an_outcome_expects_its_determined_or_its_final_stage() {
     // v23's last items (approved 2026-10-13): the vendored copy is
     // meridian-schema 3f5f618's, its records-an-outcome written any_of.
@@ -813,10 +860,13 @@ fn only_the_connectivity_suites_marked_cases_may_be_named_not_presented() {
         // which a venue that takes no give-ups never presents.
         "reports-a-give-up-rejected",
         // Contract v27: a dealer's quote on an RFQ placement (`about: rfqs`),
-        // which a venue taking no RFQ never presents; and the session's round
-        // trip, `about: latency` until contract v28 (ruling 518).
+        // which a venue taking no RFQ never presents. The session's round
+        // trip lost its `about: latency` in contract v28 (ruling 518).
         "records-a-dealers-quote-on-an-rfq-placement",
-        "reports-a-sessions-round-trip",
+        // Contract v28 (ruling 602): an expiry (`about: options`) and a
+        // package's fill (`about: packages`).
+        "reports-an-expiry",
+        "reports-a-package-fill",
     ];
     for (case, may) in &cases {
         assert_eq!(*may, marked.contains(&case.as_str()), "{case}");
@@ -1957,10 +2007,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.32.1", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.33.0", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.32.1",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.33.0",
         ),
         (
             "tool-meridian",
@@ -3677,10 +3727,10 @@ fn a_plugin_on_an_older_sdk_is_advised_rather_than_failed() {
     let plugin = Scaffolded::tested("docs-older");
     plugin.replace(
         "pyproject.toml",
-        "open-meridian==0.32.1",
+        "open-meridian==0.33.0",
         "open-meridian==0.28.0",
     );
-    plugin.replace("Dockerfile", "plugin-python:0.32.1", "plugin-python:0.28.0");
+    plugin.replace("Dockerfile", "plugin-python:0.33.0", "plugin-python:0.28.0");
     std::fs::remove_dir_all(plugin.path("docs")).unwrap();
     let report = plugin.check();
     assert!(report.passed(), "{}", text(&report));

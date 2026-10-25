@@ -974,15 +974,18 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at bc31b00 (contract v27), byte
-/// for byte, as SDK 0.32.1 vendors it: each role's suite and its cases, every
+/// meridian-schema's boundaries/suites.json at dcca81b (contract v28), byte
+/// for byte, as SDK 0.33.0 vendors it: each role's suite and its cases, every
 /// role's v24 cases on a replacement and the template catalogue among them,
 /// v26's event group, jobs, bounded lake query and agents' guard cases, the
-/// pricing role's suite, and v27's rates, liveness, placement-type and quote
-/// cases, the three latency reports marked `about: latency` until contract
-/// v28 (ruling 518), which a plugin names not presented, and from bc31b00
-/// the data suite's an-exact-price and a-want-recorded-against about closes
-/// (ruling 537), which a plugin publishing none names not presented. role-suite reads a
+/// pricing role's suite, v27's rates, liveness, placement-type and quote
+/// cases, the data suite's an-exact-price and a-want-recorded-against about
+/// closes (ruling 537), and v28's: the three latency reports required again
+/// (ruling 518), and the new cases about the kinds of data and work a plugin
+/// may never touch (ruling 602) -- option chains, filings, holdings,
+/// corporate actions, ratings, quotes, options, packages, derived series,
+/// scenarios and quality states -- which a plugin publishing or doing none
+/// names not presented. role-suite reads a
 /// case's name and its markers alone, never what it expects, so an
 /// expectation written with the format's `any_of` (contract v23: each way's
 /// fields, in place of `fields`) is read as any other; matching what a plugin
@@ -3041,11 +3044,12 @@ fn runs_as_checked(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at bc31b00 (contract v27), byte
+/// meridian-schema's boundaries/roles.json at dcca81b (contract v28), byte
 /// for byte: its `operations` say which roles hold each command, v24's
 /// booking (the oms's), the allocation instruction, the give-up, the alert and
-/// the reference role's template offer among them, v26's pricing role, and
-/// v27's rates, liveness, latency and placement quotes.
+/// the reference role's template offer among them, v26's pricing role,
+/// v27's rates, liveness, latency and placement quotes, and v28's series,
+/// lifecycle events, packages, filings, derived series and scenarios.
 const ROLES_JSON: &str = include_str!("roles.json");
 
 /// Each command a plugin may send, as the SDK names its call

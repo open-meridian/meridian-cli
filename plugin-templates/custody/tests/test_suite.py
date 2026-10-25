@@ -13,7 +13,8 @@ as `answer` says for the case.
 When you replace the stand-in custodian with your own, map each case to a
 recorded or synthetic exchange with it, and keep every case passing. A case
 asserting one value of a closed list your custodian never presents may be
-named in `not_presented`, with why; this stand-in presents every one.
+named in `not_presented`, with why, as may one about a kind of holding it
+never holds (`about`): this stand-in holds no options (contract v28).
 """
 
 from __future__ import annotations
@@ -194,9 +195,12 @@ PRODUCERS: dict[str, Producer] = {
     "asks-for-a-settlement-date": asks_for_a_settlement_date,
 }
 
+#: Contract v28 (ruling 602): an assignment is about options.
+NOT_PRESENTED = {"reports-an-assignment": "the stand-in custodian holds no options"}
+
 
 def test_every_case_of_the_custody_suite_passes() -> None:
-    report = run("custody", PRODUCERS, instance_id=INSTANCE)
+    report = run("custody", PRODUCERS, not_presented=NOT_PRESENTED, instance_id=INSTANCE)
     assert report.passed, report.failures
     assert len(report.passed_cases) == 48
     # Contract v24: the two cases every suite holds, which the SDK answers;
@@ -212,5 +216,11 @@ def test_every_case_passes_on_the_deployments_provisional_records_too() -> None:
     """Contract v24: a resolve may answer the deployment's provisional
     record, an LCL- ID, as well as the platform's INS- one; the plugin's
     conversion is the same, an ID being opaque."""
-    report = run("custody", PRODUCERS, instance_id=INSTANCE, provisional=True)
+    report = run(
+        "custody",
+        PRODUCERS,
+        not_presented=NOT_PRESENTED,
+        instance_id=INSTANCE,
+        provisional=True,
+    )
     assert report.passed, report.failures
