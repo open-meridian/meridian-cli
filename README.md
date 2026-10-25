@@ -712,7 +712,10 @@ to choose that you did not name is asked about. A member the deployment
 holds already is never moved: at or above the pack's version it counts as
 installed, and below it the line says `Installed 0.3.0; 0.5.1 offered`. The
 plan is shown version by version and asked about first; `--yes` approves it
-without asking, and installs no member to choose that you did not name. The
+without asking, and installs no member to choose that you did not name.
+Where every member ticked is held already, the plan says `Nothing to
+install.` and asks to record the pack as installed, so the deployment keeps
+its record of the pack all the same, moving no member. The
 install runs in the deployment, member by member; the command follows it, one
 line a member as each ends, going on past a failure, then lists `meridian
 plugin launch` for each member ready to launch and each that failed, with

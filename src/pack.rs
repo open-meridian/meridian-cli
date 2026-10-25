@@ -741,14 +741,20 @@ pub async fn install_pack(
         .iter()
         .filter(|row| matches!(row.outcome, Outcome::Install(_)))
         .count();
-    let settled = if to_install == 0 {
-        say("Nothing to install.");
+    // Every member held already is still the pack installed here: the
+    // install is sent, core leaves each held member alone, and its
+    // `pack_installed` record is written (decisions/031).
+    let question = match to_install {
+        0 => {
+            say("Nothing to install.");
+            "Record this pack as installed?".to_string()
+        }
+        1 => "Install this member?".to_string(),
+        n => format!("Install these {n} members?"),
+    };
+    let settled = if ticked.is_empty() {
         status
     } else {
-        let question = match to_install {
-            1 => "Install this member?".to_string(),
-            n => format!("Install these {n} members?"),
-        };
         if !approve(&question) {
             return Err(Failed::Refused(
                 "not approved, so nothing was installed. Where there is no terminal to ask at, \

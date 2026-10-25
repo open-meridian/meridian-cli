@@ -500,6 +500,104 @@ async fn nothing_is_installed_unless_approved_or_when_a_name_is_no_member() {
     assert!(posted(&kept, "/terminal/packs/install").is_empty());
 }
 
+/// A deployment holding every preselected member of the Crypto pack
+/// already: its install answers each held member as it is.
+async fn holding_the_pack() -> (String, crate::fake_http::Kept) {
+    let held = || {
+        let mut here = crypto_here();
+        here["members"][0] = member(DATA, "Data", "installed", "0.4.0", "0.4.0", "");
+        here["members"][1] = member(FEED, "Data", "launched", "1.1.0", "1.1.0", "");
+        here
+    };
+    serve(
+        move |asked: &Asked| match (asked.method.as_str(), asked.path.as_str()) {
+            ("GET", "/terminal/packs") => Reply::json(200, packs()),
+            ("GET", "/terminal/packs/open-meridian/crypto") => Reply::json(200, held()),
+            ("POST", "/terminal/packs/install") => Reply::json(
+                201,
+                serde_json::json!({"pack": "open-meridian/crypto", "revision": 2,
+                               "members": [held()["members"][0], held()["members"][1]]}),
+            ),
+            ("GET", "/terminal/plugins") => Reply::json(
+                200,
+                serde_json::json!({"versions": [
+                {"name": "cryptodata", "version": "0.4.0", "listing": DATA},
+            ], "launches": []}),
+            ),
+            _ => Reply::bytes(404, "text/plain", Vec::new()),
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_pack_held_whole_is_still_recorded_as_installed_once_asked() {
+    // Every change leaves its own record (decisions/031): with nothing to
+    // install, the install is still sent once approved, core leaving each
+    // held member alone and writing the pack's `pack_installed`.
+    let (address, kept) = holding_the_pack().await;
+    let session = Credential::terminal_session(&address, "a-session");
+    let asked = Mutex::new(Vec::new());
+    let approve = |question: &str| {
+        asked.lock().unwrap().push(question.to_string());
+        true
+    };
+    let mut said = Vec::new();
+    let done = install_pack(
+        &address,
+        &session,
+        &PackAsked {
+            pack: "open-meridian/crypto",
+            picks: picks(&[], &[]),
+            note: "the desk had these already",
+        },
+        &approve,
+        &mut |line| said.push(line.to_string()),
+        &QUICK,
+    )
+    .await
+    .unwrap();
+    assert!(
+        said.contains(&"Nothing to install.".to_string()),
+        "{said:?}"
+    );
+    assert_eq!(*asked.lock().unwrap(), ["Record this pack as installed?"]);
+    assert_eq!(
+        posted(&kept, "/terminal/packs/install"),
+        [serde_json::json!({
+            "pack": "open-meridian/crypto", "with": [], "without": [],
+            "revision": 2, "note": "the desk had these already",
+        })]
+    );
+    assert!(!done.failed);
+    assert_eq!(
+        done.checklist,
+        "Installed; nothing is launched. Launch each, approving the roles it asks for:\n  \
+         meridian plugin launch cryptodata 0.4.0 --instance cryptodata\n"
+    );
+    // Not approved: nothing is sent.
+    let (address, kept) = holding_the_pack().await;
+    let session = Credential::terminal_session(&address, "a-session");
+    let failed = install_pack(
+        &address,
+        &session,
+        &PackAsked {
+            pack: "open-meridian/crypto",
+            picks: picks(&[], &[]),
+            note: "why",
+        },
+        &|_: &str| false,
+        &mut |_| {},
+        &QUICK,
+    )
+    .await
+    .unwrap_err();
+    assert!(failed
+        .said()
+        .starts_with("not approved, so nothing was installed"));
+    assert!(posted(&kept, "/terminal/packs/install").is_empty());
+}
+
 #[tokio::test]
 async fn an_older_core_is_said_plainly_and_a_pack_it_lacks_by_its_words() {
     let (address, _) = serve(|_: &Asked| Reply::bytes(404, "text/plain", Vec::new())).await;
