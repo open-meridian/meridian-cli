@@ -364,6 +364,23 @@ def trading_pages(
         return checked
 
 
+def _tab_key(title: str) -> str:
+    return title.strip().lower().replace(" ", "-")
+
+
+def _connection_tabs(read: Any) -> list[str]:
+    """The merged Connection's tab row (0.32.3): its sections' own titles --
+    Key, Limits and use, Stream, Trading (connectivity's sections), and
+    Sessions only once a session is measured -- one group drawn at a time,
+    picked by `?tab=` (`key`, `limits-and-use`, `stream`, `trading`,
+    `sessions`), Key where none is asked."""
+    trading = getattr(read, "trading", None)
+    measured = getattr(read, "session_latency", None) or (
+        getattr(trading, "session_latency", None) if trading is not None else None
+    )
+    return ["Key", "Limits and use", "Stream", "Trading"] + (["Sessions"] if measured else [])
+
+
 def connection_pages(
     pages: Pages,
     state: Callable[[], Any],
@@ -386,7 +403,10 @@ def connection_pages(
     carrying connectivity's Trading as `trading`, drawn as Connection's
     further sections ("Environment", "Accounts", "Placements"); and its
     "Enable trading" (`enable_trading`, checked by `check_enable_trading`)
-    made on it. The rest as `trading_pages`."""
+    made on it. From 0.32.3 the page draws one group at a time under a tab
+    row (`?tab=`), so each fits one screen; "Enable
+    trading" answers on the Trading tab, and `read_connection` still answers
+    every section. The rest as `trading_pages`."""
     from ...pages import Request, Response
 
     held = _Trading(
@@ -404,13 +424,19 @@ def connection_pages(
         own = await connection(request)
         return dataclasses.replace(own, trading=held.read())
 
-    async def drawn(request: Request, **more: Any) -> Response:
+    async def drawn(request: Request, tab: str = "", **more: Any) -> Response:
+        read = await record(request)
+        tabs = _connection_tabs(read)
+        asked = tab or request.query.get("tab", "")
+        current = next((t for t in tabs if _tab_key(t) == _tab_key(asked)), tabs[0])
         answer: Response = pages.answer(
             template,
-            await record(request),
+            read,
             may_enable=held.may_enable(request),
             enable=CONNECTION_ENABLE_TRADING,
             venue=venue,
+            tabs=tabs,
+            tab=current,
             **more,
         )
         return answer
@@ -457,7 +483,7 @@ def connection_pages(
                 template, TradingEnabled(request.params.venue_account_code.strip(), said)
             )
             return enabled
-        return await drawn(request, notice=said)
+        return await drawn(request, tab="Trading", notice=said)
 
     @pages.route(
         CONNECTION_ENABLE_TRADING + _CHECK,

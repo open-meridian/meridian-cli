@@ -75,7 +75,8 @@
           "ReportGiveUp",
           "ReportMissingVenue",
           "ReportLatency",
-          "ReportPlacementQuote"
+          "ReportPlacementQuote",
+          "RecordLifecycleEvent"
         ],
         "reads": [
           "ResolveIdentifier",
@@ -187,7 +188,9 @@
           "ReadAgentOrdersDemoOnly",
           "QueryLake",
           "ListRates",
-          "ListExecutionCosts"
+          "ListExecutionCosts",
+          "ListDerivedSeries",
+          "ListScenarios"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -317,7 +320,8 @@
           "RecordActivity",
           "ReResolveActivity",
           "ReportMissingInstrument",
-          "LinkExternalAccount"
+          "LinkExternalAccount",
+          "RecordLifecycleEvent"
         ],
         "reads": [
           "ResolveIdentifier",
@@ -387,7 +391,15 @@
           "ReportEventGroup",
           "ReportLatency",
           "RecordRates",
-          "RecordLiveness"
+          "RecordLiveness",
+          "RecordSeries",
+          "RecordStatistics",
+          "RecordFilings",
+          "RecordReportedFacts",
+          "RecordHoldingsReports",
+          "RecordHoldings",
+          "RecordCorporateActions",
+          "RecordRatingActions"
         ],
         "reads": [
           "ResolveIdentifier",
@@ -401,7 +413,8 @@
           "ListTrades",
           "ListDatasets",
           "ListEventGroups",
-          "QueryLake"
+          "QueryLake",
+          "ResolveCompany"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -474,7 +487,8 @@
           "AcceptExecution",
           "DontKnowExecution",
           "ReportLatency",
-          "PickPlacementQuote"
+          "PickPlacementQuote",
+          "RequestSeriesRecords"
         ],
         "reads": [
           "ResolveInstrument",
@@ -495,7 +509,9 @@
           "ListEventGroups",
           "ReadAgentOrdersDemoOnly",
           "QueryLake",
-          "ListExecutionCosts"
+          "ListExecutionCosts",
+          "ListSeries",
+          "ReadStaleReferenceActionsPermitted"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -625,7 +641,8 @@
           "BookOrder",
           "HandOffBooking",
           "CorrectBooking",
-          "RecordSleeveCross"
+          "RecordSleeveCross",
+          "RequestSeriesRecords"
         ],
         "reads": [
           "ResolveInstrument",
@@ -647,7 +664,8 @@
           "ReadTemplate",
           "ListEventGroups",
           "ReadAgentOrdersDemoOnly",
-          "ListExecutionCosts"
+          "ListExecutionCosts",
+          "ListSeries"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -720,7 +738,8 @@
           "CloseBreaksAsCleared",
           "AcknowledgeFlag",
           "SetAllocationInstruction",
-          "CorrectBooking"
+          "CorrectBooking",
+          "ReleaseLifecycleEvent"
         ],
         "reads": [
           "ListCustodialPositions",
@@ -745,7 +764,8 @@
           "ListOutcomes",
           "ListEventGroups",
           "QueryLake",
-          "ListExecutionCosts"
+          "ListExecutionCosts",
+          "ListLifecycleEvents"
         ],
         "hears": [
           "StatementRecorded",
@@ -764,7 +784,8 @@
           "BookingUpdated",
           "AlertChanged",
           "OutcomesRecorded",
-          "EventGroupChanged"
+          "EventGroupChanged",
+          "LifecycleEventRecorded"
         ]
       }
     },
@@ -816,7 +837,8 @@
         "publishes": [
           "ProposeOrder",
           "RequestOrderChange",
-          "SetAllocationInstruction"
+          "SetAllocationInstruction",
+          "RequestSeriesRecords"
         ],
         "reads": [
           "ResolveInstrument",
@@ -846,7 +868,17 @@
           "ReadAgentOrdersDemoOnly",
           "QueryLake",
           "ListRates",
-          "ListExecutionCosts"
+          "ListExecutionCosts",
+          "ListSeries",
+          "ListStatistics",
+          "ListLifecycleEvents",
+          "ListDerivedSeries",
+          "ListScenarios",
+          "ListFilings",
+          "ListReportedFacts",
+          "ListHoldings",
+          "ListCorporateActions",
+          "ListRatingActions"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -865,7 +897,9 @@
           "JobFinished",
           "EventGroupChanged",
           "RatesRecorded",
-          "LivenessRecorded"
+          "LivenessRecorded",
+          "StatisticsRecorded",
+          "LifecycleEventRecorded"
         ]
       }
     },
@@ -939,7 +973,16 @@
           "ListEventGroups",
           "QueryLake",
           "ListRates",
-          "ListExecutionCosts"
+          "ListExecutionCosts",
+          "ListStatistics",
+          "ListLifecycleEvents",
+          "ListDerivedSeries",
+          "ListScenarios",
+          "ListFilings",
+          "ListReportedFacts",
+          "ListHoldings",
+          "ListCorporateActions",
+          "ListRatingActions"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -957,7 +1000,11 @@
           "JobFinished",
           "EventGroupChanged",
           "RatesRecorded",
-          "LivenessRecorded"
+          "LivenessRecorded",
+          "StatisticsRecorded",
+          "LifecycleEventRecorded",
+          "FilingsRecorded",
+          "CorporateActionsRecorded"
         ]
       }
     },
@@ -989,18 +1036,22 @@
       ],
       "edge": true,
       "scope": {
-        "publishes": [],
+        "publishes": [
+          "ProposeLifecycleEvents"
+        ],
         "reads": [
           "ReadCalendar",
           "ComputeDate",
           "ListReplacements",
           "ListTemplates",
           "ReadTemplate",
-          "ListEventGroups"
+          "ListEventGroups",
+          "ListLifecycleEvents"
         ],
         "hears": [
           "ReplaceMergedInstrument",
-          "EventGroupChanged"
+          "EventGroupChanged",
+          "LifecycleEventRecorded"
         ]
       }
     },
@@ -1073,7 +1124,12 @@
       ],
       "edge": false,
       "scope": {
-        "publishes": [],
+        "publishes": [
+          "RequestSeriesRecords",
+          "RecordDerivedSeries",
+          "RecordScenarios",
+          "RecordQualityAssessments"
+        ],
         "reads": [
           "ReadCalendar",
           "ComputeDate",
@@ -1093,7 +1149,16 @@
           "ListEventGroups",
           "QueryLake",
           "ListRates",
-          "ListExecutionCosts"
+          "ListExecutionCosts",
+          "ListSeries",
+          "ListStatistics",
+          "ListDerivedSeries",
+          "ListScenarios",
+          "ListFilings",
+          "ListReportedFacts",
+          "ListHoldings",
+          "ListCorporateActions",
+          "ListRatingActions"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -1105,7 +1170,10 @@
           "JobFinished",
           "EventGroupChanged",
           "RatesRecorded",
-          "LivenessRecorded"
+          "LivenessRecorded",
+          "StatisticsRecorded",
+          "FilingsRecorded",
+          "CorporateActionsRecorded"
         ]
       }
     },
@@ -1480,6 +1548,20 @@
       "stability": "preview"
     },
     {
+      "name": "CorporateActionsRecorded",
+      "step": "W10.5",
+      "title": "Record, sequence and publish each row",
+      "kind": "event",
+      "topic": "platform.lake.{dataset}.event.corporate-actions-recorded",
+      "roles": {
+        "hears": [
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "CorrectBooking",
       "step": "W11.29",
       "title": "Correct a booking",
@@ -1605,6 +1687,20 @@
       "stability": "stable"
     },
     {
+      "name": "FilingsRecorded",
+      "step": "W10.5",
+      "title": "Record, sequence and publish each row",
+      "kind": "event",
+      "topic": "platform.lake.{dataset}.event.filings-recorded",
+      "roles": {
+        "hears": [
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "HandOffBooking",
       "step": "W11.28",
       "title": "Hand off or close a booking",
@@ -1642,6 +1738,22 @@
           "portfolio",
           "reporting",
           "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "LifecycleEventRecorded",
+      "step": "W9.19",
+      "title": "Read lifecycle events, and hear each",
+      "kind": "event",
+      "topic": "platform.book.event.lifecycle-event-recorded",
+      "roles": {
+        "hears": [
+          "operations",
+          "portfolio",
+          "reporting",
+          "servicing"
         ]
       },
       "stability": "preview"
@@ -1774,6 +1886,21 @@
       "stability": "stable"
     },
     {
+      "name": "ListCorporateActions",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-corporate-actions",
+      "roles": {
+        "reads": [
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ListCustodialPositions",
       "step": "W2.7",
       "title": "Read custodial positions",
@@ -1797,6 +1924,22 @@
           "compliance",
           "data",
           "ems",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ListDerivedSeries",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-derived-series",
+      "roles": {
+        "reads": [
+          "compliance",
           "portfolio",
           "reporting",
           "signal"
@@ -1850,6 +1993,21 @@
       "stability": "preview"
     },
     {
+      "name": "ListFilings",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-filings",
+      "roles": {
+        "reads": [
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ListFinishedJobs",
       "step": "W12.4",
       "title": "Finish a job later, and read its answer",
@@ -1861,6 +2019,37 @@
           "portfolio",
           "reporting",
           "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ListHoldings",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-holdings",
+      "roles": {
+        "reads": [
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ListLifecycleEvents",
+      "step": "W9.19",
+      "title": "Read lifecycle events, and hear each",
+      "kind": "query",
+      "topic": "platform.book.query.list-lifecycle-events",
+      "roles": {
+        "reads": [
+          "operations",
+          "portfolio",
+          "reporting",
+          "servicing"
         ]
       },
       "stability": "preview"
@@ -2010,6 +2199,21 @@
       "stability": "preview"
     },
     {
+      "name": "ListRatingActions",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-rating-actions",
+      "roles": {
+        "reads": [
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ListReplacements",
       "step": "W3.22",
       "title": "Catch up on replacements",
@@ -2036,6 +2240,53 @@
       "stability": "preview"
     },
     {
+      "name": "ListReportedFacts",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-reported-facts",
+      "roles": {
+        "reads": [
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ListScenarios",
+      "step": "W12.8",
+      "title": "Save a scenario or a scenario set",
+      "kind": "query",
+      "topic": "platform.lake.query.list-scenarios",
+      "roles": {
+        "reads": [
+          "compliance",
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ListSeries",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-series",
+      "roles": {
+        "reads": [
+          "ems",
+          "oms",
+          "portfolio",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ListStatements",
       "step": "W2.9",
       "title": "Read completed statements",
@@ -2047,6 +2298,21 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "ListStatistics",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-statistics",
+      "roles": {
+        "reads": [
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "ListSyncStatuses",
@@ -2301,6 +2567,19 @@
       "stability": "preview"
     },
     {
+      "name": "ProposeLifecycleEvents",
+      "step": "W9.17",
+      "title": "Propose the lifecycle events expected",
+      "kind": "command",
+      "topic": "platform.book.command.propose-lifecycle-events",
+      "roles": {
+        "publishes": [
+          "servicing"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ProposeOrder",
       "step": "W11.1",
       "title": "Propose an order",
@@ -2494,6 +2773,19 @@
       "stability": "stable"
     },
     {
+      "name": "ReadStaleReferenceActionsPermitted",
+      "step": "W6.38",
+      "title": "Set the stale-reference actions the deployment permits",
+      "kind": "query",
+      "topic": "platform.config.query.read-stale-reference-actions-permitted",
+      "roles": {
+        "reads": [
+          "ems"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ReadTemplate",
       "step": "W3.24",
       "title": "Read the template catalogue, and keep it current",
@@ -2599,6 +2891,32 @@
       "stability": "stable"
     },
     {
+      "name": "RecordCorporateActions",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-corporate-actions",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RecordDerivedSeries",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-derived-series",
+      "roles": {
+        "publishes": [
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "RecordEncumbrances",
       "step": "W9.15",
       "title": "Record a position's encumbrances",
@@ -2610,6 +2928,19 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "RecordFilings",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-filings",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "RecordHolding",
@@ -2625,6 +2956,32 @@
       "stability": "stable"
     },
     {
+      "name": "RecordHoldings",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-holdings",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RecordHoldingsReports",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-holdings-reports",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "RecordHoldingsStatement",
       "step": "W2.2",
       "title": "Open a holdings statement",
@@ -2636,6 +2993,20 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "RecordLifecycleEvent",
+      "step": "W9.16",
+      "title": "Book a listed option's or a future's lifecycle event as the broker reports it",
+      "kind": "command",
+      "topic": "platform.book.command.record-lifecycle-event",
+      "roles": {
+        "publishes": [
+          "connectivity",
+          "custody"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "RecordLiveness",
@@ -2730,6 +3101,19 @@
       "stability": "preview"
     },
     {
+      "name": "RecordQualityAssessments",
+      "step": "W10.12",
+      "title": "Escalate a row's quality",
+      "kind": "command",
+      "topic": "platform.lake.command.record-quality-assessments",
+      "roles": {
+        "publishes": [
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "RecordQuotes",
       "step": "W10.4",
       "title": "Record prices, bars, trades and quotes in batches",
@@ -2756,6 +3140,58 @@
       "stability": "preview"
     },
     {
+      "name": "RecordRatingActions",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-rating-actions",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RecordReportedFacts",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-reported-facts",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RecordScenarios",
+      "step": "W12.8",
+      "title": "Save a scenario or a scenario set",
+      "kind": "command",
+      "topic": "platform.lake.command.record-scenarios",
+      "roles": {
+        "publishes": [
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "RecordSeries",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-series",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "RecordSleeveCross",
       "step": "W11.33",
       "title": "Record a sleeve cross",
@@ -2769,6 +3205,19 @@
       "stability": "preview"
     },
     {
+      "name": "RecordStatistics",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-statistics",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "RecordTrades",
       "step": "W10.4",
       "title": "Record prices, bars, trades and quotes in batches",
@@ -2777,6 +3226,19 @@
       "roles": {
         "publishes": [
           "data"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ReleaseLifecycleEvent",
+      "step": "W9.18",
+      "title": "Release a proposed lifecycle event no report came for",
+      "kind": "command",
+      "topic": "platform.book.command.release-lifecycle-event",
+      "roles": {
+        "publishes": [
+          "operations"
         ]
       },
       "stability": "preview"
@@ -3032,6 +3494,22 @@
       "stability": "stable"
     },
     {
+      "name": "RequestSeriesRecords",
+      "step": "W3.31",
+      "title": "Ask for a listed series' record when it is wanted",
+      "kind": "command",
+      "topic": "platform.reference.command.request-series-records",
+      "roles": {
+        "publishes": [
+          "ems",
+          "oms",
+          "portfolio",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "ResolveBreak",
       "step": "W9.7",
       "title": "Resolve or close a break",
@@ -3043,6 +3521,19 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "ResolveCompany",
+      "step": "W3.32",
+      "title": "Resolve a company, asking the platform on a miss",
+      "kind": "query",
+      "topic": "platform.reference.query.resolve-company",
+      "roles": {
+        "reads": [
+          "data"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "ResolveIdentifier",
@@ -3154,6 +3645,21 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "StatisticsRecorded",
+      "step": "W10.5",
+      "title": "Record, sequence and publish each row",
+      "kind": "event",
+      "topic": "platform.lake.{dataset}.event.statistics-recorded",
+      "roles": {
+        "hears": [
+          "portfolio",
+          "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "SyncStatusRecorded",

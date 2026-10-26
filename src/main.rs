@@ -20,6 +20,7 @@ mod install;
 mod live;
 mod machine;
 mod migrate;
+mod pack;
 mod plugin;
 mod plugin_release;
 mod registry;
@@ -99,9 +100,21 @@ meridian -- bringing a Meridian deployment up
                              does; without @version, the one Browse shows. Launches
                              nothing
   meridian plugin install --pack <pack> --note <why>
-                             install a starter pack's members, each its own install:
-                             a bare <pack> is open-meridian's. Shown version by
-                             version, then asked; launches nothing
+                             install a starter pack through the deployment, one pack
+                             install of its members: a bare <pack> is open-meridian's.
+                             Shown version by version, then asked; followed member by
+                             member; launches nothing
+  meridian plugin pack list  the starter packs the deployment's catalogue holds, each
+                             with its state here
+  meridian plugin pack show <pack>
+                             a pack's setup checklist: each member's versions, state and
+                             connection, and how each installed one is launched
+  meridian plugin pack update <pack> --note <why>
+                             update all: each installed member to its newest offered
+                             version; shown, then asked
+  meridian plugin pack remove <pack> --note <why>
+                             remove the deployment's record of a pack; every member
+                             stays installed and running; shown, then asked
   meridian connect [<address>]
                              sign in to a deployment's dashboard and let this computer
                              act as you, for up to 90 days
@@ -279,11 +292,11 @@ GITHUB_TOKEN, else the credential git keeps for github.com
       --details             publish: every check's full text, where it prints one line
                             a check that fits the terminal
 
-plugin install: through the session meridian connect keeps (--deployment names one),
-as the deployment's admin; --pack and a listing without @version read the platform's
+plugin install, plugin pack: through the session meridian connect keeps (--deployment
+names one), as the deployment's admin; a listing without @version reads the platform's
 catalogue through the platform sign-in. Exits 0 when every member asked for is
 installed or held, 1 when one failed (each named) or nothing was approved
-      --note <why>          why, kept with each install. Required
+      --note <why>          why, kept with the install, update or removal. Required
       --registry <r>        a listing: community or verified (default: with @version,
                             community; without, the one Browse shows)
       --pack <pack>         a starter pack, organisation/pack, or a bare name for
@@ -291,9 +304,10 @@ installed or held, 1 when one failed (each named) or nothing was approved
       --with <plugin>       --pack: also install this `choose` member (a listing, or
                             its plugin part); repeatable
       --without <plugin>    --pack: leave out this preselected member; repeatable
-      --yes                 install without being asked; an unnamed `choose` member
-                            is not installed. Where there is no terminal, nothing is
-                            installed without it
+      --yes                 install, update or remove without being asked; an
+                            unnamed `choose` member is not installed. Where there is
+                            no terminal, nothing is done without it
+      --json                pack: the deployment's answer, one JSON object on stdout
 
 status, logs: read-only; the components and logs through kubectl and the release through
 helm, as doctor and backup read them, and status's book health from the deployment,
@@ -733,6 +747,9 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
     if words.first() == Some(&"install") {
         return install_command(arguments, &words, &platform_of(arguments)).await;
     }
+    if words.first() == Some(&"pack") {
+        return pack_command(arguments, &words).await;
+    }
     if let Some(&verb) = words.first() {
         if matches!(verb, "upload" | "list" | "launch" | "stop") {
             return catalogue_command(arguments, &words).await;
@@ -761,7 +778,7 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
             }
         }
         _ => {
-            eprintln!("meridian: plugin takes `new <name>`, `check`, `migrate`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events`, `open`, `publish`, `release <version>`, `key`, `download` or `install`\n\n{USAGE}");
+            eprintln!("meridian: plugin takes `new <name>`, `check`, `migrate`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events`, `open`, `publish`, `release <version>`, `key`, `download`, `install` or `pack`\n\n{USAGE}");
             2
         }
     }
@@ -1030,9 +1047,10 @@ async fn catalogue_command(arguments: &Arguments, words: &[&str]) -> i32 {
 }
 
 /// `meridian plugin install <organisation>/<plugin>[@<version>]` and
-/// `--pack <pack>` (spec/starter-packs, requirements 28 to 30): exits 0 when
-/// everything asked for is installed or held, 1 when a member failed or
-/// nothing was approved, 2 when asked wrongly, 3 without a session.
+/// `--pack <pack>` (spec/starter-packs, requirements 28 to 30; a pack through
+/// core's pack install from 0.1.53, ruling 613): exits 0 when everything
+/// asked for is installed or held, 1 when a member failed or nothing was
+/// approved, 2 when asked wrongly, 3 without a session.
 async fn install_command(arguments: &Arguments, words: &[&str], platform: &str) -> i32 {
     use std::io::IsTerminal as _;
     let pack = arguments.value("--pack", "--pack");
@@ -1076,21 +1094,18 @@ async fn install_command(arguments: &Arguments, words: &[&str], platform: &str) 
             return 2;
         }
     };
-    let pack_name = match pack.map(install::pack_name).transpose() {
+    let pack_name = match pack.map(pack::pack_name).transpose() {
         Ok(name) => name,
         Err(refused) => {
             eprintln!("meridian plugin install: {refused}");
             return 2;
         }
     };
-    let reads_catalogue = pack_name.is_some() || named.as_ref().is_some_and(|(_, v)| v.is_none());
+    let reads_catalogue = named.as_ref().is_some_and(|(_, v)| v.is_none());
     if reads_catalogue && !install::CATALOGUE_FOR_A_PERSON {
-        let what = match &named {
-            Some((listing, _)) => format!("{listing} without @<version>"),
-            None => "--pack".to_string(),
-        };
+        let listing = named.as_ref().map(|(l, _)| l.as_str()).unwrap_or_default();
         eprintln!(
-            "meridian plugin install: {what} {}",
+            "meridian plugin install: {listing} without @<version> {}",
             install::CATALOGUE_NOT_YET
         );
         return 1;
@@ -1123,33 +1138,32 @@ async fn install_command(arguments: &Arguments, words: &[&str], platform: &str) 
     let mut say = |line: &str| eprintln!("{line}");
 
     if let Some(name) = pack_name {
-        let catalogue = catalogue.expect("read for a pack");
-        let asking = |member: &install::Member, version: &str| {
+        let asking = |member: &pack::Member, version: &str| {
             approved(&format!(
                 "Also install {} {version} ({}, {})?",
                 member.listing, member.group, member.registry
             ))
         };
-        let ask: Option<install::Ask> = (!yes && std::io::stdin().is_terminal()).then_some(&asking);
-        let asked = install::PackAsked {
+        let ask: Option<pack::Ask> = (!yes && std::io::stdin().is_terminal()).then_some(&asking);
+        let asked = pack::PackAsked {
             pack: &name,
-            picks: install::Picks {
+            picks: pack::Picks {
                 with: &with,
                 without: &without,
                 ask,
             },
             note,
         };
-        return match install::install_pack(&address, &held, &catalogue, &asked, &approve, &mut say)
+        let following = pack::Following {
+            every: pack::EVERY,
+            within: pack::WITHIN,
+        };
+        return match pack::install_pack(&address, &held, &asked, &approve, &mut say, &following)
             .await
         {
             Ok(done) => {
-                print!("{}", install::checklist(&done));
-                if done.failed.is_empty() {
-                    0
-                } else {
-                    1
-                }
+                print!("{}", done.checklist);
+                i32::from(done.failed)
             }
             Err(failed) => {
                 eprintln!("meridian plugin install: {}", failed.said());
@@ -1186,14 +1200,8 @@ async fn install_command(arguments: &Arguments, words: &[&str], platform: &str) 
         return 1;
     }
     match install::install_one(&address, &held, &listing, &version, &registry, note).await {
-        Ok(recorded) => {
-            print!(
-                "{}",
-                install::checklist(&install::Done {
-                    ready: vec![recorded],
-                    failed: Vec::new(),
-                })
-            );
+        Ok((name, version)) => {
+            print!("{}", install::checklist(&name, &version));
             0
         }
         Err(failed) => {
@@ -1201,6 +1209,131 @@ async fn install_command(arguments: &Arguments, words: &[&str], platform: &str) 
                 "meridian plugin install: {listing} {version}: {}",
                 failed.said()
             );
+            failed.code()
+        }
+    }
+}
+
+/// `meridian plugin pack list|show|update|remove` (spec/starter-packs,
+/// requirement 30; ruling 613): the deployment's starter packs, through
+/// core's pack routes, as the deployment's admin. `update` and `remove` are
+/// shown, then asked, unless `--yes`; `--json` prints core's answer. Exits 0
+/// when done, 1 when refused or not approved, 2 when asked wrongly, 3 without
+/// a session.
+async fn pack_command(arguments: &Arguments, words: &[&str]) -> i32 {
+    let (verb, named) = match words {
+        ["pack", "list"] => ("list", None),
+        ["pack", verb @ ("show" | "update" | "remove"), name] => (*verb, Some(*name)),
+        _ => {
+            eprintln!("meridian plugin pack: takes `list`, `show <pack>`, `update <pack>` or `remove <pack>`\n\n{USAGE}");
+            return 2;
+        }
+    };
+    let pack = match named.map(pack::pack_name).transpose() {
+        Ok(pack) => pack.unwrap_or_default(),
+        Err(refused) => {
+            eprintln!("meridian plugin pack {verb}: {refused}");
+            return 2;
+        }
+    };
+    let note = arguments
+        .value("--note", "--note")
+        .map(str::trim)
+        .filter(|note| !note.is_empty());
+    let acts = matches!(verb, "update" | "remove");
+    if acts && note.is_none() {
+        eprintln!("meridian plugin pack {verb}: --note <why> is required: the deployment keeps it with the pack's record");
+        return 2;
+    }
+    let held = match held_session(arguments) {
+        Ok(held) => held,
+        Err(refusal) => {
+            eprintln!("meridian plugin pack {verb}: {refusal}");
+            return 3;
+        }
+    };
+    let address = held.address().to_string();
+    let json = arguments.set("--json");
+    let yes = arguments.set("--yes");
+    let as_json = |answer: &serde_json::Value| format!("{answer}\n");
+    let done: Result<String, live::Failed> = async {
+        match verb {
+            "list" => {
+                let answer = pack::list(&address, &held).await?;
+                Ok(if json {
+                    as_json(&answer)
+                } else {
+                    pack::list_text(&answer)
+                })
+            }
+            "show" => {
+                let status = pack::read(&address, &held, &pack).await?;
+                if json {
+                    return Ok(as_json(&status));
+                }
+                let installed = catalogue::catalogue(&address, &held).await?;
+                Ok(pack::show_text(&status, &installed))
+            }
+            "update" => {
+                let status = pack::read(&address, &held, &pack).await?;
+                let moving = pack::to_update(&status);
+                eprintln!("{pack}: Update all, in {address}");
+                if moving.is_empty() {
+                    eprintln!("No member has a newer version offered.");
+                    return Ok(String::new());
+                }
+                for line in &moving {
+                    eprintln!("{line}");
+                }
+                if !(yes || approved("Update all?")) {
+                    return Err(live::Failed::Refused(
+                        "not approved, so nothing was updated. Where there is no terminal to ask \
+                         at, --yes approves"
+                            .into(),
+                    ));
+                }
+                let answer = pack::update(&address, &held, &pack, note.unwrap_or_default()).await?;
+                if json {
+                    return Ok(as_json(&answer));
+                }
+                let installed = catalogue::catalogue(&address, &held).await?;
+                Ok(pack::show_text(&answer, &installed))
+            }
+            _ => {
+                let status = pack::read(&address, &held, &pack).await?;
+                eprintln!(
+                    "Only this deployment's record of {pack} is removed. Every member stays \
+                     installed, and running where it runs:"
+                );
+                for line in pack::staying(&status) {
+                    eprintln!("{line}");
+                }
+                let question =
+                    format!("Remove {pack}'s record? No member is stopped or uninstalled.");
+                if !(yes || approved(&question)) {
+                    return Err(live::Failed::Refused(
+                        "not approved, so nothing was removed. Where there is no terminal to ask \
+                         at, --yes approves"
+                            .into(),
+                    ));
+                }
+                let answer = pack::remove(&address, &held, &pack, note.unwrap_or_default()).await?;
+                Ok(if json {
+                    as_json(&answer)
+                } else {
+                    format!("{pack}'s record is removed; every member stays installed.\n")
+                })
+            }
+        }
+    }
+    .await;
+    match done {
+        Ok(said) => {
+            print!("{said}");
+            0
+        }
+        Err(failed) => {
+            eprintln!("meridian plugin pack {verb}: {}", failed.said());
             failed.code()
         }
     }
@@ -3220,6 +3353,32 @@ mod tests {
         );
         assert!(help.contains("--without <plugin>"), "{help}");
         assert!(!help.contains("plugin download"), "{help}");
+    }
+
+    #[test]
+    fn pack_takes_list_show_update_and_remove() {
+        // spec/starter-packs, requirement 30 (ruling 613).
+        let show = parse(said("plugin pack show crypto --json")).unwrap();
+        assert_eq!(show.words, ["pack", "show", "crypto"]);
+        assert!(show.set("--json"));
+        let remove = parse(said(
+            "plugin pack remove open-meridian/crypto --note tidy --yes --deployment https://m.test",
+        ))
+        .unwrap();
+        assert_eq!(remove.words, ["pack", "remove", "open-meridian/crypto"]);
+        assert_eq!(remove.value("--note", "--note"), Some("tidy"));
+        assert!(remove.set("--yes"));
+        let help = help_for("plugin", &["pack".to_string()]);
+        for line in [
+            "meridian plugin pack list",
+            "meridian plugin pack show <pack>",
+            "meridian plugin pack update <pack> --note <why>",
+            "meridian plugin pack remove <pack> --note <why>",
+            "--json                pack: the deployment's answer",
+        ] {
+            assert!(help.contains(line), "{line}: {help}");
+        }
+        assert!(!help.contains("plugin install --pack"), "{help}");
     }
 
     #[test]

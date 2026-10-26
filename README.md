@@ -624,13 +624,17 @@ identifier it states, or follow the kept ID to the record it became with
 `meridian.CurrentIdMap`; one written as `<map>.current("<id>")` is followed
 already. A warning fails nothing, verified or not: it is printed with its
 rule, file and line, and listed under `warnings` in `--json`. The check reads
-meridian-schema's v27 `roles.json` and `suites.json` (bc31b00, as SDK 0.32.1
+meridian-schema's v28 `roles.json` and `suites.json` (dcca81b, as SDK 0.33.0
 vendors them; from v24's, connectivity no longer reads the escape hatch, and
 the give-up's case is marked `about: give-ups`): `pricing` is a role, not at
 the edge, with its suite; v26's event group, jobs, bounded lake query and
-agents' guard cases, and v27's rates, liveness and RFQ quote cases, are in
-the suites that hold them, the latency reports' cases marked `about:
-latency` and so named not presented until contract v28; `reference`
+agents' guard cases, v27's rates, liveness and RFQ quote cases, and v28's
+cases are in the suites that hold them. The latency reports' cases are
+required again from contract v28 (ruling 518), and each of v28's new cases is
+`about` what a plugin may never publish or do (ruling 602) -- option chains,
+filings, holdings, corporate actions, ratings, quotes, options, packages,
+derived series, scenarios and quality states -- so a plugin touching none
+names it not presented, with why; `reference`
 is a role, its suite in preview and not yet held by `--verified`;
 `roles-declared` knows v24's commands and the roles holding them (booking's,
 `set_allocation_instruction`, `report_give_up`, the alerts',
@@ -678,6 +682,10 @@ meridian plugin install open-meridian/plugin-coinbase --note "the crypto desk"
 meridian plugin install --pack crypto --with plugin-coinbase --note "the crypto desk"
 meridian plugin install --pack crypto --with plugin-coinbase --without plugin-public-feed \
     --note "the crypto desk" --yes
+meridian plugin pack list
+meridian plugin pack show crypto
+meridian plugin pack update crypto --note "monthly update"
+meridian plugin pack remove crypto --note "the desk closed" --yes
 ```
 
 `install` puts a version the registries list into the connected deployment
@@ -687,24 +695,48 @@ nothing. `<organisation>/<plugin>@<version>` installs that version, from
 installs the one Browse shows, the newest offered release, verified first.
 `--note` is required: the deployment keeps it with the install.
 
-`--pack` installs a starter pack's members, each its own install. A bare
-name is `open-meridian`'s, so `crypto` is `open-meridian/crypto`. Each member
-resolves to its newest offered release at or above the pack's minimum for it;
-one with none offered is Unavailable and left out. Members the curator
-preselected are installed, and members to choose are not: `--with <plugin>`
-adds one and `--without <plugin>` leaves out a preselected one, each
-repeatable, by its listing or its plugin part, and a name that is not a
+`--pack` installs a starter pack through the deployment, as Browse's install
+sheet does: one pack install, which the deployment keeps (one record naming
+the pack's revision, the members and how each went, and each member's own
+install record naming its pack). A bare name is `open-meridian`'s, so
+`crypto` is `open-meridian/crypto`. The deployment resolves each member to
+its newest offered release at or above the pack's minimum for it; one with
+none offered is Unavailable, and one the deployment won't take (its floor not
+met, or a registry it doesn't take) is "Not permitted here": neither is
+installed, and a pack whose required member is either is not. Members the
+curator preselected are installed, and members to choose are not: `--with
+<plugin>` adds one and `--without <plugin>` leaves out a preselected one,
+each repeatable, by its listing or its plugin part, and a name that is not a
 member is refused before anything is installed. At a terminal, each member
 to choose that you did not name is asked about. A member the deployment
 holds already is never moved: at or above the pack's version it counts as
 installed, and below it the line says `Installed 0.3.0; 0.5.1 offered`. The
 plan is shown version by version and asked about first; `--yes` approves it
 without asking, and installs no member to choose that you did not name.
-Each member's line says installed or why it failed, the rest go on past a
-failure, and the end lists `meridian plugin launch` for each member ready
-to launch; the command exits 1 when one failed, naming it. `--pack` and a
-listing without `@version` read the platform's catalogue with your platform
-sign-in.
+Where every member ticked is held already, the plan says `Nothing to
+install.` and asks to record the pack as installed, so the deployment keeps
+its record of the pack all the same, moving no member. The
+install runs in the deployment, member by member; the command follows it, one
+line a member as each ends, going on past a failure, then lists `meridian
+plugin launch` for each member ready to launch and each that failed, with
+why, exiting 1 when one did. A listing without `@version` reads the
+platform's catalogue with your platform sign-in; `--pack` reads only the
+deployment.
+
+`plugin pack` reads and keeps the packs installed: `list` is Browse's pack
+view, one line a pack (its title, asset classes, members and its state
+here); `show <pack>` is its page, the setup checklist -- each member's
+versions, its state with why, its connection and the step after it, what a
+revision added, and the launch command for each member installed and not
+launched; `update <pack>` is "Update all", each launched member moved to its
+newest offered version, an installed one given it, and one asking for more
+roles left for its own approval, what would move shown first; `remove
+<pack>` removes only the deployment's record of the pack, every member
+staying installed and running, those members shown first. `update` and
+`remove` take `--note` and are asked about unless `--yes`. With `--json`
+each prints the deployment's answer as its tools give it. The pack commands
+and `--pack` need a deployment whose core is at contract v28 or later; an
+older one is said in one line.
 
 ## The registries (contract v25)
 
@@ -846,6 +878,12 @@ platform's ID read from the `open_meridian` identifier into the record's
 `instrument_id`, and a test's `LCL-suite-n` into `INS-suite-n`; a prefix test
 or an `open_meridian` read with no record at hand is left by hand, and the
 check after it warns of an ID the plugin keeps (`replaced-ids-followed`).
+From 0.32.x to 0.33.0 (contract v28) the SDK's step rewrites the wire's
+`SubjectRef` handed to the SDK -- `ops.SubjectRef(...)`, `operations_pb2.SubjectRef`
+or one imported from the wire bindings -- into `meridian.SubjectRef(...)`
+(ruling 599); one inside another wire message stays, and subjects read from a
+heard message and given to a typed operation, and each role's suite test the
+v28 cases reach, are left by hand.
 
 ## Developing a plugin live
 
@@ -975,6 +1013,13 @@ webpki-root-certs to 1.0.10, for RUSTSEC-2026-0381 to 0383 (ruling 509).
 `a-want-recorded-against` are about closes, so a data plugin publishing
 only rates names them not presented, with why, and passes `plugin check
 --verified`.
+0.33.0 (contract v28) from 0.1.53: each scaffold takes `meridian.SubjectRef`
+(ruling 599), the data and connectivity templates' suites run the latency
+reports' cases, required again (ruling 518), and name v28's new cases not
+presented where their stand-ins touch none (ruling 602). 0.1.53 also installs
+a starter pack through the deployment, one pack install it keeps, and adds
+`meridian plugin pack list|show|update|remove` (ruling 613); both need a
+deployment whose core is at contract v28.
 
 ## Licence
 

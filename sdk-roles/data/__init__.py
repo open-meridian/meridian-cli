@@ -81,16 +81,32 @@ streams, its transport:
   data suite's producers for each, so a plugin runs the suite unchanged
   against its own conversion.
 
+- `meridian.roles.data.filings` (0.33.0, contract v28) -- the lake's
+  filings slice: filings, reported facts, holdings reports and holdings,
+  declared dividends and rating actions, each under its company or
+  security with its role, companies resolved by the identifiers stated
+  (`Companies`);
+
+**Quality states** (0.33.0, contract v28, ruling 424): every row recorded
+unasked or for a standing want is judged at the edge
+(`meridian.roles.data.quality`, `Wants.quality`) -- a crossed quote
+invalid, a duplicate, the rows after a sequence gap, a row out of order
+or stale suspicious, a source time ahead of the clock invalid -- its state
+and reasons on its envelope; the tolerances the admin's
+`dataset_thresholds`. `Wants.record` takes a chain's series and
+statistics and the filings slice's rows too.
+
 **Latency and liveness** (0.32.0, contract v27): given the plugin's
 `roles.Latency` (`Wants.latency`), every row recorded unasked or for a
-standing want has its age at the `edge` hop recorded, its feed delay --
-recorded, not yet reported: the suite's `reports-its-feed-delay` is about
-`latency`, not presented until contract v28 (rulings 515 and 518); a
+standing want has its age at the `edge` hop recorded, its feed delay,
+reported from 0.33.0 (`Latency.report`; the suite's
+`reports-its-feed-delay` is required from contract v28, ruling 518); a
 stream's heartbeat with no price
 changed, or a poll, is the dataset's liveness (`Wants.liveness`,
 `RecordLiveness`), which confirms the values in force; Connection's
 "Sessions" section shows each session's `SessionLatency`
-(`ConnectionRead.session_latency`). A dataset declares its delay
+(`ConnectionRead.session_latency`), drawn only once a session is measured
+(0.32.2): a polled plugin's Connection has none. A dataset declares its delay
 (`DatasetDeclaration.declared_delay_ns`) and its admin its staleness
 (`meridian.dataset_thresholds()`), and the plugin admin its ceilings
 (`meridian.session_ceilings()`).
