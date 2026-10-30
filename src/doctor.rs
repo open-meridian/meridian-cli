@@ -114,7 +114,14 @@ pub struct Intended {
 pub async fn examine(machine: &dyn Machine, intended: &Intended) -> Vec<Finding> {
     let mut findings = Vec::new();
     findings.push(checks::helm(machine).await);
-    findings.extend(checks::cluster(machine, &intended.namespace).await);
+    let cluster = checks::cluster(machine, &intended.namespace).await;
+    // Its version only where there is a cluster to ask: one with none has
+    // been told so once.
+    let reachable = matches!(cluster.first(), Some(Finding::Fine(_)));
+    findings.extend(cluster);
+    if reachable {
+        findings.push(checks::kubernetes(machine).await);
+    }
     findings.push(checks::storage_class(machine).await);
     findings.extend(checks::disk(machine).await);
     findings.push(checks::image(machine, &intended.image).await);
