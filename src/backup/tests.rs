@@ -264,13 +264,13 @@ fn a_job_from_the_cronjob_holds_its_file_only_when_asked() {
             "spec": { "template": { "spec": { "containers": [ { "name": "backup", "env": [] } ] } } }
         } }
     });
-    let plain = job_from(&cronjob, "m-meridian-runtime-backup-1", false).unwrap();
+    let plain = job_from(&cronjob, "m-meridian-runtime-backup-1", false, &[]).unwrap();
     assert_eq!(plain["metadata"]["ownerReferences"][0]["uid"], "u-1");
     assert_eq!(
         plain["spec"]["template"]["spec"]["containers"][0]["env"],
         serde_json::json!([])
     );
-    let held = job_from(&cronjob, "m-meridian-runtime-backup-1", true).unwrap();
+    let held = job_from(&cronjob, "m-meridian-runtime-backup-1", true, &[]).unwrap();
     assert_eq!(
         held["spec"]["template"]["spec"]["containers"][0]["env"][0]["name"],
         "MERIDIAN_BACKUP_HOLD"
@@ -603,6 +603,7 @@ fn a_plan(database: DatabasePlan) -> Plan {
         secrets: 3,
         config_maps: 1,
         key_generated: true,
+        storage: Vec::new(),
         database,
         unchecked: None,
         delete_volume: None,
@@ -667,4 +668,275 @@ fn an_external_database_is_named_and_whoever_else_runs_against_it_told_to_stop()
     for secret in ["s3cr", "m1gr", "meridian_app", "meridian_migrate"] {
         assert!(!text.contains(secret), "{secret}: {text}");
     }
+}
+
+// ── Plugins' storage (ruling 828) ────────────────────────────────────────
+
+fn a_claim(name: &str, launched: bool) -> StorageClaim {
+    let mut labels = BTreeMap::from([
+        (
+            "meridian.dev/component".to_string(),
+            "plugin-storage".to_string(),
+        ),
+        ("app.kubernetes.io/instance".to_string(), "m".to_string()),
+    ]);
+    if launched {
+        labels.insert("meridian.dev/launched".into(), "true".into());
+        labels.insert("meridian.dev/plugin".into(), "snaptrade".into());
+    }
+    StorageClaim {
+        name: name.into(),
+        labels,
+        size: "5Gi".into(),
+    }
+}
+
+#[test]
+fn the_plugins_claims_are_read_by_name_with_their_labels_and_size() {
+    let listed = serde_json::json!({ "items": [
+        { "metadata": { "name": "m-meridian-runtime-storage-zeta", "labels": { "meridian.dev/instance": "zeta" } },
+          "spec": { "resources": { "requests": { "storage": "5Gi" } } } },
+        { "metadata": { "name": "m-meridian-runtime-storage-alpha", "labels": { "meridian.dev/launched": "true" } },
+          "spec": { "resources": { "requests": { "storage": "1Gi" } } } },
+        { "metadata": { "name": "m-meridian-runtime-storage-gone", "deletionTimestamp": "2026-10-30T00:00:00Z" },
+          "spec": { "resources": { "requests": { "storage": "1Gi" } } } }
+    ] });
+    let claims = storage_claims(&listed);
+    assert_eq!(
+        claims.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        [
+            "m-meridian-runtime-storage-alpha",
+            "m-meridian-runtime-storage-zeta"
+        ]
+    );
+    assert_eq!(claims[0].size, "1Gi");
+    assert_eq!(claims[0].labels["meridian.dev/launched"], "true");
+    assert_eq!(
+        storage_selector("m"),
+        "app.kubernetes.io/instance=m,meridian.dev/component=plugin-storage"
+    );
+}
+
+#[test]
+fn a_job_reads_each_plugins_storage_read_only_and_names_it_for_the_script() {
+    let cronjob = serde_json::json!({
+        "metadata": { "name": "m-meridian-runtime-backup", "namespace": "ns", "uid": "u-1" },
+        "spec": { "jobTemplate": {
+            "metadata": { "labels": { "meridian.dev/component": "backup" } },
+            "spec": { "template": { "spec": {
+                "containers": [ { "name": "backup", "env": [], "volumeMounts": [ { "name": "work", "mountPath": "/work" } ] } ],
+                "volumes": [ { "name": "work", "emptyDir": {} } ]
+            } } }
+        } }
+    });
+    let claims = [
+        a_claim("m-meridian-runtime-storage-a", true),
+        a_claim("m-meridian-runtime-storage-b", false),
+    ];
+    let job = job_from(&cronjob, "m-meridian-runtime-backup-1", true, &claims).unwrap();
+    let pod = &job["spec"]["template"]["spec"];
+    let env = pod["containers"][0]["env"].as_array().unwrap();
+    let value = |name: &str| env.iter().find(|e| e["name"] == name).unwrap()["value"].clone();
+    assert_eq!(value("MERIDIAN_BACKUP_HOLD"), "1");
+    assert_eq!(
+        value("MERIDIAN_BACKUP_STORAGE"),
+        "m-meridian-runtime-storage-a m-meridian-runtime-storage-b"
+    );
+    let described: Vec<StorageClaim> =
+        serde_json::from_str(value("MERIDIAN_BACKUP_STORAGE_CLAIMS").as_str().unwrap()).unwrap();
+    assert_eq!(described, claims);
+    let mounts = pod["containers"][0]["volumeMounts"].as_array().unwrap();
+    assert_eq!(mounts.len(), 3);
+    assert_eq!(
+        mounts[2]["mountPath"],
+        "/in/storage/m-meridian-runtime-storage-b"
+    );
+    assert_eq!(mounts[2]["readOnly"], true);
+    let volumes = pod["volumes"].as_array().unwrap();
+    assert_eq!(
+        volumes[1]["persistentVolumeClaim"]["claimName"],
+        "m-meridian-runtime-storage-a"
+    );
+    assert_eq!(volumes[1]["persistentVolumeClaim"]["readOnly"], true);
+    // None to read: the Job is the CronJob's own.
+    let plain = job_from(&cronjob, "m-meridian-runtime-backup-2", false, &[]).unwrap();
+    assert_eq!(
+        plain["spec"]["template"]["spec"]["volumes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_claim_is_made_again_as_the_launchers_or_the_charts_own() {
+    let values: serde_yaml::Value =
+        serde_yaml::from_str("pluginStorage: { storageClassName: fast }").unwrap();
+    let launched = storage_claim_object(
+        &a_claim("m-meridian-runtime-storage-a", true),
+        "firm",
+        "m",
+        &values,
+    );
+    assert_eq!(
+        launched["metadata"]["labels"]["meridian.dev/plugin"],
+        "snaptrade"
+    );
+    assert!(launched["metadata"]["annotations"].is_null(), "{launched}");
+    assert_eq!(launched["spec"]["resources"]["requests"]["storage"], "5Gi");
+    assert_eq!(launched["spec"]["storageClassName"], "fast");
+    let charts = storage_claim_object(
+        &a_claim("m-meridian-runtime-storage-b", false),
+        "firm",
+        "m",
+        &serde_yaml::from_str("{}").unwrap(),
+    );
+    assert_eq!(
+        charts["metadata"]["labels"]["app.kubernetes.io/managed-by"],
+        "Helm"
+    );
+    assert_eq!(
+        charts["metadata"]["annotations"]["meta.helm.sh/release-name"],
+        "m"
+    );
+    assert_eq!(
+        charts["metadata"]["annotations"]["helm.sh/resource-policy"],
+        "keep"
+    );
+    assert!(charts["spec"]["storageClassName"].is_null());
+}
+
+fn opened_with(storage: &[&str], claims: &str, tars: &[&str]) -> Opened {
+    let mut manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+    manifest.storage = storage.iter().map(|s| s.to_string()).collect();
+    let mut members = BTreeMap::new();
+    members.insert(
+        "storage/claims.json".to_string(),
+        claims.as_bytes().to_vec(),
+    );
+    for tar in tars {
+        members.insert(format!("storage/{tar}.tar"), Vec::new());
+    }
+    Opened { manifest, members }
+}
+
+#[test]
+fn every_claim_a_backup_holds_is_described_or_restore_stops_first() {
+    let described =
+        r#"[{"name": "c-a", "labels": {"meridian.dev/launched": "true"}, "size": "5Gi"}]"#;
+    let claims = described_claims(&opened_with(&["c-a"], described, &["c-a"])).unwrap();
+    assert_eq!(claims[0].size, "5Gi");
+    let undescribed = described_claims(&opened_with(&["c-a", "c-b"], described, &["c-a", "c-b"]));
+    assert!(undescribed
+        .unwrap_err()
+        .contains("does not describe its claim"));
+    let missing = described_claims(&opened_with(&["c-a"], described, &[]));
+    assert!(missing.unwrap_err().contains("storage/c-a.tar"));
+    // A backup the schedule took holds none, and needs no description.
+    assert!(described_claims(&opened_with(&[], "", &[]))
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn a_tars_files_are_listed_as_the_filling_pod_lists_them() {
+    let mut builder = tar::Builder::new(Vec::new());
+    for (path, bytes) in [
+        ("./session/messages.log", &b"fix"[..]),
+        ("./sequence", &b"4127"[..]),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o640);
+        header.set_cksum();
+        builder.append_data(&mut header, path, bytes).unwrap();
+    }
+    let listed = listing(&builder.into_inner().unwrap()).unwrap();
+    assert_eq!(
+        listed,
+        format!(
+            "{} ./sequence\n{} ./session/messages.log\n",
+            hex(&Sha256::digest(b"4127")),
+            hex(&Sha256::digest(b"fix"))
+        )
+    );
+}
+
+#[test]
+fn a_copy_is_what_the_job_wrote_or_it_is_read_again() {
+    let written = Wrote {
+        name: "m-20261030T000000Z.meridian-backup".into(),
+        bytes: 3,
+        sha256: hex(&Sha256::digest(b"age")),
+    };
+    assert!(is_written(b"age", &written));
+    assert!(!is_written(b"ag", &written), "short");
+    assert!(!is_written(b"agf", &written), "same size, other bytes");
+}
+
+#[test]
+fn a_pod_that_cannot_be_placed_says_why() {
+    let pods = serde_json::json!({ "items": [ { "status": { "conditions": [
+        { "type": "PodScheduled", "status": "False", "reason": "Unschedulable",
+          "message": "0/2 nodes are available: 2 node(s) had volume node affinity conflict." }
+    ] } } ] });
+    assert_eq!(
+        unschedulable(&pods).as_deref(),
+        Some("0/2 nodes are available: 2 node(s) had volume node affinity conflict.")
+    );
+    let placed = serde_json::json!({ "items": [ { "status": { "conditions": [
+        { "type": "PodScheduled", "status": "True" } ] } } ] });
+    assert_eq!(unschedulable(&placed), None);
+}
+
+#[test]
+fn a_plugins_storage_left_in_the_namespace_stops_restore_and_the_plan_names_each() {
+    let mut manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+    manifest.storage = vec!["meridian-meridian-runtime-storage-snap-1".into()];
+    let values: serde_yaml::Value = serde_yaml::from_str("{}").unwrap();
+    let present = Present {
+        claims: vec!["meridian-meridian-runtime-storage-snap-1".into()],
+        ..Present::default()
+    };
+    let found = left_behind(&manifest, "meridian-meridian-runtime", &values, &present);
+    assert!(
+        found
+            .iter()
+            .any(|said| said.contains("storage-snap-1, a plugin's storage")),
+        "{found:?}"
+    );
+    let mut plan = a_plan(DatabasePlan::None);
+    plan.storage = manifest.storage.clone();
+    let text = plan_text(&plan);
+    assert!(
+        text.contains(
+            "1 plugin storage claim filled as backed up (meridian-meridian-runtime-storage-snap-1)"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_claim_is_filled_by_a_pod_that_may_set_owners_and_modes_and_nothing_more() {
+    let pod = filler_pod(
+        "m-restore-storage-0",
+        "firm",
+        "m-meridian-runtime-storage-a",
+        "ghcr.io/x/backup:1",
+    );
+    let container = &pod["spec"]["containers"][0];
+    assert_eq!(
+        container["securityContext"]["capabilities"]["drop"],
+        serde_json::json!(["ALL"])
+    );
+    assert_eq!(
+        container["securityContext"]["capabilities"]["add"],
+        serde_json::json!(["CHOWN", "FOWNER", "DAC_OVERRIDE"])
+    );
+    assert_eq!(pod["spec"]["automountServiceAccountToken"], false);
+    assert_eq!(
+        pod["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"],
+        "m-meridian-runtime-storage-a"
+    );
 }
