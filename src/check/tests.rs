@@ -2007,10 +2007,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.33.0", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.33.3", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.33.0",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.33.3",
         ),
         (
             "tool-meridian",
@@ -3727,10 +3727,10 @@ fn a_plugin_on_an_older_sdk_is_advised_rather_than_failed() {
     let plugin = Scaffolded::tested("docs-older");
     plugin.replace(
         "pyproject.toml",
-        "open-meridian==0.33.0",
+        "open-meridian==0.33.3",
         "open-meridian==0.28.0",
     );
-    plugin.replace("Dockerfile", "plugin-python:0.33.0", "plugin-python:0.28.0");
+    plugin.replace("Dockerfile", "plugin-python:0.33.3", "plugin-python:0.28.0");
     std::fs::remove_dir_all(plugin.path("docs")).unwrap();
     let report = plugin.check();
     assert!(report.passed(), "{}", text(&report));

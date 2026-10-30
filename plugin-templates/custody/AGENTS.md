@@ -290,6 +290,70 @@ it for whoever works on it next. It is the canonical one: `CLAUDE.md` and the
 `develop-live` skill lead Claude Code here rather than repeating it.
 `.dockerignore` keeps all of them out of the image and the live instance.
 
+## Reading data: ask for what a page shows
+
+A page is fast when each read asks the lake for only what the page shows,
+and slow when the plugin reads everything and filters it.
+
+- **Name the window, the series and the fields.**
+  - A chain read names the expiration shown: `expiration_from` and
+    `expiration_to` with `all_series=True`. `series_keys` names series one
+    by one; the lake refuses a read naming both.
+  - A read of quotes, trades or statistics names the dictionary entries the
+    page shows in `fields` (`meridian.v1.Quote.bid`). A field not asked is
+    left unset. The envelope always comes back.
+  - A listing read names the terms it draws in `paths` (`put_or_call`,
+    `strike_price`, `expiration_date`).
+  - A page choosing an expiration reads the underlying's expirations
+    alone (`chains.read_expirations`): each date once with its series
+    count, one call, never every series read to keep each date.
+- **Never page through a whole chain or list to filter it in the plugin.**
+  A wider window, more series or another field is another read.
+- **Keep no copy of platform data in the plugin.** No cache of quotes,
+  chains, listings, book records or engine answers. Read again at the
+  source's cadence. The SDK will keep that copy for you once subscriptions
+  arrive.
+- **Show an "as of" on every figure** (`<om-asof>`): the time the data it
+  came from was true.
+- **Draw the page first, then fill in what takes longer.** The first answer
+  draws the page from fast reads. An engine's answer fills in afterwards and
+  never holds up the first draw.
+- **Fit the page on one screen.** Use tabs or pagination, one-line rows, and
+  search where rows grow.
+
+One expiration of a chain, as a Chain page draws it:
+
+```python
+from meridian.roles import chains
+
+expirations = await chains.read_expirations(plugin, underlying_id)
+day = expirations[0].expiration_date  # or the one the person picked
+underlying = meridian.SubjectRef(entity_id=underlying_id)
+series = await chains.read_chain(
+    plugin,
+    underlying_id,
+    day,
+    paths=["put_or_call", "strike_price", "expiration_date"],
+)
+quotes = await plugin.list_quotes(
+    subjects=[underlying],
+    all_series=True,
+    expiration_from=day,
+    expiration_to=day,
+    fields=[
+        "meridian.v1.Quote.bid",
+        "meridian.v1.Quote.ask",
+        "meridian.v1.Quote.bid_quantity",
+        "meridian.v1.Quote.ask_quantity",
+    ],
+    page_size=500,
+)
+```
+
+That is three reads, not one per page of every expiration. The model behind
+this, and what comes next (subscriptions, a hot layer, standing analytics),
+is the design's `spec/one-data-access-model.md`.
+
 ## Checking it: `meridian plugin check`
 
 Whatever in this file can be decided from the text is checked, not only
