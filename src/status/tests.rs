@@ -328,6 +328,24 @@ async fn logs_are_a_known_components_and_since_takes_a_span() {
             "--since=10m",
         ]
     );
+    // A day, which kubectl refuses as `1d`, reaches it in hours.
+    logs(
+        &fake,
+        &asked(),
+        "bor",
+        &Read {
+            since: Some("1d".into()),
+            previous: false,
+        },
+    )
+    .await
+    .unwrap();
+    let call = fake.asked.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(
+        call.last().map(String::as_str),
+        Some("--since=24h"),
+        "{call:?}"
+    );
     let refused = logs(&fake, &asked(), "kernel", &Read::default())
         .await
         .unwrap_err();
@@ -349,6 +367,11 @@ async fn logs_are_a_known_components_and_since_takes_a_span() {
     .unwrap_err()
     .contains("--since takes a span"));
     assert!(is_since("30s") && is_since("2h") && is_since("1d"));
+    // kubectl's --since stops at hours: a day is said as 24 of them.
+    assert_eq!(kubectl_since("1d"), "24h");
+    assert_eq!(kubectl_since("7d"), "168h");
+    assert_eq!(kubectl_since("10m"), "10m");
+    assert_eq!(kubectl_since("2h"), "2h");
     assert!(!is_since("h") && !is_since("10") && !is_since("1h30m"));
 }
 
