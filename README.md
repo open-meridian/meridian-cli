@@ -751,6 +751,15 @@ meridian plugin download acme/venue-desk@0.18.0       # on a connected machine
 meridian plugin upload --bundle acme-venue-desk-0.18.0.plugin-bundle.tar
 ```
 
+A plugin is named in Meridian -- its listing, what `publish` and `release` ask
+the platform to build, and what `upload` puts in a deployment's catalogue --
+by `[tool.meridian] name` where its `pyproject.toml` says one, else by
+`[project] name` (CLI 0.1.54, ruling 971). One whose Python project is named
+apart from it says so: plugin-databento's project is `plugin-databento`, so
+it never shadows Databento's own client, and `name = "databento"` lists it
+as `databento`. The name is a host label: lower-case letters, digits and
+single hyphens.
+
 These act through a sign-in to the platform (`--platform`), made in your
 browser the first time and kept 30 days, never a password; its access tokens
 live ten minutes and are good at the publishing API alone. `publish` holds

@@ -41,6 +41,13 @@ use crate::live::Failed;
 /// What a plugin says about itself, from its pyproject.toml.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Metadata {
+    /// Its one name in Meridian, on every path -- its registry listing,
+    /// publish and release, and `plugin upload` to a deployment (ruling
+    /// 971, from 945): `[tool.meridian] name` where it says one, else
+    /// `[project] name`. A plugin whose Python project is named apart from
+    /// it says so, as plugin-databento, `[project] name = "plugin-databento"`
+    /// so it never shadows Databento's own client (916), lists as
+    /// `databento`.
     pub name: String,
     pub version: String,
     pub roles: Vec<String>,
@@ -95,7 +102,6 @@ pub fn metadata(pyproject: &str) -> Result<Metadata, String> {
         .get("project")
         .and_then(|v| v.as_table())
         .ok_or("pyproject.toml has no [project]")?;
-    let name = text(section, "name");
     let version = text(section, "version");
     let sdk_version = section
         .get("dependencies")
@@ -122,6 +128,13 @@ pub fn metadata(pyproject: &str) -> Result<Metadata, String> {
                 .into(),
         );
     }
+    let name = match meridian.get("name") {
+        None => text(section, "name"),
+        Some(named) => named
+            .as_str()
+            .map(String::from)
+            .ok_or("[tool.meridian] name is not text: the plugin's name in Meridian")?,
+    };
     let metadata = Metadata {
         roles: list(meridian, "roles")?,
         interface: meridian
@@ -138,8 +151,13 @@ pub fn metadata(pyproject: &str) -> Result<Metadata, String> {
     };
     if !is_name(&metadata.name) {
         return Err(format!(
-            "`{}` is not a plugin's name: lowercase letters, digits and single hyphens",
-            metadata.name
+            "`{}` is not a plugin's name: lowercase letters, digits and single hyphens{}",
+            metadata.name,
+            if meridian.contains_key("name") {
+                " ([tool.meridian] name)"
+            } else {
+                ""
+            }
         ));
     }
     if metadata.version.is_empty() {

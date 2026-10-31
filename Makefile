@@ -12,6 +12,7 @@ unexport GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
 
 .PHONY: help ci-local ci-local-deep build test lint fmt lock install-hooks e2e-up e2e-migrate \
         vendor-template check-vendored-template check-install check-c-deps check-scaffolds \
+        check-fresh-sources \
         ci-mirror-check e2e-authority-macos advisories
 
 help:
@@ -21,6 +22,7 @@ help:
 	@echo "  make lint       rustfmt --check and clippy with warnings denied"
 	@echo "  make advisories  no published vulnerability (RustSec) reaches the binary unexplained"
 	@echo "  make check-c-deps  aws-lc-sys is the only crate that compiles C (spec/the-cli, req. 2)"
+	@echo "  make check-fresh-sources  the target cache's wrapper gives each source the time its content was first seen"
 	@echo "  make check-install  the install script, upgrade and uninstall, against stand-in releases"
 	@echo "  make check-scaffolds  each scaffold plugin new writes, its tests and suite run, a float and a send on a pause caught"
 	@echo "  make fmt        apply rustfmt"
@@ -33,7 +35,7 @@ help:
 
 # Local green is the completion signal; CI is confirmation.
 ci-local: ci-mirror-check check-vendored-template advisories build test lint check-c-deps \
-          check-install check-scaffolds
+          check-fresh-sources check-install check-scaffolds
 	@echo
 	@echo "ci-local: GREEN"
 
@@ -137,6 +139,14 @@ check-c-deps:
 		|| { echo "check-c-deps FAILED; see which crate with:" >&2; \
 		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target c-deps --progress=plain ." >&2; exit 1; }
 	@echo "check-c-deps OK: aws-lc-sys is the only crate that compiles C"
+
+# tools/fresh-sources.sh (core's, ruling 934), which every cargo run against
+# the shared target cache goes through: held to what it promises.
+check-fresh-sources:
+	@$(DOCKER) build -f Dockerfile.rust --target fresh-sources --no-cache-filter fresh-sources . >/dev/null 2>&1 \
+		|| { echo "check-fresh-sources FAILED; see the output with:" >&2; \
+		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target fresh-sources --progress=plain --no-cache-filter fresh-sources ." >&2; exit 1; }
+	@echo "check-fresh-sources OK: each source is given the time the target cache first saw its content"
 
 # The install script, shellchecked, and run with `meridian upgrade` and
 # `uninstall` against a stand-in for GitHub's releases (spec/the-cli, ruling 8).

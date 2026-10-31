@@ -23,6 +23,18 @@
 //! has (0.1.46 summed every pod of a component, so every plugin's line showed
 //! the memory of all of them).
 //!
+//! From CLI 0.1.54 (ruling 948) a pod's memory is its **working set**, as
+//! Kubernetes counts it: the pod's cgroup usage less its inactive file cache,
+//! which the kernel takes back before the pod runs short. It is read from each
+//! node's cAdvisor (`/api/v1/nodes/<node>/proxy/metrics/cadvisor`,
+//! `container_memory_working_set_bytes`), which computes it from the cgroup
+//! itself. The metrics API (metrics-server) names the same figure, but takes it
+//! from the container runtime, and some runtimes give the whole usage, file
+//! cache and all: on a Docker-runtime k3s, a pod holding 27 MiB of inactive
+//! file cache showed 30 MiB there and a working set of 4 MiB (2026-10-31). Where the
+//! nodes' cAdvisor is refused (it takes the nodes/proxy read), the metrics
+//! API's figure is said, and said to be that.
+//!
 //! **`meridian logs <component> [--since <duration>] [--previous]`** prints
 //! what a component's pods printed, each line under its pod's name; with
 //! `--previous`, what each container printed before its last restart (as
@@ -165,11 +177,11 @@ pub struct Component {
     /// The last restart's reason and when it ended, where one is known.
     pub last_reason: String,
     pub last_at: String,
-    /// Bytes in use by its busiest pod, where the cluster serves metrics,
+    /// The working set of its busiest pod, where the cluster serves metrics,
     /// and the limit each pod has.
     pub memory: Option<u64>,
     pub limit: Option<u64>,
-    /// Each of its pods, by name, with the bytes it uses where known.
+    /// Each of its pods, by name, with its working set where known.
     pub pods: Vec<(String, Option<u64>)>,
     /// A plugin's: its instance, the plugin's own image (the container
     /// that is not its sidecar) and whether the launcher launched it.
@@ -194,32 +206,112 @@ fn selects(workload: &serde_json::Value, pod: &serde_json::Value, component: &st
     }
 }
 
-/// The components among the workloads and pods kubectl listed, with the
-/// pods' metrics where the cluster gave them.
+/// Where the memory `status` says was read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryRead {
+    /// Each node's cAdvisor: the working set, from the cgroup itself.
+    Cadvisor,
+    /// The metrics API, where the nodes' cAdvisor was refused: the working
+    /// set as the container runtime gives it, on some runtimes the whole
+    /// usage.
+    MetricsApi,
+}
+
+impl MemoryRead {
+    /// As `--json` says it.
+    pub fn word(self) -> &'static str {
+        match self {
+            MemoryRead::Cadvisor => "cadvisor",
+            MemoryRead::MetricsApi => "metrics-api",
+        }
+    }
+}
+
+/// One sample of a Prometheus text exposition, where it is `metric`'s:
+/// its labels and its value.
+fn sample(line: &str, metric: &str) -> Option<(BTreeMap<String, String>, f64)> {
+    let mut rest = line.strip_prefix(metric)?.strip_prefix('{')?;
+    let mut labels = BTreeMap::new();
+    loop {
+        rest = rest.trim_start_matches([',', ' ']);
+        if let Some(after) = rest.strip_prefix('}') {
+            rest = after;
+            break;
+        }
+        let (key, after) = rest.split_once("=\"")?;
+        let mut value = String::new();
+        let mut chars = after.char_indices();
+        let end = loop {
+            match chars.next()? {
+                (_, '\\') => match chars.next()?.1 {
+                    'n' => value.push('\n'),
+                    other => value.push(other),
+                },
+                (at, '"') => break at,
+                (_, other) => value.push(other),
+            }
+        };
+        labels.insert(key.trim().to_string(), value);
+        rest = &after[end + 1..];
+    }
+    let value: f64 = rest.split_whitespace().next()?.parse().ok()?;
+    (value.is_finite() && value >= 0.0).then_some((labels, value))
+}
+
+/// Each pod of `namespace`'s working set, in bytes, from a node's cAdvisor
+/// (`container_memory_working_set_bytes`, its cgroup usage less its inactive
+/// file cache): the pod's own cgroup's (`container=""`) where cAdvisor gives
+/// it, which is every container of the pod; else its containers' summed,
+/// never the sandbox's (`POD`).
+pub fn working_sets(cadvisor: &str, namespace: &str) -> BTreeMap<String, u64> {
+    let mut whole: BTreeMap<String, u64> = BTreeMap::new();
+    let mut summed: BTreeMap<String, u64> = BTreeMap::new();
+    for line in cadvisor.lines() {
+        let Some((labels, value)) = sample(line, "container_memory_working_set_bytes") else {
+            continue;
+        };
+        let at = |key: &str| labels.get(key).map(String::as_str).unwrap_or_default();
+        if at("namespace") != namespace || at("pod").is_empty() {
+            continue;
+        }
+        let bytes = value.round() as u64;
+        match at("container") {
+            "" => {
+                whole.insert(at("pod").to_string(), bytes);
+            }
+            "POD" => {}
+            _ => *summed.entry(at("pod").to_string()).or_default() += bytes,
+        }
+    }
+    summed.extend(whole);
+    summed
+}
+
+/// Each pod's memory as the metrics API gives it: its containers' summed.
+pub fn metrics_api_usage(metrics: &serde_json::Value) -> BTreeMap<String, u64> {
+    let mut usage = BTreeMap::new();
+    for pod in metrics["items"].as_array().into_iter().flatten() {
+        let name = pod["metadata"]["name"].as_str().unwrap_or_default();
+        let used: Vec<u64> = pod["containers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| c["usage"]["memory"].as_str().and_then(bytes_of))
+            .collect();
+        if !name.is_empty() && !used.is_empty() {
+            usage.insert(name.to_string(), used.iter().sum());
+        }
+    }
+    usage
+}
+
+/// The components among the workloads and pods kubectl listed, with each
+/// pod's memory where it was read.
 pub fn components(
     workloads: &serde_json::Value,
     pods: &serde_json::Value,
-    metrics: Option<&serde_json::Value>,
+    usage: &BTreeMap<String, u64>,
 ) -> Vec<Component> {
-    let mut usage: BTreeMap<(String, String), u64> = BTreeMap::new();
-    for pod in metrics
-        .and_then(|m| m["items"].as_array())
-        .into_iter()
-        .flatten()
-    {
-        let name = pod["metadata"]["name"].as_str().unwrap_or_default();
-        for container in pod["containers"].as_array().into_iter().flatten() {
-            if let Some(bytes) = container["usage"]["memory"].as_str().and_then(bytes_of) {
-                usage.insert(
-                    (
-                        name.to_string(),
-                        container["name"].as_str().unwrap_or_default().to_string(),
-                    ),
-                    bytes,
-                );
-            }
-        }
-    }
     let mut found = Vec::new();
     for workload in workloads["items"].as_array().into_iter().flatten() {
         let labels = &workload["metadata"]["labels"];
@@ -258,7 +350,6 @@ pub fn components(
                 continue;
             }
             let pod_name = pod["metadata"]["name"].as_str().unwrap_or_default();
-            let mut used: Option<u64> = None;
             for status in pod["status"]["containerStatuses"]
                 .as_array()
                 .into_iter()
@@ -272,12 +363,10 @@ pub fn components(
                         last = Some((reason.to_string(), at));
                     }
                 }
-                let container = status["name"].as_str().unwrap_or_default().to_string();
-                if let Some(bytes) = usage.get(&(pod_name.to_string(), container)) {
-                    used = Some(used.unwrap_or(0) + bytes);
-                }
             }
-            component.pods.push((pod_name.to_string(), used));
+            component
+                .pods
+                .push((pod_name.to_string(), usage.get(pod_name).copied()));
         }
         component.pods.sort();
         component.memory = component.pods.iter().filter_map(|(_, used)| *used).max();
@@ -481,8 +570,11 @@ pub struct Status {
     pub components: Vec<Component>,
     /// Each plugin instance's Deployment, named by its instance.
     pub plugins: Vec<Component>,
-    /// Why memory in use is not said, where the cluster serves no metrics.
-    pub no_metrics: Option<String>,
+    /// Where memory was read, or None where it was not.
+    pub memory_read: Option<MemoryRead>,
+    /// What a person is told of that: why memory is not said, or that it is
+    /// the metrics API's figure; None where it is the nodes' own.
+    pub memory_note: Option<String>,
     pub accounts: Result<Vec<Account>, String>,
 }
 
@@ -508,27 +600,9 @@ pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, Stri
         &["get", "pods", "-n", ns, "-l", &selector, "-o", "json"],
     )
     .await?;
-    let (metrics, no_metrics) = match json(
-        cluster,
-        &[
-            "get",
-            "--raw",
-            &format!("/apis/metrics.k8s.io/v1beta1/namespaces/{ns}/pods"),
-        ],
-    )
-    .await
-    {
-        Ok(metrics) => (Some(metrics), None),
-        Err(_) => (
-            None,
-            Some(
-                "memory in use is not known: the cluster serves no metrics (metrics-server)"
-                    .to_string(),
-            ),
-        ),
-    };
+    let (usage, memory_read, memory_note) = memory(cluster, ns, &pods).await;
     let (plugins, components): (Vec<Component>, Vec<Component>) =
-        components(&workloads, &pods, metrics.as_ref())
+        components(&workloads, &pods, &usage)
             .into_iter()
             .partition(|component| component.name == SIDECAR);
     if components.is_empty() && plugins.is_empty() {
@@ -564,14 +638,82 @@ pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, Stri
         release,
         components,
         plugins,
-        no_metrics,
+        memory_read,
+        memory_note,
         // Read from the deployment by the caller (`book_health`), which
         // holds the session; the cluster has no part in it.
         accounts: Err("not read".into()),
     })
 }
 
-/// A component's memory as a person reads it: each pod's in use against
+/// The memory of the release's pods (ruling 948): each one's working set
+/// from the cAdvisor of every node they run on; where one node's is refused,
+/// the metrics API's figure for every pod, and said to be that; where neither
+/// answers, nothing, and why.
+async fn memory(
+    cluster: &dyn Cluster,
+    ns: &str,
+    pods: &serde_json::Value,
+) -> (BTreeMap<String, u64>, Option<MemoryRead>, Option<String>) {
+    let nodes: std::collections::BTreeSet<&str> = pods["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|pod| pod["spec"]["nodeName"].as_str())
+        .filter(|node| !node.is_empty())
+        .collect();
+    let mut usage = BTreeMap::new();
+    let mut refused = None;
+    for node in &nodes {
+        match cluster
+            .kubectl(&[
+                "get",
+                "--raw",
+                &format!("/api/v1/nodes/{node}/proxy/metrics/cadvisor"),
+            ])
+            .await
+        {
+            Ok(text) => usage.extend(working_sets(&text, ns)),
+            Err(why) => {
+                refused = Some(why.lines().next().unwrap_or_default().trim().to_string());
+                break;
+            }
+        }
+    }
+    if !nodes.is_empty() && refused.is_none() {
+        return (usage, Some(MemoryRead::Cadvisor), None);
+    }
+    let why = refused.unwrap_or_else(|| "no pod is on a node yet".into());
+    match json(
+        cluster,
+        &[
+            "get",
+            "--raw",
+            &format!("/apis/metrics.k8s.io/v1beta1/namespaces/{ns}/pods"),
+        ],
+    )
+    .await
+    {
+        Ok(metrics) => (
+            metrics_api_usage(&metrics),
+            Some(MemoryRead::MetricsApi),
+            Some(format!(
+                "memory is the metrics API's figure, which some container runtimes give with \
+                 the file cache in: the nodes' own working set was not read ({why})"
+            )),
+        ),
+        Err(_) => (
+            BTreeMap::new(),
+            None,
+            Some(format!(
+                "memory in use is not known: the cluster serves no metrics (metrics-server), and \
+                 the nodes' own working set was not read ({why})"
+            )),
+        ),
+    }
+}
+
+/// A component's memory as a person reads it: each pod's working set against
 /// the limit each pod has.
 fn memory_said(c: &Component) -> String {
     let used: Vec<u64> = c.pods.iter().filter_map(|(_, used)| *used).collect();
@@ -669,7 +811,7 @@ pub fn said(status: &Status, now_ns: u64, namespace: &str) -> String {
             c.images.join(", "),
         ));
     }
-    if let Some(why) = &status.no_metrics {
+    if let Some(why) = &status.memory_note {
         out.push_str(&format!("  ({why})\n"));
     }
     out.push_str("\nPlugins:\n");
@@ -760,8 +902,9 @@ fn component_json(c: &Component) -> serde_json::Value {
 }
 
 /// The status as one JSON object, for a script or an agent. `memory_bytes`
-/// is the busiest pod's, against `memory_limit_bytes`, each pod's limit;
-/// `pods` holds each pod's own.
+/// is the busiest pod's working set, against `memory_limit_bytes`, each
+/// pod's limit; `pods` holds each pod's own; `memory_read` says where it was
+/// read (`cadvisor`, or `metrics-api` where the nodes' was refused).
 pub fn json_of(status: &Status) -> serde_json::Value {
     serde_json::json!({
         "release": match &status.release {
@@ -774,7 +917,8 @@ pub fn json_of(status: &Status) -> serde_json::Value {
         },
         "components": status.components.iter().map(component_json).collect::<Vec<_>>(),
         "plugins": status.plugins.iter().map(component_json).collect::<Vec<_>>(),
-        "metrics": status.no_metrics.is_none(),
+        "metrics": status.memory_read.is_some(),
+        "memory_read": status.memory_read.map(MemoryRead::word),
         "book_health": match &status.accounts {
             Ok(accounts) => serde_json::json!(accounts.iter().map(|a| serde_json::json!({
                 "account_id": a.account_id, "journal_entries": a.journal_entries,
