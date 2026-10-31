@@ -5,6 +5,9 @@ use super::*;
 /// A cluster answering kubectl and helm as the test says, each call kept.
 struct Fake {
     metrics: bool,
+    /// What each node's cAdvisor answers, by node; a node not here refuses,
+    /// as a cluster does a person without the nodes/proxy read.
+    cadvisor: BTreeMap<String, String>,
     history: Result<String, String>,
     asked: Mutex<Vec<Vec<String>>>,
     empty: bool,
@@ -14,6 +17,7 @@ impl Fake {
     fn new() -> Fake {
         Fake {
             metrics: true,
+            cadvisor: BTreeMap::new(),
             history: Ok(HISTORY.into()),
             asked: Mutex::new(Vec::new()),
             empty: false,
@@ -43,6 +47,7 @@ fn sidecar_pod(instance: &str) -> serde_json::Value {
     serde_json::json!({"metadata": {"name": format!("meridian-plugin-{instance}-5d9"), "labels": {
         "app.kubernetes.io/instance": "meridian", "meridian.dev/component": "sidecar",
         "meridian.dev/instance": instance}},
+     "spec": {"nodeName": "node-b"},
      "status": {"phase": "Running", "containerStatuses": [
          {"name": "sidecar", "restartCount": 0}, {"name": "plugin", "restartCount": 0}]}})
 }
@@ -77,12 +82,15 @@ fn workloads() -> serde_json::Value {
 fn pods() -> serde_json::Value {
     serde_json::json!({"items": [
         {"metadata": {"name": "meridian-bor-7c9", "labels": {"meridian.dev/component": "bor"}},
+         "spec": {"nodeName": "node-a"},
          "status": {"phase": "Running", "containerStatuses": [
              {"name": "bor", "restartCount": 3, "lastState": {"terminated":
                  {"reason": "OOMKilled", "finishedAt": "2026-10-15T09:12:00Z"}}}]}},
         {"metadata": {"name": "meridian-dashboard-1", "labels": {"meridian.dev/component": "dashboard"}},
+         "spec": {"nodeName": "node-a"},
          "status": {"phase": "Running", "containerStatuses": [{"name": "dashboard", "restartCount": 0}]}},
         {"metadata": {"name": "meridian-dashboard-2", "labels": {"meridian.dev/component": "dashboard"}},
+         "spec": {"nodeName": "node-b"},
          "status": {"phase": "Running", "containerStatuses": [{"name": "dashboard", "restartCount": 0}]}},
         {"metadata": {"name": "meridian-database-0", "labels": {"app.kubernetes.io/instance": "meridian", "meridian.dev/component": "database"}},
          "status": {"phase": "Running", "containerStatuses": [{"name": "postgres", "restartCount": 0}]}},
@@ -118,7 +126,18 @@ impl Cluster for Fake {
             ]})
             .to_string());
         }
-        if joined.starts_with("get --raw") {
+        if let Some(node) = joined
+            .strip_prefix("get --raw /api/v1/nodes/")
+            .and_then(|rest| rest.strip_suffix("/proxy/metrics/cadvisor"))
+        {
+            return self.cadvisor.get(node).cloned().ok_or_else(|| {
+                format!(
+                    "Error from server (Forbidden): nodes \"{node}\" is forbidden: User \"admin\" \
+                     cannot get resource \"nodes/proxy\" in API group \"\" at the cluster scope"
+                )
+            });
+        }
+        if joined.starts_with("get --raw /apis/metrics.k8s.io/") {
             return if self.metrics {
                 Ok(serde_json::json!({"items": [
                     {"metadata": {"name": "meridian-bor-7c9"},
@@ -527,4 +546,139 @@ async fn book_health_is_the_deployments_answer_page_by_page() {
         let refused = book_health(&refusing, &session).await.unwrap_err();
         assert!(refused.contains(said), "{status}: {refused}");
     }
+}
+
+/// What a node's cAdvisor printed on 2026-10-31 (rancher-desktop, k3s
+/// v1.36.5 on the Docker runtime) for a pod that had read a 300 MiB file:
+/// its cgroup's usage (304 MiB), nearly all of it inactive file cache, and
+/// its working set (3.6 MiB). The metrics API, asked of the same pod that
+/// day, gave its usage less a little: the usage, as that runtime gives it.
+const MEASURED: &str = r#"# HELP container_memory_working_set_bytes Current working set in bytes.
+# TYPE container_memory_working_set_bytes gauge
+container_memory_total_inactive_file_bytes{container="",id="/kubepods/burstable/pod00c2dc31-a95d-46d4-9651-6133cb261463",image="",name="",namespace="cli0154-scratch",pod="cache"} 3.14925056e+08 1793465853249
+container_memory_usage_bytes{container="",id="/kubepods/burstable/pod00c2dc31-a95d-46d4-9651-6133cb261463",image="",name="",namespace="cli0154-scratch",pod="cache"} 3.18697472e+08 1793465853249
+container_memory_working_set_bytes{container="",id="/kubepods/burstable/pod00c2dc31-a95d-46d4-9651-6133cb261463",image="",name="",namespace="cli0154-scratch",pod="cache"} 3.772416e+06 1793465853249
+container_memory_working_set_bytes{container="",id="/kubepods/burstable/pod11",image="",name="",namespace="kube-system",pod="cache"} 9.9e+07 1793465853249
+"#;
+
+#[test]
+fn a_pods_working_set_is_cadvisors_not_its_usage_with_the_file_cache() {
+    let found = working_sets(MEASURED, "cli0154-scratch");
+    assert_eq!(
+        found.len(),
+        1,
+        "another namespace's pod of the same name is not this one's"
+    );
+    assert_eq!(found["cache"], 3_772_416, "3.6 MiB, not the 304 MiB in use");
+    assert_eq!(said_bytes(found["cache"]), "4 MiB");
+}
+
+#[test]
+fn without_a_pods_own_line_its_containers_are_summed_never_the_sandbox() {
+    let text = "\
+container_memory_working_set_bytes{container=\"plugin\",namespace=\"meridian\",pod=\"p-1\"} 4194304\n\
+container_memory_working_set_bytes{container=\"sidecar\",namespace=\"meridian\",pod=\"p-1\"} 5.24288e+06 1793465853249\n\
+container_memory_working_set_bytes{container=\"POD\",namespace=\"meridian\",pod=\"p-1\"} 999999\n\
+container_memory_working_set_bytes{container=\"x\",id=\"/a,b=\\\"c\\\"}\",namespace=\"meridian\",pod=\"p-2\"} 1024\n\
+container_memory_working_set_bytes{container=\"x\",namespace=\"meridian\",pod=\"p-3\"} NaN\n\
+container_memory_usage_bytes{container=\"plugin\",namespace=\"meridian\",pod=\"p-1\"} 1e+09\n";
+    let found = working_sets(text, "meridian");
+    assert_eq!(found["p-1"], 9 * 1024 * 1024);
+    assert_eq!(
+        found["p-2"], 1024,
+        "a label value holding a comma, a brace and quotes"
+    );
+    assert!(
+        !found.contains_key("p-3"),
+        "a sample that is not a number is not memory"
+    );
+}
+
+/// node-a: bor and one dashboard, each with its pod's own line; node-b: the
+/// other dashboard and the plugins, their containers' alone.
+fn cadvisor() -> BTreeMap<String, String> {
+    let line = |pod: &str, container: &str, bytes: u64| {
+        format!(
+            "container_memory_working_set_bytes{{container=\"{container}\",id=\"/kubepods/{pod}\",\
+             image=\"\",name=\"\",namespace=\"meridian\",pod=\"{pod}\"}} {bytes} 1793465853249\n"
+        )
+    };
+    let mib = 1024 * 1024;
+    BTreeMap::from([
+        (
+            "node-a".to_string(),
+            line("meridian-bor-7c9", "", 300 * mib) + &line("meridian-dashboard-1", "", 60 * mib),
+        ),
+        (
+            "node-b".to_string(),
+            line("meridian-dashboard-2", "dashboard", 50 * mib)
+                + &line("meridian-plugin-snaptrade-5d9", "sidecar", 2 * mib)
+                + &line("meridian-plugin-snaptrade-5d9", "plugin", 3 * mib)
+                + &line("meridian-plugin-tiingo-5d9", "sidecar", 2 * mib)
+                + &line("meridian-plugin-tiingo-5d9", "plugin", 2 * mib),
+        ),
+    ])
+}
+
+#[tokio::test]
+async fn memory_is_each_pods_working_set_from_its_nodes_cadvisor() {
+    let fake = Fake {
+        cadvisor: cadvisor(),
+        ..Fake::new()
+    };
+    let held = status(&fake, &asked()).await.unwrap();
+    assert_eq!(held.memory_read, Some(MemoryRead::Cadvisor));
+    assert_eq!(held.memory_note, None);
+    assert_eq!(held.components[0].memory, Some(300 * 1024 * 1024));
+    assert_eq!(held.plugins[0].memory, Some(5 * 1024 * 1024));
+    let said = said(&held, 0, "meridian");
+    assert!(said.contains("memory 300 MiB of 512 MiB (58%)"), "{said}");
+    assert!(
+        said.contains("memory 60 MiB, 50 MiB of 256 MiB each"),
+        "{said}"
+    );
+    assert!(!said.contains("metrics API"), "{said}");
+    assert_eq!(json_of(&held)["memory_read"], "cadvisor");
+    let calls = fake.asked.lock().unwrap();
+    let raw: Vec<String> = calls
+        .iter()
+        .filter(|call| call.get(1).map(String::as_str) == Some("--raw"))
+        .map(|call| call[2].clone())
+        .collect();
+    assert_eq!(
+        raw,
+        [
+            "/api/v1/nodes/node-a/proxy/metrics/cadvisor",
+            "/api/v1/nodes/node-b/proxy/metrics/cadvisor"
+        ],
+        "each node the release runs on, once, and the metrics API not asked"
+    );
+}
+
+#[tokio::test]
+async fn where_a_nodes_cadvisor_is_refused_the_metrics_apis_figure_is_said_as_that() {
+    let mut nodes = cadvisor();
+    nodes.remove("node-b");
+    let fake = Fake {
+        cadvisor: nodes,
+        ..Fake::new()
+    };
+    let held = status(&fake, &asked()).await.unwrap();
+    assert_eq!(held.memory_read, Some(MemoryRead::MetricsApi));
+    assert_eq!(
+        held.components[0].memory,
+        Some(429_496_320),
+        "the metrics API's, every pod's"
+    );
+    let said = said(&held, 0, "meridian");
+    assert!(
+        said.contains(
+            "(memory is the metrics API's figure, which some container runtimes give with the \
+             file cache in: the nodes' own working set was not read (Error from server \
+             (Forbidden): nodes \"node-b\" is forbidden"
+        ),
+        "{said}"
+    );
+    assert_eq!(json_of(&held)["memory_read"], "metrics-api");
+    assert_eq!(json_of(&held)["metrics"], true);
 }

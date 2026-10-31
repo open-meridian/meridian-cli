@@ -146,6 +146,23 @@ fn the_preflight_finds_the_plugin_its_version_and_its_repository() {
 }
 
 #[test]
+fn the_plugin_is_published_by_its_meridian_name_not_its_python_projects() {
+    // Ruling 971 (945): plugin-databento's project is `plugin-databento`, its
+    // package plugin_databento, and it lists as `databento`. Here the
+    // project stays `venue-desk` (the template's shape keys its package on
+    // the project) and the plugin lists as `desk`: the listing, the push
+    // scope and the request are the Meridian name's.
+    let scratch = Scratch::new("preflight-named");
+    let dir = plugin(&scratch);
+    let pyproject = std::fs::read_to_string(dir.join("pyproject.toml")).unwrap();
+    let named = pyproject.replace("[tool.meridian]\n", "[tool.meridian]\nname = \"desk\"\n");
+    assert_ne!(named, pyproject);
+    std::fs::write(dir.join("pyproject.toml"), named).unwrap();
+    let ready = preflight(&asked(&dir, "community", "v0.1.0"), &repo()).unwrap();
+    assert_eq!(ready.plugin, "desk");
+}
+
+#[test]
 fn the_declared_display_name_is_read_from_the_interface_its_code_declares() {
     let scratch = Scratch::new("declared-title");
     let dir = plugin(&scratch);

@@ -664,3 +664,35 @@ fn the_documentation_pages_are_at_the_paths_core_draws_them() {
         "https://meridian.localhost/plugins/snaptrade-1?tab=documentation"
     );
 }
+
+#[test]
+fn a_plugin_names_itself_in_meridian_apart_from_its_python_project() {
+    // plugin-databento (916, 945; ruling 971): its project is named so it
+    // never shadows Databento's own client, and it lists as `databento`.
+    let databento = TEMPLATE
+        .replace("name = \"reference-plugin\"", "name = \"plugin-databento\"")
+        .replace(
+            "[tool.meridian]\n",
+            "[tool.meridian]\nname = \"databento\"\n",
+        );
+    assert_eq!(metadata(&databento).unwrap().name, "databento");
+    // Without one, the project's name, as before.
+    assert_eq!(metadata(TEMPLATE).unwrap().name, "reference-plugin");
+    // Held to a plugin's name's form, and said where it came from.
+    let refused = metadata(&TEMPLATE.replace(
+        "[tool.meridian]\n",
+        "[tool.meridian]\nname = \"Databento\"\n",
+    ))
+    .unwrap_err();
+    assert!(
+        refused.contains("`Databento` is not a plugin's name"),
+        "{refused}"
+    );
+    assert!(refused.contains("[tool.meridian] name"), "{refused}");
+    let refused = metadata(&TEMPLATE.replace("[tool.meridian]\n", "[tool.meridian]\nname = 7\n"))
+        .unwrap_err();
+    assert!(
+        refused.contains("[tool.meridian] name is not text"),
+        "{refused}"
+    );
+}

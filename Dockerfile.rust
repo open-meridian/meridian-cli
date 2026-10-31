@@ -18,6 +18,12 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /w
+# Every cargo run against the target cache, wrapped: each source's time set
+# from what the cache last saw of its content, so another checkout's build is
+# never taken for this one's (tools/fresh-sources.sh, core's, ruling 934). The
+# cache is the CLI's own, as core's is (meridian-core-target), no longer the
+# unnamed one every repository's /w/target shared.
+COPY tools/fresh-sources.sh /usr/local/bin/fresh-sources
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
 # What `meridian plugin new` writes, compiled into the binary.
@@ -29,8 +35,8 @@ COPY sdk-roles/ sdk-roles/
 FROM base AS check
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/w/target \
-    cargo build --locked
+    --mount=type=cache,id=meridian-cli-target,target=/w/target \
+    fresh-sources cargo build --locked
 
 # Every check with a fake machine, the params file's refusals, and the
 # argument parser. Nothing here reaches a cluster or a platform: what needs one
@@ -38,16 +44,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM base AS test
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/w/target \
-    cargo test --locked
+    --mount=type=cache,id=meridian-cli-target,target=/w/target \
+    fresh-sources cargo test --locked
 
 FROM base AS lint
 RUN rustup component add clippy rustfmt
 RUN cargo fmt --all -- --check
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/w/target \
-    cargo clippy --locked --all-targets -- -D warnings
+    --mount=type=cache,id=meridian-cli-target,target=/w/target \
+    fresh-sources cargo clippy --locked --all-targets -- -D warnings
 
 # Published vulnerabilities in anything the CLI links, from the RustSec
 # advisory database, read fresh on every run (`make advisories` never takes
@@ -87,13 +93,19 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       echo "C is compiled by: ${found:-nothing}; spec/the-cli requirement 2 names aws-lc-sys alone" >&2; exit 1; \
     fi
 
+# tools/fresh-sources.sh held to what it promises (tests/fresh-sources), on
+# the base the cargo stages run it on.
+FROM base AS fresh-sources
+COPY tests/fresh-sources/run.sh /w/tests/fresh-sources/run.sh
+RUN sh /w/tests/fresh-sources/run.sh
+
 # One artifact per target, built on that target's own runner: the release
 # workflow runs this stage and takes the binary out of it.
 FROM base AS release
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/w/target \
-    cargo build --locked --release && cp target/release/meridian /meridian
+    --mount=type=cache,id=meridian-cli-target,target=/w/target \
+    fresh-sources cargo build --locked --release && cp target/release/meridian /meridian
 
 # The install script, `meridian upgrade` and `uninstall`, against a stand-in
 # for GitHub's releases (tests/install). The real binary, from `release`, is
@@ -114,6 +126,8 @@ COPY install.sh tests/install/run.sh /w/
 RUN shellcheck --shell=sh /w/install.sh /w/run.sh
 COPY tests/scaffolds/run.sh /w/scaffolds/run.sh
 RUN shellcheck --shell=sh /w/scaffolds/run.sh
+COPY tools/fresh-sources.sh tests/fresh-sources/run.sh /w/fresh-sources/
+RUN shellcheck --shell=sh /w/fresh-sources/fresh-sources.sh /w/fresh-sources/run.sh
 # The macOS trust test (`make e2e-authority-macos`), which only a Mac runs,
 # held to shellcheck here all the same.
 COPY tests/authority-macos/run.sh /w/authority-macos/run.sh

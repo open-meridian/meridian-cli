@@ -124,7 +124,8 @@ meridian -- bringing a Meridian deployment up
   meridian status            the release (revision, state, chart; Helm's words where it
                              is not deployed); each component and each plugin: its
                              image, readiness, restarts and why, each pod's memory
-                             against its limit; and the book's health per account
+                             (its working set) against its limit; and the book's
+                             health per account
   meridian logs <component>  what a component printed: core's, a plugin's by its instance,
                              or a Job's (migrate, key, first-run, backup), its newest run;
                              --since 10m for the last ten minutes, --previous for what
@@ -311,7 +312,11 @@ installed or held, 1 when one failed (each named) or nothing was approved
 
 status, logs: read-only; the components and logs through kubectl and the release through
 helm, as doctor and backup read them, and status's book health from the deployment,
-through the session meridian connect keeps (--deployment names one)
+through the session meridian connect keeps (--deployment names one). Status's memory is
+each pod's working set, as Kubernetes counts it: the pod's memory in use less its
+inactive file cache, which the kernel takes back before the pod runs short. It is
+read from each node's cAdvisor (the nodes/proxy read); where that is refused, from the
+metrics API, which some container runtimes give with the file cache in, and said so
       --release <name>      the Helm release (default: meridian)
       --since <span>        logs: only what was printed in the last 30s, 10m, 2h or 1d
       --previous            logs: what each container printed before its last restart
