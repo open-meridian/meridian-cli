@@ -126,9 +126,9 @@ pub async fn cluster(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
     findings
 }
 
-/// The oldest Kubernetes the chart runs on: its kubeVersion, `>=1.35.0-0`
-/// (ruling 849).
-pub const KUBERNETES_MINIMUM: (u32, u32) = (1, 35);
+/// The oldest Kubernetes the chart runs on: its kubeVersion, `>=1.33.0-0`
+/// (rulings 935, 936).
+pub const KUBERNETES_MINIMUM: (u32, u32) = (1, 33);
 
 /// Whether the cluster runs a Kubernetes the chart supports. Helm refuses
 /// the chart on an older one before installing anything; this says so first,
