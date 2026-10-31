@@ -126,6 +126,65 @@ pub async fn cluster(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
     findings
 }
 
+/// The oldest Kubernetes the chart runs on: its kubeVersion, `>=1.35.0-0`
+/// (ruling 849).
+pub const KUBERNETES_MINIMUM: (u32, u32) = (1, 35);
+
+/// Whether the cluster runs a Kubernetes the chart supports. Helm refuses
+/// the chart on an older one before installing anything; this says so first,
+/// with what to do.
+pub async fn kubernetes(machine: &dyn Machine) -> Finding {
+    // kubectl exits non-zero when it cannot reach the server, having said
+    // its own version: nothing about the cluster's.
+    let said = match machine.run("kubectl", &["version", "-o", "json"]).await {
+        Ok(said) => said,
+        Err(failed) => {
+            return Finding::Unknown {
+                what: "the cluster's Kubernetes version could not be read".into(),
+                why: failed.to_string(),
+            }
+        }
+    };
+    match server_version(&said) {
+        Some((major, minor)) if (major, minor) >= KUBERNETES_MINIMUM => Finding::Fine(format!(
+            "the cluster runs Kubernetes {major}.{minor}, which the chart supports"
+        )),
+        Some((major, minor)) => Finding::Stops {
+            what: format!("the cluster runs Kubernetes {major}.{minor}"),
+            fix: format!(
+                "The chart runs on Kubernetes {}.{} and newer, and Helm refuses it on an older \
+                 cluster before installing anything. Upgrade the cluster (Rancher Desktop: \
+                 Preferences, Kubernetes, its version), or point KUBECONFIG at a newer one.",
+                KUBERNETES_MINIMUM.0, KUBERNETES_MINIMUM.1
+            ),
+        },
+        None => Finding::Unknown {
+            what: "the cluster's Kubernetes version could not be read".into(),
+            why: "`kubectl version -o json` stated no server version".into(),
+        },
+    }
+}
+
+/// The server's major and minor from `kubectl version -o json`, a provider's
+/// suffix on the minor (`35+`) read past; its gitVersion (`v1.36.5+k3s1`)
+/// where those are not stated.
+pub fn server_version(said: &str) -> Option<(u32, u32)> {
+    let said: serde_json::Value = serde_json::from_str(said.trim()).ok()?;
+    let server = said.get("serverVersion")?;
+    let number = |field: &str| -> Option<u32> {
+        let digits: String = server[field]
+            .as_str()?
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        digits.parse().ok()
+    };
+    match (number("major"), number("minor")) {
+        (Some(major), Some(minor)) => Some((major, minor)),
+        _ => version(server["gitVersion"].as_str()?),
+    }
+}
+
 pub async fn storage_class(machine: &dyn Machine) -> Finding {
     match machine
         .run("kubectl", &["get", "storageclass", "-o", "name"])

@@ -794,6 +794,16 @@ pub fn is_since(given: &str) -> bool {
         && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// A span as kubectl's `--since` takes it: Go's durations, which stop at
+/// hours, so days (`1d`, which the help offers) are said in hours (`24h`).
+/// Asked only of a span `is_since` passed.
+pub fn kubectl_since(given: &str) -> String {
+    match given.strip_suffix('d').map(str::parse::<u64>) {
+        Some(Ok(days)) => format!("{}h", days.saturating_mul(24)),
+        _ => given.to_string(),
+    }
+}
+
 /// What `meridian logs` was asked beside the component.
 #[derive(Debug, Clone, Default)]
 pub struct Read {
@@ -935,7 +945,10 @@ pub async fn logs(
             }
         }
     };
-    let since_flag = read.since.as_ref().map(|s| format!("--since={s}"));
+    let since_flag = read
+        .since
+        .as_ref()
+        .map(|s| format!("--since={}", kubectl_since(s)));
     let mut arguments = vec![
         "logs",
         "-n",

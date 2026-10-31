@@ -66,7 +66,8 @@ streams, its transport:
 - `meridian.roles.data.event_contracts` -- a venue of binary event
   contracts: live prices and quotes per contract, and each contract's
   outcome (contract v23); from contract v26 the venue's event groups
-  reported (`Feed.report_event`);
+  reported (`Feed.report_event`); from 0.33.1 its hourly and daily bars,
+  where its `Market` answers `bars` (`Feed.keep_bars`);
 - `meridian.roles.data.listings` (0.31.0, ruling 213) -- a broker's US
   equity listings: daily closes and bars, live prices and quotes, trades
   streamed and, where the broker reads its history, a range and a gap read

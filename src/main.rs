@@ -142,9 +142,9 @@ meridian -- bringing a Meridian deployment up
                              Claude app reads. Asked first; the install script runs it
   meridian authority remove  take it out of the login keychain and apps' environment,
                              and off this machine
-  meridian backup            back the deployment up now, as its schedule does: its keys,
-                             credentials, values and the database it brought, sealed to
-                             backup.recipient; --to <dir> copies the file here too
+  meridian backup            back the deployment up now: its keys, credentials, values,
+                             the database it brought and each plugin's storage, sealed
+                             to backup.recipient; --to <dir> copies the file here too
   meridian backup key        make the identity backups are sealed with, and print its
                              public half, for backup.recipient
   meridian restore <file> --identity <file>
@@ -373,7 +373,8 @@ authority remove:
       --yes                 remove without being asked
 
 backup: runs the deployment's backup CronJob once (set backup.recipient and
-backup.path or backup.existingClaim first), and says what it wrote
+backup.path or backup.existingClaim first), and says what it wrote. Each edge
+plugin's storage claim is mounted and read too, which a scheduled run does not do
       --release <name>      the Helm release (default: meridian)
       --to <dir>            copy the file to this directory here as well, its hash checked
       --timeout <d>         how long to wait for it (default: 10m)
@@ -385,13 +386,14 @@ backup key: needs no deployment
 
 restore: only into a namespace without the release and without anything a deployment
 keeps: the backup's Secrets and ConfigMaps, the key's Secret, the database's and the
-registry's claims. Checks first and changes nothing if one fails; then shows the
+registry's claims and the plugins' storage claims. Checks first and changes nothing if one fails; then shows the
 backup, the cluster, the namespace, the chart and what it will make, and asks. A
 backup volume a deleted namespace left is deleted within that one approval, the
 node's directory with its backups kept. The database's URL is withheld until the
 database is loaded, the brought one or (from a dump of one somebody else runs) an
 empty external one, and every table's row count matches the backup's; then the
-components start
+components start. Each plugin's storage is made again and filled, every file's hash
+checked, before the chart is installed
       --identity <file>     the identity the backup was sealed to (required)
   -n, --namespace <name>    where to restore it (default: where it was taken)
       --release <name>      must be the backup's own release, which it defaults to

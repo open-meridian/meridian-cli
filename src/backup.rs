@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Where `up` installs from, and so where restore does unless told.
@@ -74,6 +74,11 @@ pub struct Manifest {
     pub operator_secrets: Vec<String>,
     #[serde(default)]
     pub config_maps: Vec<String>,
+    /// Each edge plugin's storage claim the backup holds, as
+    /// `storage/<claim>.tar` (decisions/028; ruling 828). None in a backup the
+    /// schedule took, or one older than these.
+    #[serde(default)]
+    pub storage: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -450,6 +455,184 @@ pub fn differences(
     said
 }
 
+// ── Plugins' storage ────────────────────────────────────────────────────────
+
+/// An edge plugin's storage claim (decisions/028; ruling 828), as `meridian
+/// backup` read it and `meridian restore` makes it again: its name, its
+/// labels (the launcher's mark and its plugin among them, which the launcher
+/// reads before it mounts a claim it finds), and the size it asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageClaim {
+    pub name: String,
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+    pub size: String,
+}
+
+/// The selector for a release's plugin storage claims: the chart's and the
+/// launcher's both carry it.
+pub fn storage_selector(release: &str) -> String {
+    format!("app.kubernetes.io/instance={release},meridian.dev/component=plugin-storage")
+}
+
+/// The claims among a `kubectl get pvc -o json` answer, by name, leaving out
+/// any being deleted.
+pub fn storage_claims(listed: &serde_json::Value) -> Vec<StorageClaim> {
+    let mut claims: Vec<StorageClaim> = listed["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|claim| claim["metadata"]["deletionTimestamp"].is_null())
+        .filter_map(|claim| {
+            Some(StorageClaim {
+                name: claim["metadata"]["name"].as_str()?.to_string(),
+                labels: claim["metadata"]["labels"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_string())))
+                    .collect(),
+                size: claim["spec"]["resources"]["requests"]["storage"]
+                    .as_str()?
+                    .to_string(),
+            })
+        })
+        .collect();
+    claims.sort_by(|a, b| a.name.cmp(&b.name));
+    claims
+}
+
+/// What a backup says of its claims (storage/claims.json), each the manifest
+/// names; one it does not describe is refused before anything is changed.
+pub fn described_claims(opened: &Opened) -> Result<Vec<StorageClaim>, String> {
+    if opened.manifest.storage.is_empty() {
+        return Ok(Vec::new());
+    }
+    let described: Vec<StorageClaim> =
+        serde_json::from_slice(opened.member("storage/claims.json")?).map_err(|failed| {
+            format!("the backup's storage/claims.json could not be read: {failed}")
+        })?;
+    opened
+        .manifest
+        .storage
+        .iter()
+        .map(|name| {
+            opened.member(&format!("storage/{name}.tar"))?;
+            described
+                .iter()
+                .find(|claim| &claim.name == name)
+                .cloned()
+                .ok_or_else(|| {
+                    format!("the backup holds the storage {name} and does not describe its claim")
+                })
+        })
+        .collect()
+}
+
+/// The claim made again, as kubectl takes it: its labels as backed up; the
+/// chart's own (a plugin the values configure, not one the launcher made)
+/// marked for Helm to adopt, as the kept Secrets are; the size it asked for,
+/// and the class the values name, or the cluster's default.
+pub fn storage_claim_object(
+    claim: &StorageClaim,
+    namespace: &str,
+    release: &str,
+    values: &serde_yaml::Value,
+) -> serde_json::Value {
+    let launched = claim
+        .labels
+        .get("meridian.dev/launched")
+        .is_some_and(|mark| mark == "true");
+    let mut object = serde_json::json!({
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": claim.name,
+            "namespace": namespace,
+            "labels": claim.labels,
+        },
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "resources": { "requests": { "storage": claim.size } },
+        },
+    });
+    if !launched {
+        object["metadata"]["labels"]["app.kubernetes.io/managed-by"] = "Helm".into();
+        let mut annotations = owned_annotations(release, namespace);
+        annotations["helm.sh/resource-policy"] = "keep".into();
+        object["metadata"]["annotations"] = annotations;
+    }
+    if let Some(class) = values
+        .get("pluginStorage")
+        .and_then(|storage| storage.get("storageClassName"))
+        .and_then(|class| class.as_str())
+        .filter(|class| !class.is_empty())
+    {
+        object["spec"]["storageClassName"] = class.into();
+    }
+    object
+}
+
+/// Every regular file in a tar, each `<sha256> ./<path>` on a line of its
+/// own, sorted: as the filling pod lists what it wrote, to be compared.
+pub fn listing(tar_bytes: &[u8]) -> Result<String, String> {
+    Ok(untar(tar_bytes)?
+        .iter()
+        .map(|(path, bytes)| format!("{} ./{path}\n", hex(&Sha256::digest(bytes))))
+        .collect())
+}
+
+/// The pod a claim is filled in on restore: `image` (backup.image, which
+/// holds tar), the claim mounted at /storage, root with only the rights to
+/// set each file's owner and mode as backed up. Waiting, to be exec'd into.
+pub fn filler_pod(name: &str, namespace: &str, claim: &str, image: &str) -> serde_json::Value {
+    serde_json::json!({
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": { "meridian.dev/component": "restore" },
+        },
+        "spec": {
+            "restartPolicy": "Never",
+            "automountServiceAccountToken": false,
+            "containers": [{
+                "name": "fill",
+                "image": image,
+                "command": ["sleep", "3600"],
+                "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": { "drop": ["ALL"], "add": ["CHOWN", "FOWNER", "DAC_OVERRIDE"] },
+                },
+                "volumeMounts": [{ "name": "storage", "mountPath": "/storage" }],
+            }],
+            "volumes": [{ "name": "storage", "persistentVolumeClaim": { "claimName": claim } }],
+        },
+    })
+}
+
+/// Why a pod cannot be placed, where the scheduler says so: a backup Job
+/// mounting claims held on different nodes, say.
+pub fn unschedulable(pods: &serde_json::Value) -> Option<String> {
+    pods["items"].as_array()?.iter().find_map(|pod| {
+        pod["status"]["conditions"]
+            .as_array()?
+            .iter()
+            .find(|c| {
+                c["type"] == "PodScheduled"
+                    && c["status"] == "False"
+                    && c["reason"] == "Unschedulable"
+            })
+            .map(|c| {
+                c["message"]
+                    .as_str()
+                    .unwrap_or("no reason given")
+                    .to_string()
+            })
+    })
+}
+
 // ── The objects ──────────────────────────────────────────────────────────────
 
 /// A Secret as kubectl takes it on its standard input. `adopt` names the
@@ -541,29 +724,74 @@ fn owned_annotations(release: &str, namespace: &str) -> serde_json::Value {
 }
 
 /// A Job from the backup's CronJob, as `kubectl create job --from` makes
-/// one, and holding its file for `--to` to copy when asked.
+/// one, holding its file for `--to` to copy when asked, and with each
+/// plugin's storage claim mounted read-only at /in/storage/<claim> and named
+/// for the script (ruling 828), which holds no right to list them itself.
 pub fn job_from(
     cronjob: &serde_json::Value,
     name: &str,
     hold: bool,
+    storage: &[StorageClaim],
 ) -> Result<serde_json::Value, String> {
     let template = &cronjob["spec"]["jobTemplate"];
     let mut spec = template["spec"].clone();
     if !spec.is_object() {
         return Err("the backup's CronJob has no job template".into());
     }
+    let mut env_added = Vec::new();
     if hold {
-        let container = spec["template"]["spec"]["containers"]
-            .get_mut(0)
-            .ok_or("the backup's CronJob runs no container")?;
-        let env = container
-            .as_object_mut()
-            .ok_or("the backup's container is not an object")?
+        env_added.push(serde_json::json!({ "name": "MERIDIAN_BACKUP_HOLD", "value": "1" }));
+    }
+    if !storage.is_empty() {
+        let names: Vec<&str> = storage.iter().map(|claim| claim.name.as_str()).collect();
+        env_added.push(
+            serde_json::json!({ "name": "MERIDIAN_BACKUP_STORAGE", "value": names.join(" ") }),
+        );
+        env_added.push(serde_json::json!({
+            "name": "MERIDIAN_BACKUP_STORAGE_CLAIMS",
+            "value": serde_json::to_string(storage).map_err(|failed| failed.to_string())?,
+        }));
+    }
+    let pod = &mut spec["template"]["spec"];
+    let container = pod["containers"]
+        .get_mut(0)
+        .ok_or("the backup's CronJob runs no container")?
+        .as_object_mut()
+        .ok_or("the backup's container is not an object")?;
+    if !env_added.is_empty() {
+        container
             .entry("env")
-            .or_insert_with(|| serde_json::json!([]));
-        env.as_array_mut()
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
             .ok_or("the backup's environment is not a list")?
-            .push(serde_json::json!({ "name": "MERIDIAN_BACKUP_HOLD", "value": "1" }));
+            .extend(env_added);
+    }
+    if !storage.is_empty() {
+        let mounts = container
+            .entry("volumeMounts")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .ok_or("the backup's mounts are not a list")?;
+        for (i, claim) in storage.iter().enumerate() {
+            mounts.push(serde_json::json!({
+                "name": format!("plugin-storage-{i}"),
+                "mountPath": format!("/in/storage/{}", claim.name),
+                "readOnly": true,
+            }));
+        }
+        let volumes = pod
+            .as_object_mut()
+            .ok_or("the backup's pod is not an object")?
+            .entry("volumes")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .ok_or("the backup's volumes are not a list")?;
+        for (i, claim) in storage.iter().enumerate() {
+            volumes.push(serde_json::json!({
+                "name": format!("plugin-storage-{i}"),
+                "persistentVolumeClaim": { "claimName": claim.name, "readOnly": true },
+            }));
+        }
     }
     Ok(serde_json::json!({
         "apiVersion": "batch/v1",
@@ -755,7 +983,29 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
     };
     let cronjob_name = cronjob["metadata"]["name"].as_str().unwrap_or_default();
     let job = format!("{cronjob_name}-{unix_seconds}");
-    let manifest = job_from(cronjob, &job, asked.to.is_some())?;
+    // Each edge plugin's storage, which the Job is given to read: the
+    // launcher makes these claims as plugins launch, and the Job holds no
+    // right to list them (ruling 828).
+    let listed: serde_json::Value = serde_json::from_str(
+        &text(
+            "kubectl",
+            &[
+                "get",
+                "pvc",
+                "-n",
+                ns,
+                "-l",
+                &storage_selector(&asked.release),
+                "-o",
+                "json",
+            ],
+        )
+        .await
+        .map_err(|failed| format!("the plugins' storage claims could not be listed: {failed}"))?,
+    )
+    .map_err(|failed| format!("kubectl's answer could not be read: {failed}"))?;
+    let storage = storage_claims(&listed);
+    let manifest = job_from(cronjob, &job, asked.to.is_some(), &storage)?;
     run(
         "kubectl",
         &["create", "-n", ns, "-f", "-"],
@@ -770,6 +1020,32 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
             .unwrap_or_default();
         if wrote(&log).is_some() {
             return Some(Ok(log));
+        }
+        // A pod that cannot be placed never says so in its log: a cluster
+        // of several nodes where the plugins' claims are held on different
+        // ones, say.
+        let pods = text(
+            "kubectl",
+            &[
+                "get",
+                "pods",
+                "-n",
+                ns,
+                "-l",
+                &format!("job-name={job_name}"),
+                "-o",
+                "json",
+            ],
+        )
+        .await
+        .ok()
+        .and_then(|said| serde_json::from_str::<serde_json::Value>(&said).ok());
+        if let Some(why) = pods.as_ref().and_then(unschedulable) {
+            return Some(Err(format!(
+                "its pod cannot be placed on any node: {why}. It reads the deployment's key \
+                 beside the conductor and each plugin's storage where its claim is held, which \
+                 must be one node. Delete the Job with `kubectl delete job {job_name} -n {ns}`"
+            )));
         }
         let failed = text(
             "kubectl",
@@ -799,8 +1075,15 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
     said.insert_str(
         0,
         &format!(
-            "Backed up {} to {} ({} bytes), on the deployment's backup volume.\n",
-            asked.release, written.name, written.bytes
+            "Backed up {} to {} ({} bytes), on the deployment's backup volume{}.\n",
+            asked.release,
+            written.name,
+            written.bytes,
+            match storage.len() {
+                0 => String::new(),
+                1 => ", with its plugin's storage".to_string(),
+                many => format!(", with its {many} plugins' storage"),
+            }
         ),
     );
 
@@ -819,29 +1102,14 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
             ],
         )
         .await?;
-        let bytes = run(
-            "kubectl",
-            &[
-                "exec",
-                "-n",
-                ns,
-                pod.trim(),
-                "--",
-                "cat",
-                &format!("/backups/{}", written.name),
-            ],
-            None,
-        )
-        .await?;
+        let copied = copy_out(ns, pod.trim(), &written).await;
         let released = run(
             "kubectl",
             &["exec", "-n", ns, pod.trim(), "--", "touch", "/tmp/copied"],
             None,
         )
         .await;
-        if bytes.len() as u64 != written.bytes || hex(&Sha256::digest(&bytes)) != written.sha256 {
-            return Err("the copy is not what the backup wrote: its size or hash differs".into());
-        }
+        let bytes = copied?;
         let path = to.join(&written.name);
         std::fs::write(&path, &bytes)
             .map_err(|failed| format!("{} could not be written: {failed}", path.display()))?;
@@ -853,6 +1121,60 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
         released?;
     }
     Ok(said)
+}
+
+/// Whether `bytes` are what the Job said it wrote: its size and SHA-256.
+pub fn is_written(bytes: &[u8], written: &Wrote) -> bool {
+    bytes.len() as u64 == written.bytes && hex(&Sha256::digest(bytes)) == written.sha256
+}
+
+/// How many times a copy is read before it is given up on.
+const COPY_READS: usize = 3;
+
+/// The file the Job wrote, from its held pod: the pod's own copy where the
+/// chart keeps one (/work/held, which no scheduled run prunes), else the one
+/// on the backup volume. Each read held to the size and hash the Job said,
+/// and read again where it differs: a stream over exec arrived short once in
+/// eleven local runs.
+async fn copy_out(ns: &str, pod: &str, written: &Wrote) -> Result<Vec<u8>, String> {
+    let held = format!("/work/held/{}", written.name);
+    let from = if run(
+        "kubectl",
+        &["exec", "-n", ns, pod, "--", "test", "-f", &held],
+        None,
+    )
+    .await
+    .is_ok()
+    {
+        held
+    } else {
+        format!("/backups/{}", written.name)
+    };
+    let mut said = Vec::new();
+    for read in 1..=COPY_READS {
+        match run(
+            "kubectl",
+            &["exec", "-n", ns, pod, "--", "cat", &from],
+            None,
+        )
+        .await
+        {
+            Ok(bytes) if is_written(&bytes, written) => return Ok(bytes),
+            Ok(bytes) => said.push(format!(
+                "read {read}: {} bytes, sha256 {}",
+                bytes.len(),
+                hex(&Sha256::digest(&bytes))
+            )),
+            Err(failed) => said.push(format!("read {read}: {failed}")),
+        }
+    }
+    Err(format!(
+        "the copy is not what the backup wrote ({} bytes, sha256 {}), read {COPY_READS} times \
+         from {from}: {}. The file is still on the deployment's backup volume",
+        written.bytes,
+        written.sha256,
+        said.join("; ")
+    ))
 }
 
 // ── meridian restore ─────────────────────────────────────────────────────────
@@ -1091,6 +1413,15 @@ pub fn left_behind(
             "the claim {name}, which the release would mount and find full"
         ));
     }
+    for name in manifest
+        .storage
+        .iter()
+        .filter(|name| present.claims.contains(name))
+    {
+        found.push(format!(
+            "the claim {name}, a plugin's storage, which restore would make and fill"
+        ));
+    }
     found
 }
 
@@ -1218,6 +1549,8 @@ pub struct Plan {
     pub secrets: usize,
     pub config_maps: usize,
     pub key_generated: bool,
+    /// The plugins' storage claims it makes and fills (ruling 828).
+    pub storage: Vec<String>,
     pub database: DatabasePlan,
     /// Whether the backup volume could be checked for, where it could not.
     pub unchecked: Option<String>,
@@ -1246,7 +1579,7 @@ pub fn plan_text(plan: &Plan) -> String {
         out.push_str(&format!("  {said}.\n"));
     }
     out.push_str(&format!(
-        "\n  It will make {} Secrets{}, {} ConfigMaps, and install {} with the backup's values; ",
+        "\n  It will make {} Secrets{}, {} ConfigMaps, {}and install {} with the backup's values; ",
         plan.secrets,
         if plan.key_generated {
             " and the deployment's key"
@@ -1254,6 +1587,14 @@ pub fn plan_text(plan: &Plan) -> String {
             ""
         },
         plan.config_maps,
+        match plan.storage.len() {
+            0 => String::new(),
+            n => format!(
+                "{n} plugin storage claim{} filled as backed up ({}), ",
+                if n == 1 { "" } else { "s" },
+                plan.storage.join(", ")
+            ),
+        },
         plan.release,
     ));
     out.push_str(&match &plan.database {
@@ -1348,6 +1689,18 @@ pub async fn restore(
     let full = fullname(&release, &values);
     let db_secret = opened.object("secrets", &manifest.database.secret);
     let database = database_plan(&manifest, &db_secret, &values)?;
+    let storage = described_claims(&opened)?;
+    let filler_image = if storage.is_empty() {
+        String::new()
+    } else {
+        values
+            .get("backup")
+            .and_then(|backup| backup.get("image"))
+            .and_then(|image| image.as_str())
+            .filter(|image| !image.is_empty())
+            .ok_or("the backup's values name no backup.image, which fills the plugins' storage")?
+            .to_string()
+    };
 
     // Where, said before anything is changed.
     let context = text("kubectl", &["config", "current-context"]).await?;
@@ -1483,6 +1836,7 @@ pub async fn restore(
         secrets: manifest.chart_secrets.len() + manifest.operator_secrets.len(),
         config_maps: manifest.config_maps.len(),
         key_generated: manifest.key == "generated",
+        storage: manifest.storage.clone(),
         database: database.clone(),
         unchecked: present.volume.clone().err(),
         delete_volume,
@@ -1574,6 +1928,28 @@ pub async fn restore(
             " in the administrator's own"
         }
     ));
+
+    // Each plugin's storage, made and filled before the chart, so neither a
+    // plugin the values configure nor one the launcher relaunches starts on
+    // an empty claim; the launcher mounts one it finds marked as its own,
+    // for the same plugin (ruling 828).
+    for (i, claim) in storage.iter().enumerate() {
+        fill_storage(
+            claim,
+            &format!("{full}-restore-storage-{i}"),
+            opened.member(&format!("storage/{}.tar", claim.name))?,
+            ns,
+            &release,
+            &values,
+            &filler_image,
+            asked.timeout,
+        )
+        .await?;
+        step(&format!(
+            "Made the claim {} and filled it as backed up, every file's hash checked",
+            claim.name
+        ));
+    }
 
     // The chart, with what was chosen. Written to a file of this user's
     // alone, since the values may name credentials' Secrets, and removed.
@@ -1914,6 +2290,12 @@ pub async fn restore(
          settings key they were sealed with, and every sidecar trusts the dashboard's key.\n",
         manifest.chart_secrets.len() + manifest.operator_secrets.len()
     ));
+    if !manifest.storage.is_empty() {
+        report.push_str(&format!(
+            "  The plugins' storage, every file as backed up: {}.\n",
+            manifest.storage.join(", ")
+        ));
+    }
 
     // The launched plugins, each pod read for an image it could not pull,
     // for at most two minutes: only those to upload again are named.
@@ -1943,13 +2325,18 @@ pub async fn restore(
         report.push_str(&format!(
             "  Launched plugins whose images are not in the deployment's registry, which a backup \
              does not hold: {}. Upload each again with `meridian plugin upload` from its \
-             directory; an edge plugin's own storage starts empty, and it gathers again what \
-             its vendor still serves.\n",
+             directory; {}.\n",
             missing
                 .iter()
                 .map(|(instance, image)| format!("{instance} ({image})"))
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(", "),
+            if manifest.storage.is_empty() {
+                "an edge plugin's own storage starts empty (the backup held none), and it \
+                 gathers again what its vendor still serves"
+            } else {
+                "an edge plugin's storage, restored above, is there when it starts"
+            }
         ));
     }
     if !settled {
@@ -1971,6 +2358,92 @@ pub async fn restore(
         }
     }
     Ok(report)
+}
+
+/// One plugin's storage claim, made again and filled from its tar: a pod of
+/// backup.image with the claim mounted, the tar given to `tar -x` on its
+/// standard input with each owner and mode as backed up, every file's hash
+/// listed and compared with the tar's, and the pod removed.
+#[allow(clippy::too_many_arguments)]
+async fn fill_storage(
+    claim: &StorageClaim,
+    pod: &str,
+    tar_bytes: &[u8],
+    ns: &str,
+    release: &str,
+    values: &serde_yaml::Value,
+    image: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let expected: BTreeSet<String> = listing(tar_bytes)?.lines().map(String::from).collect();
+    create(&storage_claim_object(claim, ns, release, values)).await?;
+    create(&filler_pod(pod, ns, &claim.name, image)).await?;
+    let filled = async {
+        text(
+            "kubectl",
+            &[
+                "wait",
+                "--for=condition=Ready",
+                &format!("pod/{pod}"),
+                "-n",
+                ns,
+                &format!("--timeout={}s", timeout.as_secs()),
+            ],
+        )
+        .await
+        .map_err(|failed| format!("the pod filling {} did not start: {failed}", claim.name))?;
+        run(
+            "kubectl",
+            &[
+                "exec",
+                "-i",
+                "-n",
+                ns,
+                pod,
+                "--",
+                "tar",
+                "-x",
+                "--numeric-owner",
+                "-p",
+                "-C",
+                "/storage",
+            ],
+            Some(tar_bytes),
+        )
+        .await
+        .map_err(|failed| format!("{} could not be filled: {failed}", claim.name))?;
+        let held: BTreeSet<String> = text(
+            "kubectl",
+            &[
+                "exec",
+                "-n",
+                ns,
+                pod,
+                "--",
+                "sh",
+                "-c",
+                "cd /storage && find . -type f | while IFS= read -r f; do \
+                 echo \"$(sha256sum \"$f\" | cut -d' ' -f1) $f\"; done",
+            ],
+        )
+        .await?
+        .lines()
+        .map(String::from)
+        .collect();
+        if held != expected {
+            return Err(format!(
+                "{} does not hold what the backup did: {} files of {} as backed up",
+                claim.name,
+                held.intersection(&expected).count(),
+                expected.len()
+            ));
+        }
+        Ok(())
+    }
+    .await;
+    let removed = text("kubectl", &["delete", "pod", pod, "-n", ns, "--wait=true"]).await;
+    filled?;
+    removed.map(|_| ())
 }
 
 /// Whether a database holds a table of its own.
