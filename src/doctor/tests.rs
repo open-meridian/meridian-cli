@@ -755,7 +755,7 @@ async fn a_plugin_on_the_deployments_sidecar_is_ok_and_none_is_nothing() {
     ));
 }
 
-// ── The cluster's Kubernetes (ruling 849) ────────────────────────────────
+// ── The cluster's Kubernetes (rulings 935, 936) ────────────────────────────────
 
 const VERSION: &str = "kubectl version -o json";
 
@@ -768,21 +768,23 @@ fn server(major: &str, minor: &str, git: &str) -> String {
 }
 
 #[tokio::test]
-async fn a_cluster_older_than_1_35_is_stopped_with_what_to_do() {
-    let machine = Fake::default().running(VERSION, Ok(&server("1", "34", "v1.34.2+k3s1")));
+async fn a_cluster_older_than_1_33_is_stopped_with_what_to_do() {
+    let machine = Fake::default().running(VERSION, Ok(&server("1", "32", "v1.32.9+k3s1")));
     let finding = checks::kubernetes(&machine).await;
     assert!(finding.stops(), "{finding:?}");
     let said = format!("{finding}");
-    assert!(said.contains("the cluster runs Kubernetes 1.34"), "{said}");
-    assert!(said.contains("Kubernetes 1.35 and newer"), "{said}");
+    assert!(said.contains("the cluster runs Kubernetes 1.32"), "{said}");
+    assert!(said.contains("Kubernetes 1.33 and newer"), "{said}");
 }
 
 #[tokio::test]
-async fn kubernetes_1_35_and_newer_passes_whatever_the_provider_adds() {
+async fn kubernetes_1_33_and_newer_passes_whatever_the_provider_adds() {
     for (major, minor, git) in [
-        ("1", "35", "v1.35.9+k3s1"),
+        ("1", "33", "v1.33.13+k3s2"),
+        ("1", "34", "v1.34.12+k3s1"),
         ("1", "36", "v1.36.5+k3s1"),
-        ("1", "35+", "v1.35.2-eks-1a2b3c"),
+        ("1", "37", "v1.37.1+k3s1"),
+        ("1", "33+", "v1.33.2-eks-1a2b3c"),
         ("2", "0", "v2.0.0"),
     ] {
         let machine = Fake::default().running(VERSION, Ok(&server(major, minor, git)));
@@ -793,7 +795,7 @@ async fn kubernetes_1_35_and_newer_passes_whatever_the_provider_adds() {
         );
     }
     // No major and minor stated: the gitVersion's.
-    let machine = Fake::default().running(VERSION, Ok(&server("", "", "v1.34.0")));
+    let machine = Fake::default().running(VERSION, Ok(&server("", "", "v1.32.0")));
     assert!(checks::kubernetes(&machine).await.stops());
 }
 
