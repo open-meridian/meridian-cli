@@ -1,14 +1,16 @@
 """A Meridian operations plugin, as `meridian plugin new --role operations`
 writes one.
 
-It connects to the sidecar it is launched beside, declaring its settings and
-its pages, follows its settings, reports the operations role's figures, and
-serves its pages until it is stopped. Heartbeats are sent for it.
+It runs its operations role class on the sidecar it is launched beside,
+declaring its settings and its pages: the class hears each activity the
+custodians record, which the operations suite requires of every operations
+plugin, and the pages act through it. `meridian.run` follows its settings,
+reports the operations role's figures, serves its pages and runs until it is
+stopped. Heartbeats are sent for it.
 """
 
-import asyncio
 import logging
-import signal
+from typing import Any
 
 import meridian
 from meridian.roles import operations
@@ -19,34 +21,39 @@ from .page import pages, running
 log = logging.getLogger("reference_plugin")
 
 
-async def run() -> None:
-    stopped = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for stop in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(stop, stopped.set)
+class Book(operations.Role):
+    """The operations role's class: its acts on `self`, made by the pages,
+    and what the role hears."""
 
-    async with await meridian.connect(declaration=DECLARATION) as plugin:
-        log.info("registered as %s", plugin.identity.instance_id)
-
-        def configure(config: Config) -> None:
-            running["due_business_days"] = config.due_business_days
-
-        configuring = asyncio.create_task(plugin.on_settings(Config, configure))
-        plugin.figures = operations.figures(
-            open_breaks=0, overdue_breaks=0, last_reconciliation="Not yet"
-        )
-        served = pages.serve(plugin, PORT)
-        await plugin.report(healthy=True, detail="started")
-        await stopped.wait()
-        configuring.cancel()
-        served.shutdown()
+    async def on_activity_recorded(self, heard: meridian.Heard[Any]) -> None:
+        # Each activity a custodian recorded, heard: a real plugin reconciles
+        # it against the book here.
+        log.info("activity %s recorded", heard.message.activity_id)
 
 
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
-    asyncio.run(run())
+    book = Book()
+    running["role"] = book
+
+    def configure(config: Config) -> None:
+        running["due_business_days"] = config.due_business_days
+
+    def figures() -> list[meridian.Figure]:
+        return operations.figures(
+            open_breaks=0, overdue_breaks=0, last_reconciliation="Not yet"
+        )
+
+    meridian.run(
+        declaration=DECLARATION,
+        roles=[book],
+        pages=pages,
+        port=PORT,
+        on_settings=configure,
+        figures=figures,
+    )
 
 
 if __name__ == "__main__":

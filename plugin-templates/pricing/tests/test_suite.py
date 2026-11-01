@@ -5,7 +5,7 @@ Each case says, in the contract's words, what the analytics component
 hands the plugin and what the plugin answers. Here each is run through the
 SDK's Pricer over this plugin's own models (model.py), against a
 `Recorder`: the plugin's typed operations, recorded rather than sent, a
-batch delivered to its own handler through `receive`.
+batch delivered to the Pricer bound to it (`recorder.hear`).
 
 As you change the plugin's models, keep every case passing.
 """
@@ -67,7 +67,7 @@ def batch(*units: ops.PricingUnit, sequence: int = 17) -> ops.PriceBatchRequest:
 def delivered(*batches: ops.PriceBatchRequest) -> Producer:
     async def produce(recorder: Recorder) -> None:
         recorder.answer("PriceBatch", lambda _: list(batches))
-        await recorder.receive(price_batch=pricing.Pricer(recorder, MODELS).heard)
+        await recorder.hear(recorder.bind(pricing.Pricer(MODELS)))
 
     return produce
 
@@ -82,7 +82,7 @@ async def after_a_restart(recorder: Recorder) -> None:
         return ops.ListPriceBatchesResult(batches=[waiting] if after < 17 else [], sequence=17)
 
     recorder.answer("ListPriceBatches", waiting_after)
-    await pricing.Pricer(recorder, MODELS, sequence=kept).catch_up()
+    await recorder.bind(pricing.Pricer(MODELS, sequence=kept)).catch_up()
 
 
 async def equals_the_built_in_model(recorder: Recorder) -> None:
@@ -122,7 +122,7 @@ def test_every_case_of_the_pricing_suite_passes() -> None:
 
 def test_a_model_id_it_does_not_implement_leaves_the_batch_unanswered() -> None:
     recorder = Recorder("reference-1")
-    pricer = pricing.Pricer(recorder, MODELS)
+    pricer = recorder.bind(pricing.Pricer(MODELS))
     other = batch(unit("1.00"))
     other.model_id = "binary_event"
     assert asyncio.run(pricer.answer(other)) is None

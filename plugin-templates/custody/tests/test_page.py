@@ -35,8 +35,11 @@ def client(sidecar: Sidecar | None = None) -> PageClient:
         read=frozenset({"ACC-1"}),
         links=(meridian.LinkedExternalAccount("REF-1001", "ACC-1", "Main"),),
     )
-    use(Custodian(), key_set=False, scope=scope)
-    return PageClient(pages, sidecar or Sidecar(), read={"ACC-1"})
+    held = sidecar or Sidecar()
+    # The pages act through the custody role object they are given (SDK
+    # 0.35); here the stand-in answers its two acts.
+    use(Custodian(), key_set=False, scope=scope, role=held)
+    return PageClient(pages, held, read={"ACC-1"})
 
 
 def test_each_page_is_served_at_its_levels() -> None:

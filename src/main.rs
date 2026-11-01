@@ -215,7 +215,8 @@ plugin new:
 
 plugin check: needs no deployment. Exits 0 when every rule holds, 1 when one does
 not, each failure with its file, line and what to write instead. A warning
-(replaced-ids-followed: an instrument ID kept in the code) fails nothing, and
+(replaced-ids-followed: an instrument ID kept in the code; roles-registered: a
+role's class registered for a role not declared) fails nothing, and
 neither does advice: a prompted section of docs/ missing (troubleshooting.md,
 terms.md), a file there that is not uploaded, a heading's text past one screen
 of the Documentation tab, or a link it shows as plain text

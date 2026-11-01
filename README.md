@@ -641,6 +641,22 @@ is a role, its suite in preview and not yet held by `--verified`;
 `offer_template_fields`); and every suite's `hears-and-reads-a-replacement`
 and `reads-the-template-catalogue` are cases every plugin of the role passes.
 
+From SDK 0.35 each role a plugin holds is one class, `meridian.roles.<role>.Role`
+or the SDK's own logic for the role beneath it (`connectivity.Trader`,
+`pricing.Pricer`, a data feed), registered where the plugin enters the SDK:
+`meridian.run(declaration=..., roles=[...], ...)`, `meridian.run_async(...)`,
+or `meridian.connect(..., roles=[...])` beneath them. `template-shape` takes
+any of the three, called in the plugin's code, as its entry. `plugin check`
+fails a role `[tool.meridian]` declares with no class of it registered in
+`roles=[...]`, naming the role at the entry's line, and warns of a class
+registered for a role the plugin does not declare, which the SDK does not
+start and logs (`roles-registered`, ruling 1015). It traces a registered
+object to its role through the names it is imported or assigned by, in any of
+the plugin's modules, and the plugin's own classes and their bases; an object
+it cannot trace, such as a factory's result, fails nothing. A plugin pinning
+an SDK before 0.35 that connects without `roles=` holds its roles through the
+plugin `connect` returns, and the rule holds.
+
 `launch` shows the roles the version asks for and runs it only once
 you approve them; `--yes` approves for a script that has already read them.
 Its pages are on its own name, `https://my-plugin.plugins.meridian.localhost/`,
@@ -893,6 +909,12 @@ or one imported from the wire bindings -- into `meridian.SubjectRef(...)`
 (ruling 599); one inside another wire message stays, and subjects read from a
 heard message and given to a typed operation, and each role's suite test the
 v28 cases reach, are left by hand.
+From 0.34.0 to 0.35.0 (each role one class, no contract change) the SDK's
+step makes a `receive`'s handlers on one role's events that class's
+`on_<row>` methods, moves acts from the connection to the role object, and
+replaces an unchanged template entry point with `meridian.run`; an entry
+point connecting by hand is left by hand, and the check after it names each
+declared role with no class registered (`roles-registered`).
 
 ## Developing a plugin live
 
@@ -1029,6 +1051,10 @@ presented where their stand-ins touch none (ruling 602). 0.1.53 also installs
 a starter pack through the deployment, one pack install it keeps, and adds
 `meridian plugin pack list|show|update|remove` (ruling 613); both need a
 deployment whose core is at contract v28.
+0.35.0 (contract v29, no contract change) from 0.1.55: each role one class,
+`meridian.roles.<role>.Role`, and each scaffold entering through
+`meridian.run(...)` with its role's class registered in `roles=[...]`
+(rulings 1009 to 1023).
 
 ## Licence
 

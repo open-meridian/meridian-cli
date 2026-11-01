@@ -70,7 +70,7 @@ def last_close() -> date:
 
 
 def _report(request: meridian.Request) -> Report:
-    return running[0] if running else Report(request.plugin)
+    return running[0] if running else Report()
 
 
 def _text(value: object) -> str:

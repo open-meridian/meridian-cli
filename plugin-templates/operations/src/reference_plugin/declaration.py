@@ -12,7 +12,7 @@ deadline, `affirmation_deadline=21 * 60`: minutes after midnight in the
 deployment's time zone by which the firm allocates, confirms and affirms
 its trades; none is declared here.
 
-`connect(declaration=DECLARATION)` registers it, and `meridian plugin upload`
+`meridian.run(declaration=DECLARATION, ...)` registers it, and `meridian plugin upload`
 reads the same one from the built image, with the texts beside it. A
 version registers exactly the declaration it was uploaded with: the port is
 fixed here, never read from the environment, and this module imports every

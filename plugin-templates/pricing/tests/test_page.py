@@ -14,7 +14,7 @@ from reference_plugin.page import pages, running
 
 
 def test_batches_is_served_under_manage_alone_with_its_tool() -> None:
-    pricer = pricing.Pricer(Recorder("reference-1"), MODELS)
+    pricer = Recorder("reference-1").bind(pricing.Pricer(MODELS))
     asyncio.run(pricer.catch_up())
     running["pricer"] = pricer
     client = PageClient(pages)

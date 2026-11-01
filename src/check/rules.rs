@@ -28,7 +28,7 @@ pub use documentation::{BUNDLE_BYTES, SECTIONS, SECTION_BYTES};
 /// The rules, in the order they are reported: what the project is, what it
 /// declares, its pages, its settings, how it reaches the deployment, and its
 /// tests. Running the tests is `TESTS_PASS`, which only `--run-tests` asks.
-pub const RULES: [Rule; 19] = [
+pub const RULES: [Rule; 20] = [
     Rule {
         id: "template-shape",
         holds: "the project keeps the template's shape",
@@ -38,6 +38,12 @@ pub const RULES: [Rule; 19] = [
         id: "tool-meridian",
         holds: "[tool.meridian] names roles from the fixed list, and no tags",
         check: tool_meridian,
+    },
+    Rule {
+        id: "roles-registered",
+        holds: "each role [tool.meridian] declares has its class registered in roles=[...] \
+                (a class for a role not declared, a warning)",
+        check: roles_registered,
     },
     Rule {
         id: "edge-storage",
@@ -219,6 +225,13 @@ pub const ADVISING: [(&str, Advising); 2] = [
     ("documentation-sections", documentation_sections_advice),
     ("documentation-safe", documentation_safe_advice),
 ];
+
+/// What a rule warns of beside what it fails, failing nothing in every mode:
+/// a role class registered for a role the plugin does not declare, which the
+/// SDK does not start and logs (ruling 1015). A rule finding only these is
+/// warned, not failed.
+pub type Warning = fn(&Plugin) -> Vec<Failure>;
+pub const WARNING: [(&str, Warning); 1] = [("roles-registered", roles_registered_warnings)];
 
 // ── Which files ──────────────────────────────────────────────────────────
 
@@ -668,11 +681,17 @@ fn template_shape(plugin: &Plugin) -> Vec<Failure> {
         }
     }
 
+    // The SDK's entry (0.35): `meridian.run(...)`, `meridian.run_async(...)`,
+    // or `meridian.connect(...)`, the context manager beneath them, which a
+    // plugin on an earlier SDK calls itself. Called in code: a docstring
+    // naming it calls nothing.
     static CONNECTS: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\bmeridian\.connect\s*\(|\bfrom\s+meridian\s+import\s[^\n]*\bconnect\b")
-            .unwrap()
+        Regex::new(
+            r"\bmeridian\.(?:run|run_async|connect)\s*\(|\bfrom\s+meridian\s+import\s[^\n]*\b(?:run|run_async|connect)\b",
+        )
+        .unwrap()
     });
-    if !python(plugin).any(|source| CONNECTS.is_match(&python_uncommented(&source.text))) {
+    if !python(plugin).any(|source| CONNECTS.is_match(&python_code(&source.text))) {
         let main = name
             .as_ref()
             .map(|name| format!("src/{}/__main__.py", name.replace('-', "_")))
@@ -681,10 +700,11 @@ fn template_shape(plugin: &Plugin) -> Vec<Failure> {
             ID,
             &main,
             0,
-            "nothing calls meridian.connect()".into(),
-            "connect through the SDK, as the template's __main__.py does: `async with await \
-             meridian.connect(interface=..., settings=...) as plugin:`, and do everything \
-             through the plugin it returns",
+            "nothing calls meridian.run(), meridian.run_async() or meridian.connect()".into(),
+            "enter through the SDK, as the template's __main__.py does: \
+             `meridian.run(declaration=DECLARATION, roles=[...], pages=pages, port=PORT)`, \
+             each role the plugin holds one class registered in roles=[...], and do \
+             everything through those classes and the plugin they reach as `self.plugin`",
         ));
     }
 
@@ -920,6 +940,345 @@ fn module_file<'a>(plugin: &'a Plugin, named: &str) -> Option<&'a Source> {
     ]
     .iter()
     .find_map(|path| plugin.file(path))
+}
+
+// ── roles-registered ─────────────────────────────────────────────────────
+
+/// Where the plugin enters the SDK, and the role classes it registers there
+/// (SDK 0.35, ruling 1015): each role the plugin holds is one class,
+/// `meridian.roles.<role>.Role` or the SDK's own logic for it beneath
+/// (`connectivity.Trader`, `pricing.Pricer`, a data feed), its object passed
+/// in `roles=[...]` of `meridian.run(...)`, `meridian.run_async(...)` or
+/// `meridian.connect(...)`.
+struct Registration<'a> {
+    /// The first entry: where a missing class is added.
+    source: &'a Source,
+    line: usize,
+    /// Each role a registered object is a class of, where it is registered.
+    roles: Vec<(String, &'a Source, usize)>,
+    /// A registered object, or the list, the text cannot trace to a role
+    /// (a factory's result, a list built elsewhere): a declared role may be
+    /// its, so none is said to have no class.
+    untraced: bool,
+}
+
+/// The names a module binds by its imports, each to the dotted path it
+/// stands for: `custody` to `meridian.roles.custody` after `from
+/// meridian.roles import custody`, `run` to `meridian.run` after `from
+/// meridian import run`, `m` to `meridian` after `import meridian as m`.
+fn bindings(code: &str) -> HashMap<String, String> {
+    static IMPORT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)^import\s+(.+)$").unwrap());
+    static FROM: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?s)^from\s+([A-Za-z_.][A-Za-z0-9_.]*)\s+import\s+(.+)$").unwrap()
+    });
+    let item = |text: &str| -> Option<(String, Option<String>)> {
+        let mut words = text.split_whitespace();
+        let name = words.next()?.to_string();
+        match (words.next(), words.next()) {
+            (Some("as"), Some(alias)) => Some((name, Some(alias.to_string()))),
+            _ => Some((name, None)),
+        }
+    };
+    let mut bound = HashMap::new();
+    for (_, statement) in python_statements(code) {
+        let statement = statement.trim();
+        if let Some(import) = IMPORT.captures(statement) {
+            for (name, alias) in import[1].split(',').filter_map(item) {
+                match alias {
+                    Some(alias) => bound.insert(alias, name),
+                    None => {
+                        let head = name.split('.').next().unwrap_or_default().to_string();
+                        bound.insert(head.clone(), head)
+                    }
+                };
+            }
+        } else if let Some(from) = FROM.captures(statement) {
+            let package = &from[1];
+            let names = from[2].trim().trim_start_matches('(').trim_end_matches(')');
+            for (name, alias) in names.split(',').filter_map(item) {
+                bound.insert(
+                    alias.unwrap_or_else(|| name.clone()),
+                    format!("{package}.{name}"),
+                );
+            }
+        }
+    }
+    bound
+}
+
+/// A dotted name as the module's imports spell it out.
+fn spelled_out(name: &str, bound: &HashMap<String, String>) -> String {
+    let (head, rest) = name.split_once('.').unwrap_or((name, ""));
+    match bound.get(head) {
+        Some(path) if rest.is_empty() => path.clone(),
+        Some(path) => format!("{path}.{rest}"),
+        None => name.to_string(),
+    }
+}
+
+/// The role a dotted path under `meridian.roles.<role>.` is the SDK's for.
+fn sdk_role_of(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("meridian.roles.")?;
+    let (role, under) = rest.split_once('.')?;
+    (ROLES.contains(&role) && !under.is_empty()).then(|| role.to_string())
+}
+
+/// What the plugin's Python binds, for tracing a registered object to its
+/// role: each module's imports, the classes it defines with their bases, and
+/// what each name is assigned.
+struct Traced<'a> {
+    modules: Vec<(&'a Source, String, HashMap<String, String>)>,
+    /// A class's name, each module defining one by it, and its bases.
+    classes: HashMap<String, Vec<(usize, Vec<String>)>>,
+}
+
+impl<'a> Traced<'a> {
+    fn new(plugin: &'a Plugin) -> Self {
+        static CLASS: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"^class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(").unwrap());
+        static KEYWORD: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*\s*=").unwrap());
+        let mut modules = Vec::new();
+        let mut classes: HashMap<String, Vec<(usize, Vec<String>)>> = HashMap::new();
+        for source in python(plugin) {
+            let code = python_code(&source.text);
+            let bound = bindings(&code);
+            let at = modules.len();
+            for (_, statement) in python_statements(&code) {
+                let statement = statement.trim();
+                if let Some(class) = CLASS.captures(statement) {
+                    let bases =
+                        split_arguments(enclosed(&statement[class.get(0).unwrap().end()..]))
+                            .into_iter()
+                            .filter(|base| !KEYWORD.is_match(base))
+                            .map(String::from)
+                            .collect();
+                    classes
+                        .entry(class[1].to_string())
+                        .or_default()
+                        .push((at, bases));
+                }
+            }
+            modules.push((source, code, bound));
+        }
+        Traced { modules, classes }
+    }
+
+    /// The role a class, named as module `at` names it, is a class of: the
+    /// SDK's for a role, or the plugin's own with one such among its bases.
+    fn class_role(&self, at: usize, name: &str, depth: usize) -> Option<String> {
+        if depth > 8 {
+            return None;
+        }
+        let name = name.trim();
+        if let Some(role) = sdk_role_of(&spelled_out(name, &self.modules[at].2)) {
+            return Some(role);
+        }
+        let last = name.rsplit('.').next().unwrap_or(name);
+        self.classes.get(last)?.iter().find_map(|(module, bases)| {
+            bases
+                .iter()
+                .find_map(|base| self.class_role(*module, base, depth + 1))
+        })
+    }
+
+    /// What `name` is assigned, as module `at` reaches it: its own
+    /// assignment first, then one in another of the plugin's modules (an
+    /// object made where it is imported from).
+    fn assigned(&self, at: usize, name: &str) -> Option<(usize, String)> {
+        let assignment = Regex::new(&format!(
+            r"(?s)^{}\s*(?::[^=]*)?=\s*(.+)$",
+            regex::escape(name)
+        ))
+        .unwrap();
+        let order = std::iter::once(at).chain((0..self.modules.len()).filter(|m| *m != at));
+        order.into_iter().find_map(|module| {
+            python_statements(&self.modules[module].1)
+                .into_iter()
+                .find_map(|(_, statement)| {
+                    let value = assignment.captures(statement.trim())?[1].trim().to_string();
+                    (!value.starts_with('=')).then_some((module, value))
+                })
+        })
+    }
+
+    /// The role a registered object, written `item` in module `at`, is a
+    /// class of: `Lake(state)`, or a name assigned one.
+    fn object_role(&self, at: usize, item: &str, depth: usize) -> Option<String> {
+        let item = item.trim();
+        if depth > 4 {
+            return None;
+        }
+        if is_identifier(item) {
+            let (module, value) = self.assigned(at, item)?;
+            return self.object_role(module, &value, depth + 1);
+        }
+        let open = item.find('(')?;
+        let class = item[..open].trim();
+        let dotted = !class.is_empty() && class.split('.').all(|part| is_identifier(part.trim()));
+        if !dotted || !item.ends_with(')') {
+            return None;
+        }
+        self.class_role(at, class, 0)
+    }
+}
+
+/// Every entry into the SDK the plugin makes, with what it registers there.
+fn registration(plugin: &Plugin) -> Option<Registration<'_>> {
+    static CALL: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\b([A-Za-z_][A-Za-z0-9_.]*)\s*\(").unwrap());
+    let traced = Traced::new(plugin);
+    let mut found: Option<Registration> = None;
+    let mut applies = sdk_pinned(plugin).is_some_and(|pinned| pinned >= (0, 35));
+    for (at, (source, code, bound)) in traced.modules.iter().enumerate() {
+        for call in CALL.captures_iter(code) {
+            let entry = spelled_out(&call[1], bound);
+            if !matches!(
+                entry.as_str(),
+                "meridian.run" | "meridian.run_async" | "meridian.connect"
+            ) {
+                continue;
+            }
+            let start = call.get(0).unwrap();
+            let line = line_at(code, start.start());
+            let arguments = enclosed(&code[start.end()..]);
+            let registration = found.get_or_insert(Registration {
+                source,
+                line,
+                roles: Vec::new(),
+                untraced: false,
+            });
+            let roles = keyword(arguments, "roles");
+            applies |= entry != "meridian.connect" || roles.is_some();
+            let Some(roles) = roles else { continue };
+            let listed = if is_identifier(roles) {
+                traced.assigned(at, roles)
+            } else {
+                Some((at, roles.to_string()))
+            };
+            let items = listed.and_then(|(module, value)| {
+                let inner = value
+                    .strip_prefix('[')
+                    .and_then(|v| v.strip_suffix(']'))
+                    .or_else(|| value.strip_prefix('(').and_then(|v| v.strip_suffix(')')))?;
+                Some((
+                    module,
+                    split_arguments(inner)
+                        .into_iter()
+                        .map(String::from)
+                        .collect::<Vec<_>>(),
+                ))
+            });
+            let Some((module, items)) = items else {
+                registration.untraced = true;
+                continue;
+            };
+            for item in items {
+                match traced.object_role(module, &item, 0) {
+                    Some(role) => registration.roles.push((role, *source, line)),
+                    None => registration.untraced = true,
+                }
+            }
+        }
+    }
+    found.filter(|_| applies)
+}
+
+/// The SDK's version pyproject.toml pins, as its major and minor numbers.
+fn sdk_pinned(plugin: &Plugin) -> Option<(u64, u64)> {
+    let table = plugin
+        .file("pyproject.toml")?
+        .text
+        .parse::<toml::Table>()
+        .ok()?;
+    let dependencies = table.get("project")?.get("dependencies")?.as_array()?;
+    let pinned = dependencies
+        .iter()
+        .filter_map(|d| d.as_str())
+        .find_map(|d| {
+            let named = d.trim_start().replace('_', "-").to_ascii_lowercase();
+            let rest = named.strip_prefix("open-meridian")?.trim_start();
+            Some(rest.strip_prefix("==")?.trim().to_string())
+        })?;
+    let mut numbers = pinned.split('.').map(|part| {
+        part.chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse::<u64>()
+            .ok()
+    });
+    Some((numbers.next()??, numbers.next()??))
+}
+
+const ROLES_REGISTERED: &str = "a class of the role's registered in roles=[...] where the plugin \
+    enters the SDK, as the role's template does: `class Lake(data.Role)` (or the SDK's own logic \
+    for the role, such as `connectivity.Trader` or `pricing.Pricer`), its object in \
+    `meridian.run(declaration=DECLARATION, roles=[Lake(...)], ...)`. A role's events reach only \
+    its registered class and its acts are made only through it. Or, if the plugin does not hold \
+    the role, take it out of [tool.meridian] roles (ruling 1015)";
+
+/// Each role `[tool.meridian]` declares has its class registered where the
+/// plugin enters the SDK (ruling 1015): a plugin on SDK 0.35 or later, or
+/// one calling `meridian.run`, `run_async`, or `connect` with `roles=`. A
+/// plugin on an earlier SDK, connecting without `roles=`, holds its roles
+/// through the plugin `connect` returns, as it did.
+fn roles_registered(plugin: &Plugin) -> Vec<Failure> {
+    const ID: &str = "roles-registered";
+    let Some(registration) = registration(plugin) else {
+        return Vec::new();
+    };
+    if registration.untraced {
+        return Vec::new();
+    }
+    let (declared, _) = declared(plugin);
+    declared
+        .iter()
+        .filter(|role| ROLES.contains(&role.as_str()))
+        .filter(|role| !registration.roles.iter().any(|(held, _, _)| held == *role))
+        .map(|role| {
+            failure(
+                ID,
+                &registration.source.path,
+                registration.line,
+                format!(
+                    "[tool.meridian] declares `{role}`, and no `{role}.Role` class is registered \
+                     in roles=[...]"
+                ),
+                ROLES_REGISTERED,
+            )
+        })
+        .collect()
+}
+
+/// A class registered for a role `[tool.meridian]` does not declare: the SDK
+/// does not start it, and logs that, so it is a warning.
+fn roles_registered_warnings(plugin: &Plugin) -> Vec<Failure> {
+    const ID: &str = "roles-registered";
+    let Some(registration) = registration(plugin) else {
+        return Vec::new();
+    };
+    let (declared, _) = declared(plugin);
+    let mut said: Vec<&str> = Vec::new();
+    let mut warnings = Vec::new();
+    for (role, source, line) in &registration.roles {
+        if declared.contains(role) || said.contains(&role.as_str()) {
+            continue;
+        }
+        said.push(role);
+        warnings.push(failure(
+            ID,
+            &source.path,
+            *line,
+            format!(
+                "a `{role}` class is registered in roles=[...], and [tool.meridian] does not \
+                 declare `{role}`"
+            ),
+            "declare the role in [tool.meridian] roles, or take its class out of roles=[...]: \
+             the SDK starts a class only for a role the instance was launched with, and logs \
+             each one it does not start",
+        ));
+    }
+    warnings
 }
 
 // ── edge-storage ─────────────────────────────────────────────────────────
@@ -3787,11 +4146,12 @@ fn settings_declared(plugin: &Plugin) -> Vec<Failure> {
                     None => "the environment is read".into(),
                 },
                 &format!(
-                    "declare it as a setting, `meridian.Setting(\"{setting}\", ...)` in \
-                     `meridian.connect(settings=[...])`, and read it from \
-                     `plugin.settings()`: a deployment admin gives it in the dashboard, and \
-                     nothing passes a plugin environment variables. A credential is \
-                     `secret=True`"
+                    "declare it as a setting, `meridian.Setting(\"{setting}\", ...)` among \
+                     the declaration's settings (`meridian.Declaration(settings=[...])`, or a \
+                     field of its `@meridian.settings` class), and read it from what \
+                     `meridian.run(on_settings=...)` is given: a deployment admin gives it in \
+                     the dashboard, and nothing passes a plugin environment variables. A \
+                     credential is `secret=True`"
                 ),
             ));
         }
@@ -4144,10 +4504,11 @@ fn secrets_kept(plugin: &Plugin) -> Vec<Failure> {
 
 fn through_the_sdk(plugin: &Plugin) -> Vec<Failure> {
     const ID: &str = "through-the-sdk";
-    const OPERATIONS: &str = "call the SDK's typed operations on the plugin \
-        `meridian.connect()` returns (`plugin.record_holdings_statement(...)`, \
-        `plugin.report(...)`, `plugin.settings()`). Its sidecar is the plugin's one way into \
-        the deployment, holding its grants; nothing else is reachable from its pod";
+    const OPERATIONS: &str = "call the SDK's typed operations: a role's acts on its class \
+        registered in `meridian.run(roles=[...])` (`self.record_holdings_statement(...)` in a \
+        `custody.Role`), and what is the whole plugin's on `self.plugin` \
+        (`self.plugin.report(...)`, `self.plugin.settings()`). Its sidecar is the plugin's one \
+        way into the deployment, holding its grants; nothing else is reachable from its pod";
     static IMPORTED: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
             r"(?m)^[ \t]*(?:from|import)[ \t]+(nats|psycopg2?|psycopg_pool|asyncpg|sqlalchemy|pg8000|aiopg|grpc|kubernetes(?:_asyncio)?)\b",
@@ -4214,7 +4575,7 @@ fn through_the_sdk(plugin: &Plugin) -> Vec<Failure> {
                         addressed.as_str()
                     ),
                     &format!(
-                        "name no address of the deployment's: `meridian.connect()` finds the \
+                        "name no address of the deployment's: `meridian.run()` finds the \
                          sidecar by itself. Then {OPERATIONS}"
                     ),
                 ));

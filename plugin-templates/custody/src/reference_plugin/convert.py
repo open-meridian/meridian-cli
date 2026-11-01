@@ -22,6 +22,7 @@ from typing import Any
 
 import meridian
 from meridian.edge import as_reported, derived, supplied
+from meridian.roles import custody
 
 #: How the custodian is named on what this plugin reports.
 SOURCE = "reference"
@@ -67,12 +68,11 @@ def amount(text: Any) -> Decimal:
     return Decimal(str(text))
 
 
-@dataclass
-class Converter:
-    """The plugin's conversion, against whatever operations it is given: the
-    plugin's own when it runs, a recorder's in its tests."""
-
-    plugin: Any
+@dataclass(eq=False)
+class Converter(custody.Role):
+    """The plugin's conversion: its custody role class (SDK 0.35), its acts
+    on `self`, registered on the connection when it runs and bound to a
+    recorder in its tests."""
 
     # ── The connection and its accounts ─────────────────────────────────
 
@@ -80,7 +80,7 @@ class Converter:
         """A connection's state, for each account it reaches, and how far
         back its activity can be read where the custodian says."""
         for account in connection["accounts"]:
-            await self.plugin.report_sync_status(
+            await self.report_sync_status(
                 source=SOURCE,
                 external_account_id=account,
                 connection_healthy=connection["status"] in ("OK", "T_PLUS_1"),
@@ -92,7 +92,7 @@ class Converter:
     async def accounts(self, listed: list[dict[str, Any]]) -> None:
         """The accounts the connection reaches, each with its kind, or the
         custodian's type as reported where it maps to none."""
-        await self.plugin.report_external_accounts(
+        await self.report_external_accounts(
             accounts=[
                 meridian.ExternalAccount(
                     external_account_id=each["id"],
@@ -113,7 +113,7 @@ class Converter:
     async def link_new(self, account: dict[str, Any], name: str, caller: str | None) -> Any:
         """Link an account the connection reaches to a new account of the
         deployment's, created as the person names it."""
-        return await self.plugin.link_external_account(
+        return await self.link_external_account(
             external_account_id=account["id"],
             new_account_name=name,
             new_account_custodian=account["institution"],
@@ -129,7 +129,7 @@ class Converter:
         does not resolve to one."""
         named = [meridian.Identifier(scheme="symbol", value=position["symbol"], source=SOURCE)]
         asset_class, instrument_type = ASSET_CLASSES.get(position.get("kind", ""), (None, None))
-        found = await self.plugin.resolve_identifier(
+        found = await self.resolve_identifier(
             identifiers=named,
             as_of_ns=as_of_ns,
             stated_asset_class=asset_class,
@@ -139,7 +139,7 @@ class Converter:
         )
         if found.found and found.instrument_id:
             return str(found.instrument_id)
-        await self.plugin.report_missing_instrument(
+        await self.report_missing_instrument(
             source=SOURCE,
             identifiers=named,
             as_of_ns=as_of_ns,
@@ -158,7 +158,7 @@ class Converter:
         return ""
 
     async def cash(self, currency: str, as_of_ns: int) -> str:
-        found = await self.plugin.resolve_identifier(
+        found = await self.resolve_identifier(
             identifiers=[meridian.Identifier(scheme="iso4217", value=currency)],
             as_of_ns=as_of_ns,
         )
@@ -182,7 +182,7 @@ class Converter:
         if not institution:
             institution = connection["institution"]
             provenance.append(derived("institution", "the connection's institution"))
-        statement = await self.plugin.record_holdings_statement(
+        statement = await self.record_holdings_statement(
             source=SOURCE,
             external_statement_id=f"{account['id']}:{account['as_of']}",
             external_account_id=account["id"],
@@ -195,7 +195,7 @@ class Converter:
         for position in positions:
             await self.holding(statement.statement_id, account, position, as_of_ns)
         if balance is not None:
-            await self.plugin.record_holding(
+            await self.record_holding(
                 statement_id=statement.statement_id,
                 external_account_id=account["id"],
                 instrument_id=await self.cash(balance["currency"], as_of_ns),
@@ -240,7 +240,7 @@ class Converter:
                     derived("average_cost.currency_code", "the account's base currency")
                 )
             average_cost = meridian.Money(amount(position["average_cost"]), currency)
-        await self.plugin.record_holding(
+        await self.record_holding(
             statement_id=statement_id,
             external_account_id=account["id"],
             instrument_id=instrument,
@@ -295,7 +295,7 @@ class Converter:
         def money(key: str) -> meridian.Money | None:
             return meridian.Money(amount(item[key]), item["currency"]) if key in item else None
 
-        await self.plugin.record_activity(
+        await self.record_activity(
             external_account_id=account,
             source=SOURCE,
             activity=meridian.CustodialActivity(
@@ -325,7 +325,7 @@ class Converter:
     ) -> None:
         """A plan's own fund code a person linked after an activity naming it
         was recorded: the activity re-resolved, kept as first recorded."""
-        await self.plugin.re_resolve_activity(
+        await self.re_resolve_activity(
             external_account_id=account,
             source=SOURCE,
             external_activity_id=item["id"],

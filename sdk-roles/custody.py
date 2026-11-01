@@ -29,7 +29,7 @@ deployment admin granted this instance, and a link naming another is refused
 
 **The pages themselves** (0.31.0; ruling 213: Alpaca's and Tradier's
 custody_pages.py, kept between them nearly byte for byte, are the SDK's
-now). `account_pages(pages, source, what=...)` declares a custody plugin's
+now). `account_pages(pages, source, what=..., role=...)` declares a custody plugin's
 Account links (`read_account_links`; linking with `link_account`, checked by
 `check_link_account`), Statements (`read_statements`) and History
 (`read_account_activities`), each the same answer as its tool, Statements
@@ -53,12 +53,14 @@ from ..client import Setting
 from ..figures import Figure
 from ..plugin.v1 import operations_pb2 as _ops
 from ._figures import Value, ordered
+from ._generated.custody import Role
 
 if TYPE_CHECKING:
     from ..pages import Pages
 from .data import Credential
 
 __all__ = [
+    "Role",
     "ACCOUNT_LINKS",
     "HISTORY",
     "STATEMENTS",
@@ -310,6 +312,7 @@ def account_pages(
     source: Callable[[], CustodySource],
     *,
     what: str,
+    role: Callable[[], Any],
     templates: tuple[str, str, str] = (
         "meridian/roles/custody/account_links.html",
         "meridian/roles/custody/statements.html",
@@ -321,10 +324,11 @@ def account_pages(
     (`read_account_links`, `check_link_account`, `link_account`), Statements
     and History at write and read (`read_statements`,
     `read_account_activities`). `source` gives the plugin's source as it
-    stands; `what` says what the plugin brings in, on Statements and
-    History; `templates` are the role's (`meridian/roles/custody/<page>.html`)
-    unless the plugin names its own, each extending the role's at its
-    blocks."""
+    stands; `role` gives the plugin's custody role object (SDK 0.35,
+    ruling 1014), whose acts the pages make; `what` says what the plugin
+    brings in, on Statements and History; `templates` are the role's
+    (`meridian/roles/custody/<page>.html`) unless the plugin names its own,
+    each extending the role's at its blocks."""
     from ..pages import Request, Response
 
     links_template, statements_template, history_template = templates
@@ -339,9 +343,7 @@ def account_pages(
 
     async def links_read(request: Request) -> AccountLinksRead:
         held = source()
-        granted = await request.plugin.read_accounts_for_linking(
-            acting_for=request.caller.header
-        )
+        granted = await role().read_accounts_for_linking(acting_for=request.caller.header)
         return AccountLinksRead(
             external_accounts=[held.account(number) for number in held.reached()],
             accounts=[AccountRead(each.account_id, each.name) for each in granted.accounts],
@@ -407,9 +409,7 @@ def account_pages(
                 links_template, LinkRead(link.external_account_id, "", link.new_account_name)
             )
             return answer
-        granted = await request.plugin.read_accounts_for_linking(
-            acting_for=request.caller.header
-        )
+        granted = await role().read_accounts_for_linking(acting_for=request.caller.header)
         names = {each.account_id: each.name for each in granted.accounts}
         if link.account_id and link.account_id not in names:
             pages.refuse(
@@ -440,7 +440,7 @@ def account_pages(
         link = asked(request)
         held = source()
         creating = link.intent == "create" or bool(link.new_account_name)
-        made = await request.plugin.link_external_account(
+        made = await role().link_external_account(
             external_account_id=link.external_account_id,
             account_id="" if creating or link.intent == "unlink" else link.account_id,
             new_account_name=link.new_account_name if creating else "",

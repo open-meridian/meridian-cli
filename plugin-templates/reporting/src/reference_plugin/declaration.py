@@ -4,7 +4,7 @@ its documentation, the Markdown in `docs/` (relative to where it runs:
 `/plugin/docs` in its image), which a deployment admin reads on its
 Documentation tab before launching it.
 
-`connect(declaration=DECLARATION)` registers it, and `meridian plugin upload`
+`meridian.run(declaration=DECLARATION, ...)` registers it, and `meridian plugin upload`
 reads the same one from the built image, as pyproject.toml's
 `[tool.meridian]` names it, with the texts beside it. A version registers
 exactly the declaration it was uploaded with: the port is fixed here, never

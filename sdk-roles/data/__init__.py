@@ -26,7 +26,7 @@ vendor's own; `meridian.sample_data()`.
 Connection's sections are "Key", "Limits and use" and "Stream"; Datasets'
 "Served", "Wants" (searched and paged, since they grow) and "Subjects". From
 contract v20 a data plugin reads its own declared datasets' licences
-(`plugin.list_datasets()`, its `licences`), so Datasets says "Licensed" or
+(the data role's `list_datasets()`, its `licences`), so Datasets says "Licensed" or
 "Not licensed yet" exactly.
 
 **Figures**, the role's first: "Connection", "Entitled at the vendor",
@@ -120,6 +120,7 @@ from __future__ import annotations
 
 from ...figures import Figure
 from .._figures import Value, ordered
+from .._generated.data import Role
 from ._pages import served, want_rows
 from ._reading import (
     NANOS_PER_DAY,
@@ -161,6 +162,7 @@ from ._wants import (
 )
 
 __all__ = [
+    "Role",
     "BATCH",
     "NANOS_PER_DAY",
     "NANOS_PER_SECOND",

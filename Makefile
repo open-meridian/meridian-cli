@@ -62,9 +62,10 @@ ci-mirror-check:
 # such a decorator, copied to sdk-roles/ at their paths there: `role-pages`
 # reads the pages and routes each helper declares from them, so a plugin
 # calling one is held to what the SDK at SDK_REV declares, not a typed list.
-# meridian-python v0.33.3 (contract v28), its main: the template AGENTS.md
-# files each scaffold now carries (ruling 852).
-SDK_REV  := 2803e5a7278420cee183d632463a750707438db7
+# meridian-python v0.35.0 (contract v29), its branch 0.35 (PR #37, not yet
+# merged): each role one generated class, the plugin entered through
+# `meridian.run(...)` (rulings 1009-1023).
+SDK_REV  := 2e906558555ffd95140b75cd2f93a6f1d1087ec9
 SDK_REPO := https://github.com/open-meridian/meridian-python.git
 SCRATCH  := .sdk-scratch
 SDK_ROLES := $(SCRATCH)/src/meridian/roles

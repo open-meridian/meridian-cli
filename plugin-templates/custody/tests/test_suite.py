@@ -14,7 +14,9 @@ When you replace the stand-in custodian with your own, map each case to a
 recorded or synthetic exchange with it, and keep every case passing. A case
 asserting one value of a closed list your custodian never presents may be
 named in `not_presented`, with why, as may one about a kind of holding it
-never holds (`about`): this stand-in holds no options (contract v28).
+never holds (`about`): this stand-in holds no options (contract v28); and
+one about a kind of work it never does -- a settlement calendar read, a
+settlement date asked -- since it reports what the custodian states.
 """
 
 from __future__ import annotations
@@ -63,7 +65,7 @@ def position(**given: Any) -> dict[str, Any]:
 
 def converted(step: Callable[[Converter], Awaitable[None]]) -> Producer:
     async def produce(recorder: Recorder) -> None:
-        await step(Converter(recorder))
+        await step(recorder.bind(Converter()))
 
     return produce
 
@@ -92,7 +94,7 @@ async def ambiguous(recorder: Recorder) -> None:
             found=False, miss_reason=ops.MISS_REASON_AMBIGUOUS
         ),
     )
-    await Converter(recorder).statement(
+    await recorder.bind(Converter()).statement(
         account(positions=[position(kind="WARRANT", kind_name="Warrant")]), CONNECTION, DAY
     )
 
@@ -107,7 +109,7 @@ async def thinly_described(recorder: Recorder) -> None:
             found=False, miss_reason=ops.MISS_REASON_NOT_FOUND
         ),
     )
-    await Converter(recorder).statement(
+    await recorder.bind(Converter()).statement(
         account(positions=[position(symbol="ZZTOP", description="")]), CONNECTION, DAY
     )
 
@@ -128,23 +130,6 @@ LINK = {"code": "SVF-1", "instrument": "LCL-SVF", "changed_by": "Ada Park"}
 
 CODES = {"sync-" + state.replace("_", "-"): code for code, state in SYNC_STATES.items()}
 ACTIVITIES = {"activity-" + k.replace("_", "-"): code for code, k in ACTIVITY_KINDS.items()}
-
-
-# The settlement calendars' reads every role holds (contract v22): a plugin
-# needing a calendar's days or a settlement date asks core, the deployment's
-# one answer, and never works one out itself.
-async def reads_a_calendar(recorder: Recorder) -> None:
-    await recorder.read_calendar(
-        calendar_id="CAL-01JAE0000000000000000USSS",
-        from_date="2026-10-01",
-        to_date="2026-10-31",
-    )
-
-
-async def asks_for_a_settlement_date(recorder: Recorder) -> None:
-    await recorder.compute_date(
-        settlement=ops.SettlementDateInputs(instrument_id="LCL-1", trade_date="2026-10-09")
-    )
 
 
 PRODUCERS: dict[str, Producer] = {
@@ -191,18 +176,25 @@ PRODUCERS: dict[str, Producer] = {
     "history-from-stated": converted(
         lambda c: c.sync({**CONNECTION, "history_from": "2019-01-02"})
     ),
-    "reads-a-calendar": reads_a_calendar,
-    "asks-for-a-settlement-date": asks_for_a_settlement_date,
 }
 
 #: Contract v28 (ruling 602): an assignment is about options.
-NOT_PRESENTED = {"reports-an-assignment": "the stand-in custodian holds no options"}
+NOT_PRESENTED = {
+    "reports-an-assignment": "the stand-in custodian holds no options",
+    # Its work never uses them (contract v22's `about`, honestly marked from
+    # contract v29, Track E): it reports what the custodian states.
+    "reads-a-calendar": "it reports what its custodian states; it reads no calendar",
+    "asks-for-a-settlement-date": (
+        "it reports what its custodian states; it asks no settlement date"
+    ),
+}
 
 
 def test_every_case_of_the_custody_suite_passes() -> None:
     report = run("custody", PRODUCERS, not_presented=NOT_PRESENTED, instance_id=INSTANCE)
     assert report.passed, report.failures
-    assert len(report.passed_cases) == 48
+    # Every case but the three not presented.
+    assert len(report.passed_cases) == 46
     # Contract v24: the two cases every suite holds, which the SDK answers;
     # contract v26 a third, an event group heard and read.
     assert report.answered_by_sdk == [

@@ -36,12 +36,17 @@ declared dividends and an issuer's rating history (`filings`, `facts`,
 `holders`, `dividends`, `ratings`) -- and hears a statistic, a lifecycle
 event, a filing and a dividend recorded.
 
+From contract v29 it reads a pool's factor history (`factors`, the SDK's
+`debt.read_factors`), whose latest row gives a pool's current face, and
+hears each month's factor recorded.
+
 `meridian.suites.run("reporting", producers)` holds this to the role's
 suite (tests/test_suite.py), against a recorder standing in for the sidecar.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -49,8 +54,9 @@ from typing import Any
 
 import meridian
 from meridian import analytics
+from meridian.helpers import chains, debt, lifecycle
 from meridian.plugin.v1 import operations_pb2 as ops
-from meridian.roles import Liveness, chains, lifecycle, reporting, signal
+from meridian.roles import Liveness, reporting, signal
 from meridian.roles.data import rates
 
 NS = 1_000_000_000
@@ -64,6 +70,9 @@ def _start(day: date) -> int:
 def _in(money: ops.Money) -> str:
     """What an amount is in: its ISO 4217 code, or its cash instrument."""
     return money.currency_code or money.instrument_id
+
+
+log = logging.getLogger("reference_plugin")
 
 
 @dataclass(frozen=True)
@@ -82,12 +91,14 @@ class Row:
     week: Decimal | None = None
 
 
-@dataclass
-class Report:
-    """The plugin's reads, against whatever operations it is given: the
-    plugin's own when it runs, a recorder's in its tests."""
+@dataclass(eq=False)
+class Report(reporting.Role):
+    """The plugin's reads and what it hears: its reporting role class (SDK
+    0.35), its acts on `self`, registered on the connection when it runs and
+    bound to a recorder in its tests. What the lake records is heard for the
+    subjects it names (`subjects()`): the instruments held at the last close,
+    read on start."""
 
-    plugin: meridian.Plugin
     #: The currency it reports in, by its ISO 4217 code.
     reporting_currency: str = "USD"
     #: What the lake has recorded since the plugin started, as heard.
@@ -105,6 +116,22 @@ class Report:
     lifecycle_heard: int = 0
     filings_heard: int = 0
     dividends_heard: int = 0
+    factors_heard: int = 0
+    #: The instruments held at the last close, read on start: the subjects
+    #: the lake's rows are heard for.
+    held: list[str] = field(default_factory=list)
+
+    async def on_start(self) -> None:
+        """The datasets it may read, said; and the instruments held at the
+        last close, whose prices and bars it hears. A plugin following its
+        book names them again as positions change, and calls
+        `self.hear_again()`."""
+        log.info("may read %s", ", ".join(await self.datasets()) or "no dataset yet")
+        yesterday = datetime.now(UTC).date() - timedelta(days=1)
+        self.held = sorted({p.instrument_id for p in await self.positions(yesterday)})
+
+    def subjects(self) -> list[str]:
+        return self.held
 
     async def datasets(self) -> list[str]:
         """The datasets this plugin may read, by name."""
@@ -114,7 +141,7 @@ class Report:
         """Each dataset this plugin may read, whether it is entitled to it
         and to which fields (none: every field): the reporting role's
         Datasets page's rows."""
-        read = await self.plugin.list_datasets()
+        read = await self.list_datasets()
         self.datasets_read = [ref.dataset for ref in read.datasets]
         mine = {each.dataset: each for each in read.entitlements}
         return [
@@ -130,7 +157,7 @@ class Report:
         """The deployment's cash instrument for the reporting currency on
         `day`, resolved by its ISO 4217 code whether or not any position
         holds it; empty where the deployment holds none."""
-        found = await self.plugin.resolve_identifier(
+        found = await self.resolve_identifier(
             identifiers=[meridian.Identifier(scheme="iso4217", value=self.reporting_currency)],
             as_of_ns=_start(day),
         )
@@ -141,7 +168,7 @@ class Report:
         held: list[ops.BookPosition] = []
         cursor = ""
         while True:
-            page = await self.plugin.list_positions(business_date=day, cursor=cursor)
+            page = await self.list_positions(business_date=day, cursor=cursor)
             held += [position for position in page.positions if not position.removed]
             cursor = page.next_cursor
             if not cursor:
@@ -152,7 +179,7 @@ class Report:
         found: dict[str, ops.Price] = {}
         cursor = ""
         while True:
-            page = await self.plugin.list_prices(
+            page = await self.list_prices(
                 subjects=[meridian.SubjectRef(entity_id=s) for s in subjects],
                 kinds=["close"],
                 business_date=day,
@@ -171,7 +198,7 @@ class Report:
         bars: dict[str, list[ops.Bar]] = {}
         cursor = ""
         while True:
-            page = await self.plugin.list_bars(
+            page = await self.list_bars(
                 subjects=[meridian.SubjectRef(entity_id=s) for s in subjects],
                 interval_ns=86_400 * NS,
                 valid_from_ns=_start(day - timedelta(days=6)),
@@ -230,21 +257,19 @@ class Report:
     async def market_value(self, accounts: list[str]) -> analytics.Answer:
         """Each account's market value by asset class, as the analytics
         component computes it: exact, never recomputed here."""
-        known = analytics.measures_of(
-            (await self.plugin.list_measure_definitions()).definitions
-        )
+        known = analytics.measures_of((await self.list_measure_definitions()).definitions)
         by = (
             ["asset_class"]
             if "asset_class" in getattr(known.get("market_value"), "breakdowns", ())
             else []
         )
         job = analytics.job(analytics.measure("market_value", by=by), accounts=accounts)
-        return await self.jobs.run(self.plugin, job)
+        return await self.jobs.run(self, job)
 
     async def lake_rows(self, subject: str) -> ops.QueryLakeResult:
         """The closes the lake holds of one subject, its price alone, at most
         100 rows: one bounded query, cut and said so past the limit."""
-        return await self.plugin.query_lake(
+        return await self.query_lake(
             kind="prices",
             subjects=[meridian.SubjectRef(entity_id=subject)],
             fields=["meridian.v1.Price.price"],
@@ -256,7 +281,7 @@ class Report:
     async def curve(self, subject: str, day: date) -> list[ops.Rate]:
         """A rate curve's points for a business date, in tenor order, from
         the deployment's default sources."""
-        return await rates.read_curve(self.plugin, subject, day)
+        return await rates.read_curve(self, subject, day)
 
     async def costs(self, account: str, day: date) -> list[ops.ExecutionCost]:
         """An account's execution costs for a trade date, against arrival
@@ -264,7 +289,7 @@ class Report:
         out: list[ops.ExecutionCost] = []
         cursor = ""
         while True:
-            page = await self.plugin.list_execution_costs(
+            page = await self.list_execution_costs(
                 account_id=account, trade_date=day, cursor=cursor
             )
             out.extend(page.costs)
@@ -277,37 +302,37 @@ class Report:
     async def open_interest(self, underlying: str, day: date) -> list[ops.Statistic]:
         """The prior night's open interest of every series of an
         underlying's chain."""
-        return await chains.read_open_interest(self.plugin, underlying, day)
+        return await chains.read_open_interest(self, underlying, day)
 
     async def lifecycle(self, account: str, start: date, end: date) -> list[ops.LifecycleEvent]:
         """An account's exercises, assignments and expiries over the days."""
-        return await lifecycle.read_events(self.plugin, account, start, end)
+        return await lifecycle.read_events(self, account, start, end)
 
     async def derived(self, subject: str, series: str, start: date, end: date) -> list[Any]:
         """A signal plugin's derived series for a subject over the days."""
-        return await signal.read_derived(self.plugin, subject, [series], start, end)
+        return await signal.read_derived(self, subject, [series], start, end)
 
     async def scenarios(self, row_key: str) -> list[ops.SavedScenario]:
         """A saved scenario set, by its row key."""
-        return await signal.read_scenarios(self.plugin, [row_key])
+        return await signal.read_scenarios(self, [row_key])
 
     async def filings(self, company: str) -> list[ops.Filing]:
         """A company's current reports (8-K), whose dates mark its earnings."""
-        answer = await self.plugin.list_filings(
+        answer = await self.list_filings(
             subjects=[meridian.SubjectRef(entity_id=company)], kinds=["current_report"]
         )
         return list(answer.filings)
 
     async def facts(self, company: str, concept: str) -> list[ops.ReportedFact]:
         """A company's reported values of one concept, its EPS say."""
-        answer = await self.plugin.list_reported_facts(
+        answer = await self.list_reported_facts(
             subjects=[meridian.SubjectRef(entity_id=company)], concepts=[concept]
         )
         return list(answer.facts)
 
     async def holders(self, security: str, quarter_end: date) -> list[ops.Holding]:
         """A security's 13F holders as of a quarter's end."""
-        answer = await self.plugin.list_holdings(
+        answer = await self.list_holdings(
             subjects=[meridian.SubjectRef(entity_id=security)], from_date=quarter_end,
             to_date=quarter_end, kinds=["form_13f"],
         )  # fmt: skip
@@ -315,7 +340,7 @@ class Report:
 
     async def dividends(self, security: str, after: date) -> list[ops.CorporateActionAnnounced]:
         """A security's declared cash dividends going ex after a day."""
-        answer = await self.plugin.list_corporate_actions(
+        answer = await self.list_corporate_actions(
             subjects=[meridian.SubjectRef(entity_id=security)], kinds=["cash_dividend"],
             from_date=after,
         )  # fmt: skip
@@ -323,40 +348,63 @@ class Report:
 
     async def ratings(self, issuer: str) -> list[ops.RatingAction]:
         """An issuer's rating history."""
-        answer = await self.plugin.list_rating_actions(
+        answer = await self.list_rating_actions(
             subjects=[meridian.SubjectRef(entity_id=issuer)]
         )
         return list(answer.actions)
 
-    async def on_statistic(self, heard: meridian.Heard[ops.StatisticsRecordedEvent]) -> None:
+    async def factors(self, pool: str, start: date, end: date) -> list[ops.Factor]:
+        """A pool's or a class's factors paid in a range, every page."""
+        return await debt.read_factors(self, [pool], start, end)
+
+    async def on_factors_recorded(
+        self, heard: meridian.Heard[ops.FactorsRecordedEvent]
+    ) -> None:
+        self.factors_heard += 1
+
+    async def on_statistics_recorded(
+        self, heard: meridian.Heard[ops.StatisticsRecordedEvent]
+    ) -> None:
         self.statistics_heard += 1
 
-    async def on_lifecycle_event(
+    async def on_lifecycle_event_recorded(
         self, heard: meridian.Heard[ops.LifecycleEventRecordedEvent]
     ) -> None:
         self.lifecycle_heard += 1
 
-    async def on_filing(self, heard: meridian.Heard[ops.FilingsRecordedEvent]) -> None:
+    async def on_filings_recorded(
+        self, heard: meridian.Heard[ops.FilingsRecordedEvent]
+    ) -> None:
         self.filings_heard += 1
 
-    async def on_dividend(
+    async def on_corporate_actions_recorded(
         self, heard: meridian.Heard[ops.CorporateActionsRecordedEvent]
     ) -> None:
         self.dividends_heard += 1
 
-    async def on_rate(self, heard: meridian.Heard[ops.RatesRecordedEvent]) -> None:
+    async def on_job_finished(self, heard: meridian.Heard[ops.JobFinishedEvent]) -> None:
+        """A job answered later, for `jobs` to hand its waiting `run`."""
+        await self.jobs.heard(heard)
+
+    async def on_liveness_recorded(
+        self, heard: meridian.Heard[ops.LivenessRecordedEvent]
+    ) -> None:
+        """A dataset's liveness, for a value's confirmed time."""
+        await self.liveness.heard(heard)
+
+    async def on_rates_recorded(self, heard: meridian.Heard[ops.RatesRecordedEvent]) -> None:
         """A rate the lake recorded, for a subject this plugin reads."""
         self.rates_heard += 1
         self.last_heard = heard.message.rate.meta.source.dataset
 
     # ── Heard ───────────────────────────────────────────────────────────
 
-    async def on_price(self, heard: meridian.Heard[ops.PricesRecordedEvent]) -> None:
+    async def on_prices_recorded(self, heard: meridian.Heard[ops.PricesRecordedEvent]) -> None:
         """A price the lake recorded, for a subject this plugin reads."""
         self.prices_heard += 1
         self.last_heard = heard.message.price.meta.source.dataset
 
-    async def on_bar(self, heard: meridian.Heard[ops.BarsRecordedEvent]) -> None:
+    async def on_bars_recorded(self, heard: meridian.Heard[ops.BarsRecordedEvent]) -> None:
         """A bar the lake recorded, for a subject this plugin reads."""
         self.bars_heard += 1
         self.last_heard = heard.message.bar.meta.source.dataset

@@ -57,12 +57,16 @@ the kit is not served, it still works, unstyled: the table is inside
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 import meridian
+from meridian.roles import custody
+
+log = logging.getLogger("reference_plugin")
 
 TITLE = "Reference plugin"
 
@@ -89,6 +93,24 @@ COLUMNS = [
 def reports(plugin: meridian.Plugin) -> bool:
     """Whether the deployment lets this plugin report its external accounts."""
     return any(topic.endswith(REPORTS) for topic in plugin.grants.publish)
+
+
+class Custody(custody.Role):
+    """The plugin's custody role class (SDK 0.35): the acts the pages make
+    are its own, on the connection `meridian.run` registers it on. Started
+    only where the deployment launched the plugin with `custody`; a plugin
+    holding none makes no act, and its pages say there is nothing to link."""
+
+    async def on_start(self) -> None:
+        # The external accounts its connection reaches, which an admin of
+        # the plugin then links on Setup: what it records is for those.
+        if reports(self.plugin):
+            await self.report_external_accounts(accounts=REACHES)
+            log.info("reported %d external account(s) to link", len(REACHES))
+
+
+#: The custody role object the pages act through, which __main__.py registers.
+CUSTODY = Custody()
 
 
 async def scope(plugin: meridian.Plugin) -> meridian.AccountScope:
@@ -132,7 +154,7 @@ async def _setup(request: meridian.Request, notice: str = "", tone: str = "good"
         # Every account of the deployment's, by name, for the admin to link
         # to: an identity, not data, and read acting for them.
         try:
-            read = await plugin.read_accounts_for_linking(acting_for=request.caller.header)
+            read = await CUSTODY.read_accounts_for_linking(acting_for=request.caller.header)
             accounts = [
                 {"id": a.account_id, "name": a.name or a.account_id} for a in read.accounts
             ]
@@ -205,9 +227,7 @@ async def check_link_account(request: meridian.Request) -> meridian.Response:
             ("external_account_id", "not reached"),
         )
     if asked.account_id:
-        granted = await request.plugin.read_accounts_for_linking(
-            acting_for=request.caller.header
-        )
+        granted = await CUSTODY.read_accounts_for_linking(acting_for=request.caller.header)
         if asked.account_id not in {each.account_id for each in granted.accounts}:
             pages.refuse(
                 "this plugin may not link to the account", ("account_id", "not granted")
@@ -231,7 +251,7 @@ async def link(request: meridian.Request) -> meridian.Response | str:
     # session opened by Manage, and the deployment records it as theirs.
     asked = request.params
     try:
-        made = await request.plugin.link_external_account(
+        made = await CUSTODY.link_external_account(
             external_account_id=asked.external_account_id,
             account_id=asked.account_id,
             acting_for=request.caller.header,
@@ -326,7 +346,7 @@ async def statement(request: meridian.Request) -> meridian.Response | str:
             pages.refuse(LINK_FIRST, reason="not_linked")
         return await _accounts(request, LINK_FIRST, "warn")
     try:
-        opened = await request.plugin.record_holdings_statement(
+        opened = await CUSTODY.record_holdings_statement(
             source="reference",
             external_statement_id=f"reference-{uuid.uuid4()}",
             external_account_id=linked.external_account_id,

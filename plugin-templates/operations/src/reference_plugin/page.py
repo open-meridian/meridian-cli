@@ -18,6 +18,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import meridian
 from meridian.roles import operations
@@ -26,9 +27,16 @@ TITLE = "Reference operations"
 
 pages = meridian.Pages(TITLE, templates=Path(__file__).parent / "templates")
 
-#: What __main__.py gives the pages: the settings as last delivered, and when
-#: the last reconciliation ran.
-running: dict[str, object] = {"due_business_days": 3, "last_reconciliation": ""}
+#: What __main__.py gives the pages: the settings as last delivered, when the
+#: last reconciliation ran, and the operations role object whose acts the
+#: pages make (SDK 0.35).
+running: dict[str, Any] = {"due_business_days": 3, "last_reconciliation": "", "role": None}
+
+
+def _book() -> Any:
+    """The operations role object the pages act through."""
+    return running["role"]
+
 
 LEVELS = ["write", "read"]
 
@@ -37,7 +45,7 @@ LEVELS = ["write", "read"]
 async def breaks(request: meridian.Request) -> meridian.Response:
     """The open breaks in the accounts the person may read, and how many are
     past the day they are due."""
-    found = await request.plugin.list_breaks(states=["open"])
+    found = await _book().list_breaks(states=["open"])
     mine = [each for each in found.breaks if request.caller.may_read(each.account_id)]
     due = timedelta(days=int(str(running["due_business_days"])))
     today = datetime.now(UTC).date()
@@ -139,7 +147,7 @@ async def confirm_opening_balance(request: meridian.Request) -> meridian.Respons
     asked: Confirmation = request.params
     if not request.caller.may_write(asked.account_id):
         pages.refuse("this person may not write the account", ("account_id", "not writable"))
-    await request.plugin.record_opening_balance(
+    await _book().record_opening_balance(
         account_id=asked.account_id,
         as_of_date=asked.as_of_date,
         sources=[meridian.OpeningSource(kind="custodian", as_of_date=asked.as_of_date)],

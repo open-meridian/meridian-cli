@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import meridian
 from meridian.roles import data
+from meridian.suites import Recorder
 from meridian.testing import PageClient
 
 from reference_plugin.convert import Converter
@@ -33,7 +34,9 @@ def client() -> PageClient:
 
 
 def running(vendor: Vendor | None = None) -> Converter:
-    converter = Converter(Sidecar(), vendor or Vendor())  # type: ignore[arg-type]
+    """The plugin's data role class as it runs, bound here to the SDK's
+    recorder standing in for the sidecar."""
+    converter = Recorder("reference-1").bind(Converter(vendor or Vendor()))
     use(converter)
     return converter
 
