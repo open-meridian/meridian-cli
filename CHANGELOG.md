@@ -5,7 +5,8 @@
 - `meridian plugin new` writes the SDK's 0.35.0 scaffolds (contract v29, no contract change; rulings
   1009 to 1023): each role a plugin holds is one class, `meridian.roles.<role>.Role`, and the plugin
   enters through `meridian.run(declaration=..., roles=[...], ...)` with its role's class registered
-  there. The scaffolds are copied from meridian-python's branch `0.35` at 2e90655.
+  there. The scaffolds are copied from meridian-python's main at ab749b7, where #37 merged
+  (the same template trees as branch `0.35` at 2e90655).
 - `plugin check`'s `template-shape` takes `meridian.run(...)`, `meridian.run_async(...)` or
   `meridian.connect(...)` (or `run`, `run_async` or `connect` imported from `meridian`) as the
   plugin's entry. It reads the call in code, so a docstring naming one no longer counts. A plugin
