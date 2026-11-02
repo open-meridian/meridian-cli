@@ -70,8 +70,9 @@ fn a_replacement_is_whole_or_nothing() {
     std::fs::create_dir_all(&dir).unwrap();
     let exe = dir.join("meridian");
     std::fs::write(&exe, b"old").unwrap();
-    replace(&exe, b"new").unwrap();
-    assert_eq!(std::fs::read(&exe).unwrap(), b"new");
+    let new: &[u8] = b"#!/bin/sh\necho 'meridian 9.9.9'\n";
+    replace(&exe, new).unwrap();
+    assert_eq!(std::fs::read(&exe).unwrap(), new);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -85,6 +86,35 @@ fn a_replacement_is_whole_or_nothing() {
     // Into a directory that is not there: refused, and said.
     let refused = replace(&dir.join("gone").join("meridian"), b"x").unwrap_err();
     assert!(refused.contains("was left as it was"), "{refused}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_release_that_does_not_run_here_leaves_the_old_binary() {
+    let dir = std::env::temp_dir().join(format!("meridian-runs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = dir.join("meridian");
+    std::fs::write(&exe, b"old").unwrap();
+    // As dyld refuses a binary built for a newer macOS than this one.
+    let newer: &[u8] =
+        b"#!/bin/sh\necho 'built for macOS 15.0 which is newer than running OS' >&2\nexit 1\n";
+    let refused = replace(&exe, newer).unwrap_err();
+    assert!(
+        refused.contains("does not run on this system (built for macOS 15.0")
+            && refused.contains("was left as it was")
+            && refused.contains(SUPPORTED),
+        "{refused}"
+    );
+    assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+    // Nor is anything left beside it.
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    // Bytes that are no program at all: the same.
+    let refused = replace(&exe, b"not a program").unwrap_err();
+    assert!(refused.contains("does not run on this system"), "{refused}");
+    assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

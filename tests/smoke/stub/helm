@@ -1,0 +1,14 @@
+#!/bin/sh
+# helm as `meridian status` asks it, answered for the stand-in deployment
+# tests/smoke/stub/kubectl serves: release `meridian`, revision 3, deployed.
+# Anything else asked is refused.
+case "$*" in
+    "history meridian --namespace smoke --max 1 -o json")
+        echo '[{"revision": 3, "updated": "2026-11-01T12:00:00Z", "status": "deployed",' \
+            '"chart": "meridian-0.1.0", "app_version": "0.1.331", "description": "Upgrade complete"}]'
+        ;;
+    *)
+        echo "the stand-in helm does not answer: helm $*" >&2
+        exit 1
+        ;;
+esac

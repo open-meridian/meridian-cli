@@ -128,7 +128,10 @@ pub fn writable(dir: &Path) -> Result<(), String> {
 }
 
 /// Put `bytes` where `exe` is, whole or not at all: written beside it and
-/// renamed over it, so an interrupted upgrade leaves the old binary.
+/// renamed over it, so an interrupted upgrade leaves the old binary. It is
+/// run there first (`--version`), so a release that does not run on this
+/// system -- one built for a newer macOS than this one, outside the
+/// supported window (ruling 1033) -- leaves the old binary too.
 pub fn replace(exe: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = exe.parent().ok_or("this binary is in no directory")?;
     let beside = dir.join(format!(".meridian-upgrade-{}", std::process::id()));
@@ -139,13 +142,58 @@ pub fn replace(exe: &Path, bytes: &[u8]) -> Result<(), String> {
             use std::os::unix::fs::PermissionsExt as _;
             std::fs::set_permissions(&beside, std::fs::Permissions::from_mode(0o755))?;
         }
-        std::fs::rename(&beside, exe)
+        Ok::<(), std::io::Error>(())
     })();
     if let Err(failed) = written {
         let _ = std::fs::remove_file(&beside);
         return Err(format!("{} was left as it was: {failed}", exe.display()));
     }
+    if let Err(why) = runs(&beside) {
+        let _ = std::fs::remove_file(&beside);
+        return Err(format!(
+            "the release does not run on this system ({why}); {} was left as it was. \
+             The systems it runs on: {SUPPORTED}",
+            exe.display()
+        ));
+    }
+    if let Err(failed) = std::fs::rename(&beside, exe) {
+        let _ = std::fs::remove_file(&beside);
+        return Err(format!("{} was left as it was: {failed}", exe.display()));
+    }
     Ok(())
+}
+
+/// Where the supported systems are said (README, "Supported systems").
+pub const SUPPORTED: &str = "https://github.com/open-meridian/meridian-cli#supported-systems";
+
+/// Whether the binary at `path` runs here: `--version`, answered with
+/// success. Why not, where it does not: the first line it or the system said.
+fn runs(path: &Path) -> Result<(), String> {
+    // Just written: a process forked elsewhere in this one at that moment
+    // may hold it open for writing until it execs, and the system then
+    // refuses to run it (ETXTBSY) for that instant.
+    let mut tries = 0;
+    let output = loop {
+        match std::process::Command::new(path).arg("--version").output() {
+            Err(failed)
+                if failed.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 20 =>
+            {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            done => break done.map_err(|failed| failed.to_string())?,
+        }
+    };
+    if output.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&output.stderr);
+    Err(said
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| format!("--version exited with {}", output.status)))
 }
 
 /// The header every request to a deployment names this CLI's version in

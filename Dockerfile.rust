@@ -107,6 +107,31 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,id=meridian-cli-target,target=/w/target \
     fresh-sources cargo build --locked --release && cp target/release/meridian /meridian
 
+# The Linux release binary as release.yaml builds it -- static, against musl,
+# for this machine's architecture -- for `make smoke-linux`, which runs it in
+# each Linux distribution of the supported window (tests/smoke). As there,
+# musl's C compiler is all the TLS provider's C needs.
+FROM base AS release-musl
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+      amd64) echo x86_64-unknown-linux-musl ;; \
+      arm64) echo aarch64-unknown-linux-musl ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac >/target \
+ && apt-get update && apt-get install -y --no-install-recommends musl-tools && rm -rf /var/lib/apt/lists/* \
+ && rustup target add "$(cat /target)"
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,id=meridian-cli-target,target=/w/target \
+    T="$(cat /target)" \
+ && fresh-sources cargo build --locked --release --target "$T" \
+ && cp "target/$T/release/meridian" /meridian
+
+# The binary and the target it is for, alone, for `docker build --output`.
+FROM scratch AS release-musl-binary
+COPY --from=release-musl /meridian /meridian
+COPY --from=release-musl /target /target
+
 # The install script, `meridian upgrade` and `uninstall`, against a stand-in
 # for GitHub's releases (tests/install). The real binary, from `release`, is
 # the one upgraded and uninstalled; tester is somebody who cannot write where
@@ -126,6 +151,8 @@ COPY install.sh tests/install/run.sh /w/
 RUN shellcheck --shell=sh /w/install.sh /w/run.sh
 COPY tests/scaffolds/run.sh /w/scaffolds/run.sh
 RUN shellcheck --shell=sh /w/scaffolds/run.sh
+COPY tests/smoke/ /w/smoke/
+RUN shellcheck --shell=sh /w/smoke/run.sh /w/smoke/stub/kubectl /w/smoke/stub/helm
 COPY tools/fresh-sources.sh tests/fresh-sources/run.sh /w/fresh-sources/
 RUN shellcheck --shell=sh /w/fresh-sources/fresh-sources.sh /w/fresh-sources/run.sh
 # The macOS trust test (`make e2e-authority-macos`), which only a Mac runs,

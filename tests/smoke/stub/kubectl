@@ -1,0 +1,37 @@
+#!/bin/sh
+# kubectl as `meridian status` asks it, answered for a stand-in deployment:
+# release `meridian` in namespace `smoke`, one component (bor) with its one
+# pod ready, and no metrics served. Anything else asked is refused, so a
+# status that asked for something new would say so (tests/smoke/run.sh).
+case "$*" in
+    "get deployments,statefulsets -n smoke -l app.kubernetes.io/instance=meridian -o json")
+        cat <<'JSON'
+{"items": [{
+  "kind": "Deployment",
+  "metadata": {"name": "meridian-bor", "labels": {
+    "app.kubernetes.io/instance": "meridian", "meridian.dev/component": "bor"}},
+  "spec": {"replicas": 1,
+    "selector": {"matchLabels": {
+      "app.kubernetes.io/instance": "meridian", "meridian.dev/component": "bor"}},
+    "template": {"spec": {"containers": [{"name": "bor",
+      "image": "ghcr.io/open-meridian/meridian-core:smoke",
+      "resources": {"limits": {"memory": "256Mi"}}}]}}},
+  "status": {"readyReplicas": 1}
+}]}
+JSON
+        ;;
+    "get pods -n smoke -l app.kubernetes.io/instance=meridian -o json")
+        cat <<'JSON'
+{"items": [{
+  "metadata": {"name": "meridian-bor-0", "labels": {
+    "app.kubernetes.io/instance": "meridian", "meridian.dev/component": "bor"}},
+  "spec": {"nodeName": ""},
+  "status": {"containerStatuses": [{"name": "bor", "restartCount": 0, "lastState": {}}]}
+}]}
+JSON
+        ;;
+    *)
+        echo "the stand-in kubectl does not answer: kubectl $*" >&2
+        exit 1
+        ;;
+esac
