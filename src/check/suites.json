@@ -10,6 +10,7 @@
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
+          "about": "datasets",
           "given": "a compliance plugin starts in a deployment where it is entitled to datasets",
           "expect": [
             {
@@ -19,6 +20,7 @@
         },
         {
           "name": "reads-a-business-dates-closes",
+          "about": "prices",
           "given": "the plugin needs the closes of its subjects for a business date",
           "expect": [
             {
@@ -35,6 +37,7 @@
         },
         {
           "name": "hears-a-price-recorded",
+          "about": "prices",
           "given": "the lake records a close for a subject the plugin asked for",
           "expect": [
             {
@@ -44,6 +47,7 @@
         },
         {
           "name": "reads-daily-bars-over-a-range",
+          "about": "bars",
           "given": "the plugin needs daily bars of its subjects over a range",
           "expect": [
             {
@@ -58,6 +62,7 @@
         },
         {
           "name": "hears-a-bar-recorded",
+          "about": "bars",
           "given": "the lake records a bar for a subject the plugin asked for",
           "expect": [
             {
@@ -171,6 +176,7 @@
         },
         {
           "name": "hears-a-locate-answered",
+          "about": "locates",
           "since": "v22",
           "given": "the prime answers a locate on an account in the plugin's scope",
           "expect": [
@@ -181,6 +187,7 @@
         },
         {
           "name": "reads-the-orders-and-an-orders-history",
+          "about": "orders",
           "since": "v22",
           "given": "the plugin starts, and reviews one order",
           "expect": [
@@ -198,6 +205,7 @@
         },
         {
           "name": "reads-and-hears-the-trading-instructions",
+          "about": "trading instructions",
           "since": "v22",
           "given": "the plugin starts, and a deployment admin later pauses an account",
           "expect": [
@@ -277,6 +285,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -290,6 +299,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -336,6 +346,7 @@
         },
         {
           "name": "reads-alerts-and-catches-up",
+          "about": "alerts",
           "since": "v24",
           "given": "the plugin starts, and later lost deliveries",
           "expect": [
@@ -346,6 +357,7 @@
         },
         {
           "name": "hears-and-reads-bookings",
+          "about": "bookings",
           "since": "v24",
           "given": "a block is booked across two funds, and the plugin checks the booking's fairness",
           "expect": [
@@ -383,6 +395,7 @@
         },
         {
           "name": "reads-whether-orders-may-name-local-records",
+          "about": "order settings",
           "since": "v24",
           "given": "the plugin is about to propose or accept on an instrument whose record is provisional, and shows a person whether the deployment's escape hatch is on",
           "expect": [
@@ -393,6 +406,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -409,6 +423,7 @@
         },
         {
           "name": "runs-a-job-and-reads-its-answer",
+          "about": "analytic jobs",
           "since": "v26",
           "given": "the plugin asks the analytics component for a measure over accounts in its scope, answered inline when small and later when large",
           "expect": [
@@ -437,6 +452,7 @@
         },
         {
           "name": "catches-up-finished-jobs",
+          "about": "analytic jobs",
           "since": "v26",
           "given": "the plugin lost a job's finishing and reads the jobs finished after the last sequence it saw",
           "expect": [
@@ -450,6 +466,7 @@
         },
         {
           "name": "reads-the-agents-guard",
+          "about": "order settings",
           "since": "v26",
           "given": "the plugin starts, and shows a person before an agent's act whether a live connection would refuse it",
           "expect": [
@@ -460,6 +477,7 @@
         },
         {
           "name": "queries-the-lake-within-bounds",
+          "about": "lake queries",
           "since": "v26",
           "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
           "expect": [
@@ -475,6 +493,7 @@
         },
         {
           "name": "reads-a-curve-for-a-date",
+          "about": "rates",
           "since": "v27",
           "given": "the plugin needs a rate curve's points for a business date",
           "expect": [
@@ -489,6 +508,7 @@
         },
         {
           "name": "hears-a-rate-recorded",
+          "about": "rates",
           "since": "v27",
           "given": "the lake records a rate for a subject the plugin asked for",
           "expect": [
@@ -499,6 +519,7 @@
         },
         {
           "name": "hears-a-datasets-liveness",
+          "about": "liveness",
           "since": "v27",
           "given": "a stream entitled to the plugin sends a heartbeat while its quotes are unchanged",
           "expect": [
@@ -509,6 +530,7 @@
         },
         {
           "name": "reads-an-accounts-execution-costs",
+          "about": "execution costs",
           "since": "v27",
           "given": "the plugin shows an account's costs against arrival for a trade date",
           "expect": [
@@ -523,6 +545,7 @@
         },
         {
           "name": "reads-a-derived-series",
+          "about": "derived series",
           "since": "v28",
           "given": "the plugin needs a year of a signal plugin's IV30 for an underlying",
           "expect": [
@@ -537,6 +560,7 @@
         },
         {
           "name": "reads-a-saved-scenario-set",
+          "about": "scenarios",
           "since": "v28",
           "given": "the plugin needs a saved scenario set to name it in a job",
           "expect": [
@@ -588,6 +612,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -601,6 +626,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -632,6 +658,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -848,6 +875,7 @@
         },
         {
           "name": "sends-nothing-new-on-a-pause",
+          "about": "trading instructions",
           "given": "a pause on this plugin is in force, and a placement naming it is created",
           "expect": [
             {
@@ -893,6 +921,7 @@
         },
         {
           "name": "reads-the-instrument-it-places",
+          "about": "instruments",
           "given": "a placement names an instrument by the deployment's ID",
           "expect": [
             {
@@ -902,6 +931,7 @@
         },
         {
           "name": "reads-its-placements-orders-on-start",
+          "about": "orders",
           "given": "the plugin starts, its ems having placed on it",
           "expect": [
             {
@@ -911,6 +941,7 @@
         },
         {
           "name": "catches-up-placements-after-a-loss",
+          "about": "orders",
           "given": "the plugin lost deliveries and reads the placements changed since the watermark it last saw",
           "expect": [
             {
@@ -923,6 +954,7 @@
         },
         {
           "name": "reads-the-instructions-in-force-on-start",
+          "about": "trading instructions",
           "given": "the plugin starts",
           "expect": [
             {
@@ -1152,6 +1184,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -1165,6 +1198,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -1196,6 +1230,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -1455,6 +1490,7 @@
         },
         {
           "name": "read-accounts-for-linking",
+          "about": "account links",
           "given": "an admin of the plugin opens the plugin's linking page",
           "expect": [
             {
@@ -1660,6 +1696,7 @@
         },
         {
           "name": "resolve-gives-the-currency-with-its-provenance",
+          "about": "instruments",
           "given": "the venue names a holding's security by its symbol and states its kind; it states the security's currency, or the plugin derives it by a named rule, or the plugin's admin supplied the account's currency",
           "expect": [
             {
@@ -2248,6 +2285,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -2261,6 +2299,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -2298,6 +2337,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -2581,6 +2621,7 @@
         },
         {
           "name": "a-standing-want-withdrawn",
+          "about": "wants",
           "given": "the lake withdraws a standing want no reader asked within the dataset's cadence",
           "expect": [
             {
@@ -2723,6 +2764,7 @@
         {
           "name": "a-trade-withdrawn",
           "about": "trades",
+          "about_field": "meridian.v1.Trade.cancelled",
           "since": "v19",
           "given": "the source withdraws a trade it stated before",
           "expect": [
@@ -2841,6 +2883,7 @@
         },
         {
           "name": "reads-its-datasets-licences",
+          "about": "datasets",
           "since": "v20",
           "given": "the plugin starts in a deployment where a deployment admin has licensed one of its declared datasets and not another",
           "expect": [
@@ -2967,6 +3010,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -2980,6 +3024,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -2996,6 +3041,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -3226,6 +3272,7 @@
         {
           "name": "reports-its-feed-delay",
           "since": "v27",
+          "about": "publication times",
           "given": "the plugin parses its source's messages for 10 seconds",
           "expect": [
             {
@@ -3580,6 +3627,49 @@
               }
             }
           ]
+        },
+        {
+          "name": "records-a-derived-series",
+          "since": "v28",
+          "about": "derived series",
+          "given": "the source publishes an index's level, a figure its publisher computes",
+          "expect": [
+            {
+              "row": "RecordDerivedSeries",
+              "fields": {
+                "values": [
+                  {
+                    "series": "<set>",
+                    "value": "<set>",
+                    "rule": "<set>",
+                    "published_by": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "records-a-pools-factor",
+          "since": "v29",
+          "about": "factors",
+          "given": "the agency publishes a held pool's factor for its month",
+          "expect": [
+            {
+              "row": "RecordFactors",
+              "fields": {
+                "factors": [
+                  {
+                    "meta": {
+                      "subjects": "<set>"
+                    },
+                    "factor": "<set>",
+                    "factor_month": "<set>"
+                  }
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -3590,6 +3680,7 @@
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
+          "about": "datasets",
           "given": "an ems plugin starts in a deployment where it is entitled to datasets",
           "expect": [
             {
@@ -3599,6 +3690,7 @@
         },
         {
           "name": "reads-trades-over-a-range",
+          "about": "trades",
           "given": "the plugin needs the trades of its subjects over a range within a day",
           "expect": [
             {
@@ -3613,6 +3705,7 @@
         },
         {
           "name": "hears-a-trade-recorded",
+          "about": "trades",
           "given": "the lake records a trade for a subject the plugin asked for",
           "expect": [
             {
@@ -3622,6 +3715,7 @@
         },
         {
           "name": "catches-up-trades-after-a-watermark",
+          "about": "trades",
           "given": "the plugin lost trades and reads those recorded after the watermark it last saw",
           "expect": [
             {
@@ -3635,6 +3729,7 @@
         },
         {
           "name": "reads-the-latest-quotes",
+          "about": "quotes",
           "given": "the plugin needs the latest quotes of its subjects",
           "expect": [
             {
@@ -3647,6 +3742,7 @@
         },
         {
           "name": "hears-a-quote-recorded",
+          "about": "quotes",
           "given": "the lake records a quote for a subject the plugin asked for",
           "expect": [
             {
@@ -3671,6 +3767,7 @@
         },
         {
           "name": "hears-and-reads-a-venues-catalogue",
+          "about": "venue catalogues",
           "since": "v22",
           "given": "a linked connectivity plugin publishes its catalogue, and the ems reads it for a code on start",
           "expect": [
@@ -3744,6 +3841,7 @@
         },
         {
           "name": "hears-a-placement-and-an-execution",
+          "about": "orders",
           "since": "v22",
           "given": "its placement is acknowledged and filled at the venue",
           "expect": [
@@ -3806,6 +3904,7 @@
         },
         {
           "name": "reads-its-orders-and-catches-up",
+          "about": "orders",
           "since": "v22",
           "given": "the plugin starts, and later lost deliveries",
           "expect": [
@@ -3822,6 +3921,7 @@
         },
         {
           "name": "reads-and-hears-the-trading-instructions",
+          "about": "trading instructions",
           "since": "v22",
           "given": "the plugin starts, and later a connectivity plugin it routes to is stopped",
           "expect": [
@@ -3835,6 +3935,7 @@
         },
         {
           "name": "reads-and-hears-whether-releases-wait-for-compliance",
+          "about": "account attributes",
           "since": "v22",
           "given": "the plugin starts, and later an account's attributes change",
           "expect": [
@@ -3946,6 +4047,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -3959,6 +4061,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -3975,6 +4078,7 @@
         },
         {
           "name": "reads-whether-orders-may-name-local-records",
+          "about": "order settings",
           "since": "v24",
           "given": "the plugin is about to propose or accept on an instrument whose record is provisional, and shows a person whether the deployment's escape hatch is on",
           "expect": [
@@ -3985,6 +4089,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -4001,6 +4106,7 @@
         },
         {
           "name": "reads-the-agents-guard",
+          "about": "order settings",
           "since": "v26",
           "given": "the plugin starts, and shows a person before an agent's act whether a live connection would refuse it",
           "expect": [
@@ -4090,6 +4196,7 @@
         },
         {
           "name": "queries-the-lake-within-bounds",
+          "about": "lake queries",
           "since": "v26",
           "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
           "expect": [
@@ -4105,6 +4212,7 @@
         },
         {
           "name": "hears-a-datasets-liveness",
+          "about": "liveness",
           "since": "v27",
           "given": "a stream entitled to the plugin sends a heartbeat while its quotes are unchanged",
           "expect": [
@@ -4115,6 +4223,7 @@
         },
         {
           "name": "reports-its-pre-trade-checks-data-age",
+          "about": "pre-trade price checks",
           "since": "v27",
           "given": "the plugin checks reference prices before placements over 10 seconds",
           "expect": [
@@ -4135,6 +4244,7 @@
         },
         {
           "name": "reads-an-accounts-execution-costs",
+          "about": "execution costs",
           "since": "v27",
           "given": "the plugin shows an account's costs against arrival for a trade date",
           "expect": [
@@ -4163,6 +4273,7 @@
         },
         {
           "name": "asks-for-a-series-it-wants-to-order",
+          "about": "listed series",
           "since": "v28",
           "given": "the plugin wants to propose an order on a listed series the deployment does not hold",
           "expect": [
@@ -4182,6 +4293,7 @@
         },
         {
           "name": "reads-an-underlyings-chain",
+          "about": "option chains",
           "since": "v28",
           "given": "the plugin needs the listed series of an underlying for one expiration",
           "expect": [
@@ -4196,7 +4308,33 @@
           ]
         },
         {
+          "name": "reads-an-underlyings-expirations",
+          "about": "option chains",
+          "since": "v28",
+          "given": "the plugin needs the expirations an underlying lists, to choose one before reading its series",
+          "expect": [
+            {
+              "row": "ListExpirations",
+              "fields": {
+                "underlying_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-listed-series",
+          "about": "listed series",
+          "since": "v28",
+          "given": "the plugin keeps a copy of a chain and must follow new and changed series",
+          "expect": [
+            {
+              "row": "SeriesRecorded"
+            }
+          ]
+        },
+        {
           "name": "reads-the-stale-reference-actions-permitted",
+          "about": "order settings",
           "since": "v28",
           "given": "the plugin is about to place on a reference price past its ceiling",
           "expect": [
@@ -4366,6 +4504,7 @@
         },
         {
           "name": "hears-a-locate-answered",
+          "about": "locates",
           "given": "the prime answers a locate on an account in the plugin's scope",
           "expect": [
             {
@@ -4375,6 +4514,7 @@
         },
         {
           "name": "hears-and-reads-a-venues-catalogue",
+          "about": "venue catalogues",
           "given": "a connectivity plugin publishes its catalogue, and the oms reads it for a code",
           "expect": [
             {
@@ -4391,6 +4531,7 @@
         },
         {
           "name": "reads-orders-and-catches-up",
+          "about": "orders",
           "given": "the plugin starts, and later lost deliveries",
           "expect": [
             {
@@ -4406,6 +4547,7 @@
         },
         {
           "name": "hears-a-placement-and-an-execution",
+          "about": "orders",
           "given": "an order the oms released is placed and filled",
           "expect": [
             {
@@ -4418,6 +4560,7 @@
         },
         {
           "name": "reads-an-orders-history",
+          "about": "orders",
           "given": "a person reviews one order",
           "expect": [
             {
@@ -4431,6 +4574,7 @@
         },
         {
           "name": "reads-and-hears-the-trading-instructions",
+          "about": "trading instructions",
           "given": "the plugin starts, and a deployment admin later pauses an account",
           "expect": [
             {
@@ -4474,6 +4618,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -4487,6 +4632,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -4650,6 +4796,7 @@
         },
         {
           "name": "reads-bookings-and-catches-up",
+          "about": "bookings",
           "since": "v24",
           "given": "the plugin starts, and later lost deliveries",
           "expect": [
@@ -4676,6 +4823,7 @@
         },
         {
           "name": "hears-and-reads-a-held-bookings-alert",
+          "about": "alerts",
           "since": "v24",
           "given": "a booking is held, and the plugin later reads the account's alerts",
           "expect": [
@@ -4689,6 +4837,7 @@
         },
         {
           "name": "reads-whether-orders-may-name-local-records",
+          "about": "order settings",
           "since": "v24",
           "given": "the plugin is about to propose or accept on an instrument whose record is provisional, and shows a person whether the deployment's escape hatch is on",
           "expect": [
@@ -4699,6 +4848,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -4715,6 +4865,7 @@
         },
         {
           "name": "reads-the-agents-guard",
+          "about": "order settings",
           "since": "v26",
           "given": "the plugin starts, and shows a person before an agent's act whether a live connection would refuse it",
           "expect": [
@@ -4725,6 +4876,7 @@
         },
         {
           "name": "reads-an-accounts-execution-costs",
+          "about": "execution costs",
           "since": "v27",
           "given": "the plugin shows an account's costs against arrival for a trade date",
           "expect": [
@@ -4754,6 +4906,7 @@
         },
         {
           "name": "asks-for-a-series-it-wants-to-order",
+          "about": "listed series",
           "since": "v28",
           "given": "the plugin wants to propose an order on a listed series the deployment does not hold",
           "expect": [
@@ -4773,6 +4926,7 @@
         },
         {
           "name": "reads-an-underlyings-chain",
+          "about": "option chains",
           "since": "v28",
           "given": "the plugin needs the listed series of an underlying for one expiration",
           "expect": [
@@ -4783,6 +4937,31 @@
                 "expiration_from": "<set>",
                 "expiration_to": "<set>"
               }
+            }
+          ]
+        },
+        {
+          "name": "reads-an-underlyings-expirations",
+          "about": "option chains",
+          "since": "v28",
+          "given": "the plugin needs the expirations an underlying lists, to choose one before reading its series",
+          "expect": [
+            {
+              "row": "ListExpirations",
+              "fields": {
+                "underlying_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-listed-series",
+          "about": "listed series",
+          "since": "v28",
+          "given": "the plugin keeps a copy of a chain and must follow new and changed series",
+          "expect": [
+            {
+              "row": "SeriesRecorded"
             }
           ]
         }
@@ -4870,6 +5049,7 @@
         },
         {
           "name": "activity-books-nothing",
+          "about": "activity",
           "given": "an activity is recorded on an account with no open break it explains",
           "expect": [
             {
@@ -4887,6 +5067,7 @@
         },
         {
           "name": "reads-each-connections-sync-status-on-start",
+          "about": "sync statuses",
           "given": "an operations plugin starts with accounts in its read scope",
           "expect": [
             {
@@ -4896,6 +5077,7 @@
         },
         {
           "name": "a-sync-status-books-nothing",
+          "about": "sync statuses",
           "given": "a sync status is recorded on an account saying a person must sign in again at the venue\n",
           "expect": [
             {
@@ -4913,6 +5095,7 @@
         },
         {
           "name": "hears-an-unplaced-fact",
+          "about": "orders",
           "since": "v22",
           "given": "a venue's fact names nothing the book holds on an account in the plugin's scope",
           "expect": [
@@ -4937,6 +5120,7 @@
         },
         {
           "name": "hears-an-order-and-an-execution",
+          "about": "orders",
           "since": "v22",
           "given": "an order in the plugin's scope is filled",
           "expect": [
@@ -4950,6 +5134,7 @@
         },
         {
           "name": "reads-orders-and-an-orders-history",
+          "about": "orders",
           "since": "v22",
           "given": "the plugin reconciles an account's fills, and reviews one order",
           "expect": [
@@ -4970,6 +5155,7 @@
         },
         {
           "name": "re-checks-a-pending-value-date",
+          "about": "settlement dates",
           "since": "v22",
           "given": "the plugin re-checks a pending value date on the calendars it names",
           "expect": [
@@ -5040,6 +5226,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -5053,6 +5240,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -5119,6 +5307,7 @@
         },
         {
           "name": "hears-a-booking-handed-off",
+          "about": "bookings",
           "since": "v24",
           "given": "the oms hands a booking off to the firm's operations",
           "expect": [
@@ -5129,6 +5318,7 @@
         },
         {
           "name": "hears-and-reads-a-held-bookings-alert",
+          "about": "alerts",
           "since": "v24",
           "given": "a booking is held against the affirmation deadline the plugin declares",
           "expect": [
@@ -5142,6 +5332,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -5158,6 +5349,7 @@
         },
         {
           "name": "queries-the-lake-within-bounds",
+          "about": "lake queries",
           "since": "v26",
           "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
           "expect": [
@@ -5173,6 +5365,7 @@
         },
         {
           "name": "reads-an-accounts-execution-costs",
+          "about": "execution costs",
           "since": "v27",
           "given": "the plugin shows an account's costs against arrival for a trade date",
           "expect": [
@@ -5187,6 +5380,7 @@
         },
         {
           "name": "reads-a-trade-dates-fx-close",
+          "about": "prices",
           "since": "v27",
           "given": "the plugin values a foreign-cash cost basis at the trade date's FX close",
           "expect": [
@@ -5204,6 +5398,7 @@
         },
         {
           "name": "releases-an-unreported-expiry",
+          "about": "lifecycle events",
           "since": "v28",
           "given": "a proposed expiry has no report by the morning after and the statement no longer shows the position",
           "expect": [
@@ -5218,6 +5413,7 @@
         },
         {
           "name": "reads-an-accounts-lifecycle-events",
+          "about": "lifecycle events",
           "since": "v28",
           "given": "the plugin needs an account's exercises, assignments and expiries for a week",
           "expect": [
@@ -5233,11 +5429,37 @@
         },
         {
           "name": "hears-a-lifecycle-event-recorded",
+          "about": "lifecycle events",
           "since": "v28",
           "given": "the book records an assignment in an account within the plugin's scope",
           "expect": [
             {
               "row": "LifecycleEventRecorded"
+            }
+          ]
+        },
+        {
+          "name": "reads-a-pools-factors",
+          "since": "v29",
+          "about": "factors",
+          "given": "the plugin needs a held pool's factor history",
+          "expect": [
+            {
+              "row": "ListFactors",
+              "fields": {
+                "subjects": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-factor-recorded",
+          "since": "v29",
+          "about": "factors",
+          "given": "the lake records the agency's monthly factor for a pool the plugin asked for",
+          "expect": [
+            {
+              "row": "FactorsRecorded"
             }
           ]
         }
@@ -5250,6 +5472,7 @@
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
+          "about": "datasets",
           "given": "a portfolio plugin starts in a deployment where it is entitled to datasets",
           "expect": [
             {
@@ -5259,6 +5482,7 @@
         },
         {
           "name": "reads-a-business-dates-closes",
+          "about": "prices",
           "given": "the plugin needs the closes of its subjects for a business date",
           "expect": [
             {
@@ -5275,6 +5499,7 @@
         },
         {
           "name": "hears-a-price-recorded",
+          "about": "prices",
           "given": "the lake records a close for a subject the plugin asked for",
           "expect": [
             {
@@ -5284,6 +5509,7 @@
         },
         {
           "name": "reads-daily-bars-over-a-range",
+          "about": "bars",
           "given": "the plugin needs daily bars of its subjects over a range",
           "expect": [
             {
@@ -5298,6 +5524,7 @@
         },
         {
           "name": "hears-a-bar-recorded",
+          "about": "bars",
           "given": "the lake records a bar for a subject the plugin asked for",
           "expect": [
             {
@@ -5354,6 +5581,7 @@
         },
         {
           "name": "hears-its-order-and-its-fills",
+          "about": "orders",
           "since": "v22",
           "given": "an order the plugin proposed is released and filled",
           "expect": [
@@ -5367,6 +5595,7 @@
         },
         {
           "name": "reads-orders-and-catches-up",
+          "about": "orders",
           "since": "v22",
           "given": "the plugin starts, and later lost deliveries",
           "expect": [
@@ -5383,6 +5612,7 @@
         },
         {
           "name": "reads-and-hears-the-locates",
+          "about": "locates",
           "since": "v22",
           "given": "the plugin decides a short sale on an account with locates",
           "expect": [
@@ -5399,6 +5629,7 @@
         },
         {
           "name": "reads-and-hears-the-trading-instructions",
+          "about": "trading instructions",
           "since": "v22",
           "given": "the plugin starts, and a deployment admin later pauses an account",
           "expect": [
@@ -5459,6 +5690,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -5472,6 +5704,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -5503,6 +5736,7 @@
         },
         {
           "name": "hears-and-reads-bookings",
+          "about": "bookings",
           "since": "v24",
           "given": "an order the PM proposed is booked to its accounts",
           "expect": [
@@ -5516,6 +5750,7 @@
         },
         {
           "name": "reads-whether-orders-may-name-local-records",
+          "about": "order settings",
           "since": "v24",
           "given": "the plugin is about to propose or accept on an instrument whose record is provisional, and shows a person whether the deployment's escape hatch is on",
           "expect": [
@@ -5526,6 +5761,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -5542,6 +5778,7 @@
         },
         {
           "name": "runs-a-job-and-reads-its-answer",
+          "about": "analytic jobs",
           "since": "v26",
           "given": "the plugin asks the analytics component for a measure over accounts in its scope, answered inline when small and later when large",
           "expect": [
@@ -5570,6 +5807,7 @@
         },
         {
           "name": "catches-up-finished-jobs",
+          "about": "analytic jobs",
           "since": "v26",
           "given": "the plugin lost a job's finishing and reads the jobs finished after the last sequence it saw",
           "expect": [
@@ -5583,6 +5821,7 @@
         },
         {
           "name": "reads-the-agents-guard",
+          "about": "order settings",
           "since": "v26",
           "given": "the plugin starts, and shows a person before an agent's act whether a live connection would refuse it",
           "expect": [
@@ -5593,6 +5832,7 @@
         },
         {
           "name": "queries-the-lake-within-bounds",
+          "about": "lake queries",
           "since": "v26",
           "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
           "expect": [
@@ -5608,6 +5848,7 @@
         },
         {
           "name": "reads-a-curve-for-a-date",
+          "about": "rates",
           "since": "v27",
           "given": "the plugin needs a rate curve's points for a business date",
           "expect": [
@@ -5622,6 +5863,7 @@
         },
         {
           "name": "hears-a-rate-recorded",
+          "about": "rates",
           "since": "v27",
           "given": "the lake records a rate for a subject the plugin asked for",
           "expect": [
@@ -5632,6 +5874,7 @@
         },
         {
           "name": "hears-a-datasets-liveness",
+          "about": "liveness",
           "since": "v27",
           "given": "a stream entitled to the plugin sends a heartbeat while its quotes are unchanged",
           "expect": [
@@ -5642,6 +5885,7 @@
         },
         {
           "name": "reads-an-accounts-execution-costs",
+          "about": "execution costs",
           "since": "v27",
           "given": "the plugin shows an account's costs against arrival for a trade date",
           "expect": [
@@ -5656,6 +5900,7 @@
         },
         {
           "name": "asks-for-a-series-it-wants-to-order",
+          "about": "listed series",
           "since": "v28",
           "given": "the plugin wants to propose an order on a listed series the deployment does not hold",
           "expect": [
@@ -5675,6 +5920,7 @@
         },
         {
           "name": "reads-an-underlyings-chain",
+          "about": "option chains",
           "since": "v28",
           "given": "the plugin needs the listed series of an underlying for one expiration",
           "expect": [
@@ -5689,7 +5935,33 @@
           ]
         },
         {
+          "name": "reads-an-underlyings-expirations",
+          "about": "option chains",
+          "since": "v28",
+          "given": "the plugin needs the expirations an underlying lists, to choose one before reading its series",
+          "expect": [
+            {
+              "row": "ListExpirations",
+              "fields": {
+                "underlying_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-listed-series",
+          "about": "listed series",
+          "since": "v28",
+          "given": "the plugin keeps a copy of a chain and must follow new and changed series",
+          "expect": [
+            {
+              "row": "SeriesRecorded"
+            }
+          ]
+        },
+        {
           "name": "reads-open-interest-for-a-chain",
+          "about": "statistics",
           "since": "v28",
           "given": "the plugin needs the prior night's open interest of an underlying's chain",
           "expect": [
@@ -5707,6 +5979,7 @@
         },
         {
           "name": "hears-a-statistic-recorded",
+          "about": "statistics",
           "since": "v28",
           "given": "the lake records open interest for a series of an underlying the plugin asked for",
           "expect": [
@@ -5717,6 +5990,7 @@
         },
         {
           "name": "reads-an-accounts-lifecycle-events",
+          "about": "lifecycle events",
           "since": "v28",
           "given": "the plugin needs an account's exercises, assignments and expiries for a week",
           "expect": [
@@ -5732,6 +6006,7 @@
         },
         {
           "name": "hears-a-lifecycle-event-recorded",
+          "about": "lifecycle events",
           "since": "v28",
           "given": "the book records an assignment in an account within the plugin's scope",
           "expect": [
@@ -5742,6 +6017,7 @@
         },
         {
           "name": "proposes-a-package",
+          "about": "packages",
           "since": "v28",
           "given": "the plugin proposes a vertical spread",
           "expect": [
@@ -5764,6 +6040,7 @@
         },
         {
           "name": "reads-a-derived-series",
+          "about": "derived series",
           "since": "v28",
           "given": "the plugin needs a year of a signal plugin's IV30 for an underlying",
           "expect": [
@@ -5778,6 +6055,7 @@
         },
         {
           "name": "reads-a-saved-scenario-set",
+          "about": "scenarios",
           "since": "v28",
           "given": "the plugin needs a saved scenario set to name it in a job",
           "expect": [
@@ -5791,6 +6069,7 @@
         },
         {
           "name": "reads-a-companys-filings",
+          "about": "filings",
           "since": "v28",
           "given": "the plugin needs a company's 8-K report dates",
           "expect": [
@@ -5805,6 +6084,7 @@
         },
         {
           "name": "reads-reported-facts",
+          "about": "facts",
           "since": "v28",
           "given": "the plugin needs a company's reported EPS history",
           "expect": [
@@ -5818,6 +6098,7 @@
         },
         {
           "name": "reads-who-holds-a-security",
+          "about": "holdings",
           "since": "v28",
           "given": "the plugin needs a security's 13F holders for a quarter",
           "expect": [
@@ -5831,6 +6112,7 @@
         },
         {
           "name": "reads-declared-dividends",
+          "about": "declared dividends",
           "since": "v28",
           "given": "the plugin needs an equity's declared dividends ahead",
           "expect": [
@@ -5845,6 +6127,7 @@
         },
         {
           "name": "reads-a-rating-history",
+          "about": "ratings",
           "since": "v28",
           "given": "the plugin needs an issuer's rating history",
           "expect": [
@@ -5853,6 +6136,31 @@
               "fields": {
                 "subjects": "<set>"
               }
+            }
+          ]
+        },
+        {
+          "name": "reads-a-pools-factors",
+          "since": "v29",
+          "about": "factors",
+          "given": "the plugin needs a held pool's factor history",
+          "expect": [
+            {
+              "row": "ListFactors",
+              "fields": {
+                "subjects": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-factor-recorded",
+          "since": "v29",
+          "about": "factors",
+          "given": "the lake records the agency's monthly factor for a pool the plugin asked for",
+          "expect": [
+            {
+              "row": "FactorsRecorded"
             }
           ]
         }
@@ -5938,6 +6246,7 @@
         },
         {
           "name": "reads-the-batches-waiting-after-a-restart",
+          "about": "analytic jobs",
           "since": "v26",
           "given": "the plugin restarts with batches routed to it unanswered",
           "expect": [
@@ -6003,6 +6312,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "given": "a record the plugin offered fields for is replaced, and the plugin later catches up after a loss",
           "expect": [
             {
@@ -6015,6 +6325,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "given": "the plugin starts and lists the templates for the classes it serves",
           "expect": [
             {
@@ -6055,6 +6366,7 @@
         },
         {
           "name": "reads-the-record-it-fills",
+          "about": "instruments",
           "since": "v24",
           "given": "the plugin is about to offer fields for a record the deployment holds, and reads its values and offers first",
           "expect": [
@@ -6068,6 +6380,7 @@
         },
         {
           "name": "resolves-a-security-it-reconciles",
+          "about": "instruments",
           "since": "v24",
           "given": "the plugin's sources name a security by an open identifier, and it finds the deployment's record, read-only",
           "expect": [
@@ -6081,6 +6394,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -6104,6 +6418,7 @@
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
+          "about": "datasets",
           "given": "a reporting plugin starts in a deployment where it is entitled to datasets",
           "expect": [
             {
@@ -6113,6 +6428,7 @@
         },
         {
           "name": "reads-a-business-dates-closes",
+          "about": "prices",
           "given": "the plugin needs the closes of its subjects for a business date",
           "expect": [
             {
@@ -6129,6 +6445,7 @@
         },
         {
           "name": "hears-a-price-recorded",
+          "about": "prices",
           "given": "the lake records a close for a subject the plugin asked for",
           "expect": [
             {
@@ -6138,6 +6455,7 @@
         },
         {
           "name": "reads-daily-bars-over-a-range",
+          "about": "bars",
           "given": "the plugin needs daily bars of its subjects over a range",
           "expect": [
             {
@@ -6152,6 +6470,7 @@
         },
         {
           "name": "hears-a-bar-recorded",
+          "about": "bars",
           "given": "the lake records a bar for a subject the plugin asked for",
           "expect": [
             {
@@ -6161,6 +6480,7 @@
         },
         {
           "name": "resolves-its-reporting-currency",
+          "about": "instruments",
           "since": "v19",
           "given": "the plugin's reporting currency is set by its ISO 4217 code, and no holding names that currency's cash instrument",
           "expect": [
@@ -6179,6 +6499,7 @@
         },
         {
           "name": "reads-orders-and-catches-up",
+          "about": "orders",
           "since": "v22",
           "given": "the plugin starts, and later lost deliveries",
           "expect": [
@@ -6195,6 +6516,7 @@
         },
         {
           "name": "hears-an-order-and-an-execution",
+          "about": "orders",
           "since": "v22",
           "given": "an order in the plugin's scope is filled",
           "expect": [
@@ -6208,6 +6530,7 @@
         },
         {
           "name": "reads-an-orders-history-for-the-person-roles",
+          "about": "orders",
           "since": "v22",
           "given": "the plugin reports who decided and who executed an order",
           "expect": [
@@ -6269,6 +6592,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -6282,6 +6606,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -6298,6 +6623,7 @@
         },
         {
           "name": "hears-and-reads-bookings",
+          "about": "bookings",
           "since": "v24",
           "given": "an order is booked to its accounts, and the plugin reports each allocation",
           "expect": [
@@ -6311,6 +6637,7 @@
         },
         {
           "name": "hears-and-reads-alerts",
+          "about": "alerts",
           "since": "v24",
           "given": "an error-account booking raises an alert, and a person's report lists them",
           "expect": [
@@ -6324,6 +6651,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -6340,6 +6668,7 @@
         },
         {
           "name": "runs-a-job-and-reads-its-answer",
+          "about": "analytic jobs",
           "since": "v26",
           "given": "the plugin asks the analytics component for a measure over accounts in its scope, answered inline when small and later when large",
           "expect": [
@@ -6368,6 +6697,7 @@
         },
         {
           "name": "catches-up-finished-jobs",
+          "about": "analytic jobs",
           "since": "v26",
           "given": "the plugin lost a job's finishing and reads the jobs finished after the last sequence it saw",
           "expect": [
@@ -6381,6 +6711,7 @@
         },
         {
           "name": "queries-the-lake-within-bounds",
+          "about": "lake queries",
           "since": "v26",
           "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
           "expect": [
@@ -6396,6 +6727,7 @@
         },
         {
           "name": "reads-a-curve-for-a-date",
+          "about": "rates",
           "since": "v27",
           "given": "the plugin needs a rate curve's points for a business date",
           "expect": [
@@ -6410,6 +6742,7 @@
         },
         {
           "name": "hears-a-rate-recorded",
+          "about": "rates",
           "since": "v27",
           "given": "the lake records a rate for a subject the plugin asked for",
           "expect": [
@@ -6420,6 +6753,7 @@
         },
         {
           "name": "hears-a-datasets-liveness",
+          "about": "liveness",
           "since": "v27",
           "given": "a stream entitled to the plugin sends a heartbeat while its quotes are unchanged",
           "expect": [
@@ -6430,6 +6764,7 @@
         },
         {
           "name": "reads-an-accounts-execution-costs",
+          "about": "execution costs",
           "since": "v27",
           "given": "the plugin shows an account's costs against arrival for a trade date",
           "expect": [
@@ -6444,6 +6779,7 @@
         },
         {
           "name": "reads-open-interest-for-a-chain",
+          "about": "statistics",
           "since": "v28",
           "given": "the plugin needs the prior night's open interest of an underlying's chain",
           "expect": [
@@ -6461,6 +6797,7 @@
         },
         {
           "name": "hears-a-statistic-recorded",
+          "about": "statistics",
           "since": "v28",
           "given": "the lake records open interest for a series of an underlying the plugin asked for",
           "expect": [
@@ -6471,6 +6808,7 @@
         },
         {
           "name": "reads-an-accounts-lifecycle-events",
+          "about": "lifecycle events",
           "since": "v28",
           "given": "the plugin needs an account's exercises, assignments and expiries for a week",
           "expect": [
@@ -6486,6 +6824,7 @@
         },
         {
           "name": "hears-a-lifecycle-event-recorded",
+          "about": "lifecycle events",
           "since": "v28",
           "given": "the book records an assignment in an account within the plugin's scope",
           "expect": [
@@ -6496,6 +6835,7 @@
         },
         {
           "name": "reads-a-derived-series",
+          "about": "derived series",
           "since": "v28",
           "given": "the plugin needs a year of a signal plugin's IV30 for an underlying",
           "expect": [
@@ -6510,6 +6850,7 @@
         },
         {
           "name": "reads-a-saved-scenario-set",
+          "about": "scenarios",
           "since": "v28",
           "given": "the plugin needs a saved scenario set to name it in a job",
           "expect": [
@@ -6523,6 +6864,7 @@
         },
         {
           "name": "reads-a-companys-filings",
+          "about": "filings",
           "since": "v28",
           "given": "the plugin needs a company's 8-K report dates",
           "expect": [
@@ -6537,6 +6879,7 @@
         },
         {
           "name": "reads-reported-facts",
+          "about": "facts",
           "since": "v28",
           "given": "the plugin needs a company's reported EPS history",
           "expect": [
@@ -6550,6 +6893,7 @@
         },
         {
           "name": "reads-who-holds-a-security",
+          "about": "holdings",
           "since": "v28",
           "given": "the plugin needs a security's 13F holders for a quarter",
           "expect": [
@@ -6563,6 +6907,7 @@
         },
         {
           "name": "reads-declared-dividends",
+          "about": "declared dividends",
           "since": "v28",
           "given": "the plugin needs an equity's declared dividends ahead",
           "expect": [
@@ -6577,6 +6922,7 @@
         },
         {
           "name": "reads-a-rating-history",
+          "about": "ratings",
           "since": "v28",
           "given": "the plugin needs an issuer's rating history",
           "expect": [
@@ -6590,6 +6936,7 @@
         },
         {
           "name": "hears-a-filing-recorded",
+          "about": "filings",
           "since": "v28",
           "given": "the lake records a filing for a company the plugin asked for",
           "expect": [
@@ -6600,11 +6947,37 @@
         },
         {
           "name": "hears-a-dividend-declared",
+          "about": "declared dividends",
           "since": "v28",
           "given": "the lake records a declared dividend for an equity the plugin asked for",
           "expect": [
             {
               "row": "CorporateActionsRecorded"
+            }
+          ]
+        },
+        {
+          "name": "reads-a-pools-factors",
+          "since": "v29",
+          "about": "factors",
+          "given": "the plugin needs a held pool's factor history",
+          "expect": [
+            {
+              "row": "ListFactors",
+              "fields": {
+                "subjects": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-factor-recorded",
+          "since": "v29",
+          "about": "factors",
+          "given": "the lake records the agency's monthly factor for a pool the plugin asked for",
+          "expect": [
+            {
+              "row": "FactorsRecorded"
             }
           ]
         }
@@ -6648,6 +7021,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -6661,6 +7035,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -6677,6 +7052,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -6712,6 +7088,7 @@
         },
         {
           "name": "reads-an-accounts-lifecycle-events",
+          "about": "lifecycle events",
           "since": "v28",
           "given": "the plugin needs an account's exercises, assignments and expiries for a week",
           "expect": [
@@ -6727,11 +7104,37 @@
         },
         {
           "name": "hears-a-lifecycle-event-recorded",
+          "about": "lifecycle events",
           "since": "v28",
           "given": "the book records an assignment in an account within the plugin's scope",
           "expect": [
             {
               "row": "LifecycleEventRecorded"
+            }
+          ]
+        },
+        {
+          "name": "reads-a-pools-factors",
+          "since": "v29",
+          "about": "factors",
+          "given": "the plugin needs a held pool's factor history",
+          "expect": [
+            {
+              "row": "ListFactors",
+              "fields": {
+                "subjects": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-factor-recorded",
+          "since": "v29",
+          "about": "factors",
+          "given": "the lake records the agency's monthly factor for a pool the plugin asked for",
+          "expect": [
+            {
+              "row": "FactorsRecorded"
             }
           ]
         }
@@ -6775,6 +7178,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -6788,6 +7192,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -6804,6 +7209,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -6827,6 +7233,7 @@
       "cases": [
         {
           "name": "reads-the-datasets-it-may-read",
+          "about": "datasets",
           "given": "a signal plugin starts in a deployment where it is entitled to datasets",
           "expect": [
             {
@@ -6836,6 +7243,7 @@
         },
         {
           "name": "reads-a-business-dates-closes",
+          "about": "prices",
           "given": "the plugin needs the closes of its subjects for a business date",
           "expect": [
             {
@@ -6852,6 +7260,7 @@
         },
         {
           "name": "hears-a-price-recorded",
+          "about": "prices",
           "given": "the lake records a close for a subject the plugin asked for",
           "expect": [
             {
@@ -6861,6 +7270,7 @@
         },
         {
           "name": "reads-daily-bars-over-a-range",
+          "about": "bars",
           "given": "the plugin needs daily bars of its subjects over a range",
           "expect": [
             {
@@ -6875,6 +7285,7 @@
         },
         {
           "name": "hears-a-bar-recorded",
+          "about": "bars",
           "given": "the lake records a bar for a subject the plugin asked for",
           "expect": [
             {
@@ -6884,6 +7295,7 @@
         },
         {
           "name": "reads-trades-over-a-range",
+          "about": "trades",
           "since": "v19",
           "given": "the plugin needs the trades of its subjects over a range within a day",
           "expect": [
@@ -6899,6 +7311,7 @@
         },
         {
           "name": "hears-a-trade-recorded",
+          "about": "trades",
           "since": "v19",
           "given": "the lake records a trade for a subject the plugin asked for",
           "expect": [
@@ -6909,6 +7322,7 @@
         },
         {
           "name": "catches-up-trades-after-a-watermark",
+          "about": "trades",
           "since": "v19",
           "given": "the plugin lost trades and reads those recorded after the watermark it last saw",
           "expect": [
@@ -6923,6 +7337,7 @@
         },
         {
           "name": "reads-the-latest-quotes",
+          "about": "quotes",
           "since": "v19",
           "given": "the plugin needs the latest quotes of its subjects",
           "expect": [
@@ -6936,6 +7351,7 @@
         },
         {
           "name": "hears-a-quote-recorded",
+          "about": "quotes",
           "since": "v19",
           "given": "the lake records a quote for a subject the plugin asked for",
           "expect": [
@@ -6993,6 +7409,7 @@
         },
         {
           "name": "hears-and-reads-a-replacement",
+          "about": "replacements",
           "since": "v24",
           "given": "a record the plugin names is replaced -- a provisional record resolved, merged by a person or on the platform -- and the plugin later catches up after a loss",
           "expect": [
@@ -7006,6 +7423,7 @@
         },
         {
           "name": "reads-the-template-catalogue",
+          "about": "templates",
           "since": "v24",
           "given": "the plugin needs the fields and match rule of the template a security is minted against",
           "expect": [
@@ -7022,6 +7440,7 @@
         },
         {
           "name": "hears-and-reads-an-event-group",
+          "about": "event groups",
           "since": "v26",
           "given": "an event group holding an instrument the plugin names reaches a new version, and the plugin reads the groups in force at a time, or catches up after a loss",
           "expect": [
@@ -7038,6 +7457,7 @@
         },
         {
           "name": "runs-a-job-and-reads-its-answer",
+          "about": "analytic jobs",
           "since": "v26",
           "given": "the plugin asks the analytics component for a measure over accounts in its scope, answered inline when small and later when large",
           "expect": [
@@ -7066,6 +7486,7 @@
         },
         {
           "name": "catches-up-finished-jobs",
+          "about": "analytic jobs",
           "since": "v26",
           "given": "the plugin lost a job's finishing and reads the jobs finished after the last sequence it saw",
           "expect": [
@@ -7079,6 +7500,7 @@
         },
         {
           "name": "queries-the-lake-within-bounds",
+          "about": "lake queries",
           "since": "v26",
           "given": "the plugin asks one bounded query of a kind its role reads, naming the fields it wants and a row limit",
           "expect": [
@@ -7094,6 +7516,7 @@
         },
         {
           "name": "reads-a-curve-for-a-date",
+          "about": "rates",
           "since": "v27",
           "given": "the plugin needs a rate curve's points for a business date",
           "expect": [
@@ -7108,6 +7531,7 @@
         },
         {
           "name": "hears-a-rate-recorded",
+          "about": "rates",
           "since": "v27",
           "given": "the lake records a rate for a subject the plugin asked for",
           "expect": [
@@ -7118,6 +7542,7 @@
         },
         {
           "name": "hears-a-datasets-liveness",
+          "about": "liveness",
           "since": "v27",
           "given": "a stream entitled to the plugin sends a heartbeat while its quotes are unchanged",
           "expect": [
@@ -7128,6 +7553,7 @@
         },
         {
           "name": "reads-an-accounts-execution-costs",
+          "about": "execution costs",
           "since": "v27",
           "given": "the plugin shows an account's costs against arrival for a trade date",
           "expect": [
@@ -7142,6 +7568,7 @@
         },
         {
           "name": "asks-for-a-series-it-wants-to-order",
+          "about": "listed series",
           "since": "v28",
           "given": "the plugin wants to propose an order on a listed series the deployment does not hold",
           "expect": [
@@ -7161,6 +7588,7 @@
         },
         {
           "name": "reads-an-underlyings-chain",
+          "about": "option chains",
           "since": "v28",
           "given": "the plugin needs the listed series of an underlying for one expiration",
           "expect": [
@@ -7175,7 +7603,33 @@
           ]
         },
         {
+          "name": "reads-an-underlyings-expirations",
+          "about": "option chains",
+          "since": "v28",
+          "given": "the plugin needs the expirations an underlying lists, to choose one before reading its series",
+          "expect": [
+            {
+              "row": "ListExpirations",
+              "fields": {
+                "underlying_id": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-listed-series",
+          "about": "listed series",
+          "since": "v28",
+          "given": "the plugin keeps a copy of a chain and must follow new and changed series",
+          "expect": [
+            {
+              "row": "SeriesRecorded"
+            }
+          ]
+        },
+        {
           "name": "reads-open-interest-for-a-chain",
+          "about": "statistics",
           "since": "v28",
           "given": "the plugin needs the prior night's open interest of an underlying's chain",
           "expect": [
@@ -7193,6 +7647,7 @@
         },
         {
           "name": "hears-a-statistic-recorded",
+          "about": "statistics",
           "since": "v28",
           "given": "the lake records open interest for a series of an underlying the plugin asked for",
           "expect": [
@@ -7244,6 +7699,7 @@
         },
         {
           "name": "reads-a-derived-series",
+          "about": "derived series",
           "since": "v28",
           "given": "the plugin needs a year of a signal plugin's IV30 for an underlying",
           "expect": [
@@ -7258,6 +7714,7 @@
         },
         {
           "name": "reads-a-saved-scenario-set",
+          "about": "scenarios",
           "since": "v28",
           "given": "the plugin needs a saved scenario set to name it in a job",
           "expect": [
@@ -7271,6 +7728,7 @@
         },
         {
           "name": "reads-a-companys-filings",
+          "about": "filings",
           "since": "v28",
           "given": "the plugin needs a company's 8-K report dates",
           "expect": [
@@ -7285,6 +7743,7 @@
         },
         {
           "name": "reads-reported-facts",
+          "about": "facts",
           "since": "v28",
           "given": "the plugin needs a company's reported EPS history",
           "expect": [
@@ -7298,6 +7757,7 @@
         },
         {
           "name": "reads-who-holds-a-security",
+          "about": "holdings",
           "since": "v28",
           "given": "the plugin needs a security's 13F holders for a quarter",
           "expect": [
@@ -7311,6 +7771,7 @@
         },
         {
           "name": "reads-declared-dividends",
+          "about": "declared dividends",
           "since": "v28",
           "given": "the plugin needs an equity's declared dividends ahead",
           "expect": [
@@ -7325,6 +7786,7 @@
         },
         {
           "name": "reads-a-rating-history",
+          "about": "ratings",
           "since": "v28",
           "given": "the plugin needs an issuer's rating history",
           "expect": [
@@ -7338,6 +7800,7 @@
         },
         {
           "name": "hears-a-filing-recorded",
+          "about": "filings",
           "since": "v28",
           "given": "the lake records a filing for a company the plugin asked for",
           "expect": [
@@ -7348,6 +7811,7 @@
         },
         {
           "name": "hears-a-dividend-declared",
+          "about": "declared dividends",
           "since": "v28",
           "given": "the lake records a declared dividend for an equity the plugin asked for",
           "expect": [
@@ -7377,6 +7841,31 @@
                   }
                 ]
               }
+            }
+          ]
+        },
+        {
+          "name": "reads-a-pools-factors",
+          "since": "v29",
+          "about": "factors",
+          "given": "the plugin needs a held pool's factor history",
+          "expect": [
+            {
+              "row": "ListFactors",
+              "fields": {
+                "subjects": "<set>"
+              }
+            }
+          ]
+        },
+        {
+          "name": "hears-a-factor-recorded",
+          "since": "v29",
+          "about": "factors",
+          "given": "the lake records the agency's monthly factor for a pool the plugin asked for",
+          "expect": [
+            {
+              "row": "FactorsRecorded"
             }
           ]
         }

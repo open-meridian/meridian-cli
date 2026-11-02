@@ -6,7 +6,7 @@ works with one that is already running. The whole install, step by step, is
 meridian-core's [INSTALL.md](https://github.com/open-meridian/meridian-core/blob/main/INSTALL.md),
 and every command and flag is in the
 [command line reference](https://open-meridian.dev/api/cli/). This is release
-0.1.57.
+0.1.58.
 
 ```
 meridian doctor              # can this machine and this cluster run a deployment?
@@ -504,6 +504,16 @@ branch push, whose pull request's CI is the gate, and `meridian plugin check
 turns it on in the plugin's repository, and `.dockerignore` keeps it out of
 the image too.
 
+`plugin check --run-tests` runs the plugin's tests with pytest in the
+environment the project keeps, not the host's bare `python3`, which has neither
+the plugin nor the SDK (0.1.58): `uv run --frozen` for a project with a
+`uv.lock` and `uv` on the PATH (the lock is read, never rewritten, and pytest
+must be among its dependencies: `uv add --dev pytest`); otherwise the Python of
+the plugin's own `.venv` or `venv`; otherwise the `python3` on the PATH, as the
+template's CI has it after `pip install -e . pytest`. A test run that cannot
+import the plugin or the SDK says which module is missing and where to install
+it, rather than only that the tests failed.
+
 `--role` with `connectivity`, `custody`, `data`, `operations`, `pricing` or
 `reporting` writes that
 role's template instead, from meridian-python's `templates/`: a whole plugin
@@ -558,9 +568,12 @@ publishes be named not presented, with why, and from contract v20 a case
 about a field its source never states (`about_field`). `role-suite` reads
 the cases a test names in `not_presented` against meridian-schema's
 `suites.json`: one no case of the suite has, or one every plugin of the role
-passes -- the data suite's `reads-its-datasets-licences` among them, and
-every case of the connectivity suite, sending nothing new on a pause and
-cancelling at the venue on a stop with them -- fails it. From 0.1.43 it also
+passes -- the data suite's `an-asset-that-does-not-resolve` and the
+connectivity suite's `cancels-at-the-venue-on-a-stop` among them -- fails it.
+From contract v29 (0.1.58) every read in the suites carries its `about`, so a
+plugin that never makes the read names its case not presented, with why
+(`reads-its-datasets-licences`, and `records-a-pools-factor`, about factors,
+among them). From 0.1.43 it also
 holds the test to the outcome `--run-tests` then trusts: any skip or expected
 failure where a suite is run -- a marker (`pytest.mark.xfail`, strict or not,
 `skip`, `skipif`, unittest's `skip` and `expectedFailure`), a call
@@ -698,7 +711,11 @@ registered for a role the plugin does not declare, which the SDK does not
 start and logs (`roles-registered`, ruling 1015). It traces a registered
 object to its role through the names it is imported or assigned by, in any of
 the plugin's modules, and the plugin's own classes and their bases; an object
-it cannot trace, such as a factory's result, fails nothing. A plugin pinning
+it cannot trace, such as a factory's result, fails nothing. A file under an
+`e2e/` directory is a stand-in run as a plugin of its own on core's harness (a
+reader, a venue) and is judged by the roles it registers itself, as the SDK's
+migration judges it: what it registers is neither held to the roles the plugin
+declares nor warned of (0.1.58). A plugin pinning
 an SDK before 0.35 that connects without `roles=` holds its roles through the
 plugin `connect` returns, and the rule holds.
 
@@ -926,7 +943,9 @@ from the release before it (decisions/025). `plugin migrate` moves the
 plugin's two pins, `open-meridian==` in `pyproject.toml` and the Dockerfile's
 `plugin-python:`, and `.github/workflows/check.yaml`'s `MERIDIAN_VERSION` to
 this meridian's own where it names an older one, runs each step between in
-the SDK's image, then `plugin check`, and says what is left by hand with its rule, file and line. The
+the SDK's image, then `plugin check`, and says what is left by hand with its rule, file and line. A `--to`
+release the registry's JSON does not list yet but its simple index does (the
+registry's publish lag) is accepted, and runs in that release's own image. The
 steps run in docker, cut off from the network and given the plugin's files
 on stdin (the plugin's code, `pyproject.toml`, the Dockerfile and the Makefile, the files
 the steps read for a pin); this binary alone writes the plugin's directory, once every step

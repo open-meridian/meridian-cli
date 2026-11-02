@@ -1123,6 +1123,12 @@ impl<'a> Traced<'a> {
     }
 }
 
+/// A file of an e2e tree: a stand-in beside the plugin, a reader or a venue
+/// run as a plugin of its own on core's harness, never the plugin itself.
+fn stand_in(path: &str) -> bool {
+    path.starts_with("e2e/") || path.contains("/e2e/")
+}
+
 /// Every entry into the SDK the plugin makes, with what it registers there.
 fn registration(plugin: &Plugin) -> Option<Registration<'_>> {
     static CALL: LazyLock<Regex> =
@@ -1131,6 +1137,13 @@ fn registration(plugin: &Plugin) -> Option<Registration<'_>> {
     let mut found: Option<Registration> = None;
     let mut applies = sdk_pinned(plugin).is_some_and(|pinned| pinned >= (0, 35));
     for (at, (source, code, bound)) in traced.modules.iter().enumerate() {
+        // An e2e stand-in is run as a plugin of its own, on core's harness,
+        // and registers the roles it names itself (SDK 0.35.1): it is not the
+        // plugin's entry, so neither the roles the plugin declares nor its
+        // pin are held against it.
+        if stand_in(&source.path) {
+            continue;
+        }
         for call in CALL.captures_iter(code) {
             let entry = spelled_out(&call[1], bound);
             if !matches!(
@@ -1333,18 +1346,22 @@ fn edge_storage(plugin: &Plugin) -> Vec<Failure> {
 
 // ── role-suite ───────────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/suites.json at dcca81b (contract v28), byte
-/// for byte, as SDK 0.33.0 vendors it: each role's suite and its cases, every
+/// meridian-schema's boundaries/suites.json at ce3a6f3 (contract v29), byte
+/// for byte, as SDK 0.35.2 vendors it: each role's suite and its cases, every
 /// role's v24 cases on a replacement and the template catalogue among them,
 /// v26's event group, jobs, bounded lake query and agents' guard cases, the
 /// pricing role's suite, v27's rates, liveness, placement-type and quote
 /// cases, the data suite's an-exact-price and a-want-recorded-against about
-/// closes (ruling 537), and v28's: the three latency reports required again
-/// (ruling 518), and the new cases about the kinds of data and work a plugin
+/// closes (ruling 537), v28's: the three latency reports required again
+/// (ruling 518), and the cases about the kinds of data and work a plugin
 /// may never touch (ruling 602) -- option chains, filings, holdings,
 /// corporate actions, ratings, quotes, options, packages, derived series,
 /// scenarios and quality states -- which a plugin publishing or doing none
-/// names not presented. role-suite reads a
+/// names not presented, and v29's: the data suite's records-a-pools-factor
+/// (about factors), and every read of the suites carrying its `about`
+/// (datasets, orders, trading instructions, replacements, templates, event
+/// groups and the rest), so a plugin that never makes the read names its case
+/// not presented. role-suite reads a
 /// case's name and its markers alone, never what it expects, so an
 /// expectation written with the format's `any_of` (contract v23: each way's
 /// fields, in place of `fields`) is read as any other; matching what a plugin
@@ -1359,7 +1376,7 @@ const SUITES_JSON: &str = include_str!("suites.json");
 /// busts, value-date rolls, currencies not stated and disputed outcomes among
 /// them), and from v20 one about a field its source never states
 /// (`about_field`; from v22 a fill's place of execution). Every other case -- the data suite's
-/// `reads-its-datasets-licences` among them -- every plugin of the role passes.
+/// `an-asset-that-does-not-resolve` among them -- every plugin of the role passes.
 pub(crate) fn suite_cases(role: &str) -> Vec<(String, bool)> {
     let published: serde_json::Value =
         serde_json::from_str(SUITES_JSON).expect("suites.json reads");
@@ -1381,9 +1398,9 @@ pub(crate) fn suite_cases(role: &str) -> Vec<(String, bool)> {
 
 const NOT_PRESENTED: &str = "name in `not_presented` only a case its source never presents, \
     with why: one asserting a closed list's value, one about a kind of data the plugin never \
-    publishes or a kind of work it never does (`about`, contract v19 and v22), or one about a field its source never states \
+    publishes or a kind of work it never does (`about`, contract v19, v22 and v29), or one about a field its source never states \
     (`about_field`, contract v20). Every other case every plugin of the role passes -- the data \
-    suite's reads-its-datasets-licences among them -- and the SDK's runner refuses it named";
+    suite's an-asset-that-does-not-resolve among them -- and the SDK's runner refuses it named";
 
 /// The cases a test names in a suite's `not_presented`, as string keys of a
 /// dict written there or bound at the top of the test's module, each with
@@ -3403,12 +3420,13 @@ fn runs_as_checked(plugin: &Plugin) -> Vec<Failure> {
 
 // ── roles-declared ───────────────────────────────────────────────────────
 
-/// meridian-schema's boundaries/roles.json at dcca81b (contract v28), byte
+/// meridian-schema's boundaries/roles.json at ce3a6f3 (contract v29), byte
 /// for byte: its `operations` say which roles hold each command, v24's
 /// booking (the oms's), the allocation instruction, the give-up, the alert and
 /// the reference role's template offer among them, v26's pricing role,
-/// v27's rates, liveness, latency and placement quotes, and v28's series,
-/// lifecycle events, packages, filings, derived series and scenarios.
+/// v27's rates, liveness, latency and placement quotes, v28's series,
+/// lifecycle events, packages, filings, derived series and scenarios, and
+/// v29's pools' factors.
 const ROLES_JSON: &str = include_str!("roles.json");
 
 /// Each command a plugin may send, as the SDK names its call
@@ -4679,24 +4697,82 @@ fn tests_exist(plugin: &Plugin) -> Vec<Failure> {
     )]
 }
 
-/// The plugin's tests, run where they are: with pytest, in the plugin's own
-/// `.venv` when it has one, and otherwise the `python3` on the PATH, which
-/// must have the plugin and pytest installed. Nothing is cached or compiled
-/// into the directory.
+/// The environment a plugin's tests run in: the one its project keeps, and
+/// only failing that the host's bare `python3`, which has neither the SDK nor
+/// the plugin.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum TestEnvironment {
+    /// A uv project (a `uv.lock` beside `pyproject.toml`) with `uv` on the
+    /// PATH: `uv run`, which makes the environment the lock names. The lock
+    /// is read as it is (`--frozen`), never rewritten.
+    Uv(std::path::PathBuf),
+    /// The plugin's own virtual environment, `.venv` or `venv`: its Python.
+    Venv(std::path::PathBuf),
+    /// The `python3` on the PATH, which must have the plugin and pytest
+    /// installed (`pip install -e . pytest`), as the template's CI has.
+    Path,
+}
+
+/// `name` among the directories of `path`, as a shell finds a program.
+fn on_path(name: &str, path: Option<&std::ffi::OsStr>) -> Option<std::path::PathBuf> {
+    std::env::split_paths(path?)
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Where the tests of the plugin in `root` run. A uv project first, since
+/// `uv run` brings its environment up to the lock; then a virtual
+/// environment the plugin keeps; otherwise the PATH's `python3`.
+pub(crate) fn test_environment(
+    root: &std::path::Path,
+    path: Option<&std::ffi::OsStr>,
+) -> TestEnvironment {
+    if root.join("uv.lock").is_file() {
+        if let Some(uv) = on_path("uv", path) {
+            return TestEnvironment::Uv(uv);
+        }
+    }
+    [".venv", "venv"]
+        .iter()
+        .map(|venv| root.join(venv).join("bin").join("python"))
+        .find(|python| python.exists())
+        .map(TestEnvironment::Venv)
+        .unwrap_or(TestEnvironment::Path)
+}
+
+/// The plugin's tests, run where they are: with pytest, in the environment
+/// the project keeps (`test_environment`). Nothing is cached or compiled into
+/// the directory.
 pub fn run_tests(plugin: &Plugin) -> Vec<Failure> {
+    run_tests_in(plugin, std::env::var_os("PATH").as_deref())
+}
+
+pub(crate) fn run_tests_in(plugin: &Plugin, path: Option<&std::ffi::OsStr>) -> Vec<Failure> {
     const ID: &str = "tests-pass";
-    let venv = plugin.root.join(".venv").join("bin").join("python");
-    let python = if venv.exists() {
-        venv.display().to_string()
-    } else {
-        "python3".to_string()
+    const PYTEST: [&str; 5] = ["-m", "pytest", "-q", "-p", "no:cacheprovider"];
+    let environment = test_environment(&plugin.root, path);
+    let (program, leading, python): (String, Vec<&str>, String) = match &environment {
+        TestEnvironment::Uv(uv) => (
+            uv.display().to_string(),
+            vec!["run", "--frozen", "python"],
+            "uv run".to_string(),
+        ),
+        TestEnvironment::Venv(python) => {
+            let python = python.display().to_string();
+            (python.clone(), vec![], python)
+        }
+        TestEnvironment::Path => ("python3".to_string(), vec![], "python3".to_string()),
     };
-    let ran = std::process::Command::new(&python)
-        .args(["-m", "pytest", "-q", "-p", "no:cacheprovider"])
+    let mut command = std::process::Command::new(&program);
+    command
+        .args(&leading)
+        .args(PYTEST)
         .env("PYTHONDONTWRITEBYTECODE", "1")
-        .current_dir(&plugin.root)
-        .output();
-    let ran = match ran {
+        .current_dir(&plugin.root);
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let ran = match command.output() {
         Ok(ran) => ran,
         Err(failed) => {
             return vec![failure(
@@ -4704,8 +4780,9 @@ pub fn run_tests(plugin: &Plugin) -> Vec<Failure> {
                 "tests/",
                 0,
                 format!("{python} could not be run: {failed}"),
-                "run it where Python 3 is installed, with the plugin and pytest: \
-                 `pip install -e . pytest`, or a .venv in the plugin's directory",
+                "run it where Python 3 is installed, with the plugin and pytest: a .venv in the \
+                 plugin's directory, a uv project (uv.lock, with uv installed), or \
+                 `pip install -e . pytest`",
             )]
         }
     };
@@ -4720,12 +4797,36 @@ pub fn run_tests(plugin: &Plugin) -> Vec<Failure> {
     let (found, instead) = if said.contains("No module named pytest") {
         (
             format!("pytest is not installed for {python}"),
-            "install it where the tests run, beside the plugin: `pip install -e . pytest`",
+            match environment {
+                TestEnvironment::Uv(_) => {
+                    "add it to the project's dev dependencies, where `uv run` finds it: \
+                     `uv add --dev pytest`"
+                }
+                _ => "install it where the tests run, beside the plugin: `pip install -e . pytest`",
+            }
+            .to_string(),
+        )
+    } else if let Some(module) = missing_module(&said) {
+        (
+            format!("{python} has no module `{module}`, which the tests import"),
+            match environment {
+                TestEnvironment::Path => format!(
+                    "the tests need the plugin and the SDK, which the host's bare python3 does \
+                     not have: give the project an environment (a .venv in the plugin's \
+                     directory with `pip install -e . pytest`, or a uv project: uv.lock with uv \
+                     installed), or run `meridian plugin check` where `{module}` is installed"
+                ),
+                _ => format!(
+                    "install `{module}` in the environment the tests run in, as the project's \
+                     dependencies: `pip install -e . pytest` in it, or `uv sync`"
+                ),
+            },
         )
     } else if ran.status.code() == Some(5) {
         (
             "pytest collected no tests".to_string(),
-            "tests/test_<what>.py with functions named test_<what>, which pytest collects",
+            "tests/test_<what>.py with functions named test_<what>, which pytest collects"
+                .to_string(),
         )
     } else {
         let tail: Vec<&str> = said
@@ -4736,8 +4837,18 @@ pub fn run_tests(plugin: &Plugin) -> Vec<Failure> {
         (
             format!("the tests failed:\n{tail}"),
             "fix what failed, and run them again: `python3 -m pytest` in the plugin's \
-             directory shows every failure in full",
+             directory shows every failure in full"
+                .to_string(),
         )
     };
-    vec![failure(ID, "tests/", 0, found, instead)]
+    vec![failure(ID, "tests/", 0, found, &instead)]
+}
+
+/// The module a test run could not import, from Python's
+/// `No module named 'x.y'`: its top-level package.
+fn missing_module(said: &str) -> Option<String> {
+    let at = said.find("No module named '")? + "No module named '".len();
+    let name = said[at..].split('\'').next()?;
+    let top = name.split('.').next()?;
+    (!top.is_empty()).then(|| top.to_string())
 }

@@ -339,6 +339,78 @@ fn a_declared_role_with_no_class_registered_fails_naming_it_at_the_entry() {
     );
 }
 
+/// An e2e stand-in reader as the plugins write it: a class of each of its
+/// own roles registered, run as a plugin of its own on core's harness.
+const STAND_IN_READER: &str =
+    "import meridian\nfrom meridian.roles import custody, reporting, signal\n\n\n\
+    class Custodian(custody.Role):\n    pass\n\n\nclass Reader(reporting.Role):\n    pass\n\n\n\
+    class Signaller(signal.Role):\n    pass\n\n\ndef main():\n    meridian.run_async(\n        \
+    declaration=None,\n        roles=[Custodian(), Reader(), Signaller()],\n    )\n";
+
+/// The same through objects the check cannot trace to a role.
+const STAND_IN_UNTRACED: &str = "import meridian\n\nreader = make_reader()\n\n\ndef main():\n    \
+    meridian.run_async(\n        declaration=None,\n        \
+    roles=[reader.custody, reader.reporting],\n    )\n";
+
+#[test]
+fn an_e2e_stand_in_is_judged_by_the_roles_it_registers_itself() {
+    // 0.1.58: a stand-in reader beside the plugin registers custody, reporting
+    // and signal for itself (SDK 0.35.1's migrate judges it so). The plugin
+    // holds data alone: no warning of classes it does not declare, and none
+    // of the plugin's own findings is hidden by the stand-in's entry.
+    let plugin = Scaffolded::tested("registered-stand-in");
+    plugin.hold(&["custody"]);
+    let baseline = plugin.check();
+    assert_eq!(
+        registered(&baseline),
+        (vec![], vec![]),
+        "{}",
+        text(&baseline)
+    );
+    plugin.write("e2e/reader.py", STAND_IN_READER);
+    plugin.write("e2e/other.py", STAND_IN_UNTRACED);
+    for report in [plugin.check(), plugin.check_verified()] {
+        assert_eq!(registered(&report), (vec![], vec![]), "{}", text(&report));
+        assert_eq!(outcome(&report, "roles-registered"), Outcome::Passed);
+    }
+
+    // The plugin's own entry is still held to what it declares, and named at
+    // its own file, not at the stand-in that sorts before it.
+    plugin.replace(
+        "pyproject.toml",
+        "roles = [\"custody\"]",
+        "roles = [\"custody\", \"data\"]",
+    );
+    let report = plugin.check();
+    assert_eq!(
+        registered(&report),
+        (
+            vec![(not_registered("data"), main_py(), entry_line(&plugin))],
+            vec![]
+        ),
+        "{}",
+        text(&report)
+    );
+
+    // The same under a nested e2e tree, and without the stand-in a class the
+    // plugin registers and does not declare is still warned.
+    let nested = Scaffolded::tested("registered-stand-in-nested");
+    nested.write("tools/e2e/reader.py", STAND_IN_READER);
+    let report = nested.check();
+    assert_eq!(
+        registered(&report).1,
+        [(
+            "a `custody` class is registered in roles=[...], and [tool.meridian] does not \
+             declare `custody`"
+                .to_string(),
+            main_py(),
+            entry_line(&nested)
+        )],
+        "{}",
+        text(&report)
+    );
+}
+
 #[test]
 fn a_class_for_a_role_not_declared_is_warned_and_fails_nothing() {
     // The template registers its custody class and declares no role: the
@@ -702,14 +774,14 @@ fn the_sdks_checks_subclassed_are_the_data_suite_run_and_asserted() {
     // Its NOT_PRESENTED is held as a run's not_presented is.
     let plugin = on_the_sdks_checks(
         "data-sdk-checks-named",
-        "    \"the-takers-side-stated\": \"its trades name the maker's side\",\n    \"reads-its-datasets-licences\": \"it reads none\",\n",
+        "    \"the-takers-side-stated\": \"its trades name the maker's side\",\n    \"an-asset-that-does-not-resolve\": \"it resolves none\",\n",
     );
     let verified = plugin.check_verified();
     let found = suite_failures(&verified);
     assert_eq!(
         found,
         [(
-            "it names `reads-its-datasets-licences` not presented, a case of the data suite every \
+            "it names `an-asset-that-does-not-resolve` not presented, a case of the data suite every \
              plugin of the role passes"
                 .to_string(),
             "tests/venue_cases.py".to_string(),
@@ -797,13 +869,13 @@ fn a_page_answering_the_sdks_record_holds_the_roles_common_fields() {
 #[test]
 fn a_case_not_presented_is_one_the_suite_lets_a_source_never_present() {
     // The data suite's cases about a field (`about_field`, contract v20) may
-    // be named not presented, with why; reads-its-datasets-licences, every
+    // be named not presented, with why; an-asset-that-does-not-resolve, every
     // data plugin's, may not; nor may a name no case has.
     let plugin = Scaffolded::of_role("data-not-presented", "data");
     plugin.replace(
         "tests/test_suite.py",
         "not_presented=NOT_PRESENTED,",
-        "not_presented={\n        **NOT_PRESENTED,\n        \"the-takers-side-stated\": \"its trades name no side\",\n        \"reads-its-datasets-licences\": \"it reads none\",\n        \"a-made-up-case\": \"none\",\n    },",
+        "not_presented={\n        **NOT_PRESENTED,\n        \"the-takers-side-stated\": \"its trades name no side\",\n        \"an-asset-that-does-not-resolve\": \"it resolves none\",\n        \"a-made-up-case\": \"none\",\n    },",
     );
     assert!(plugin.check().passed(), "not verified, it keeps every rule");
     let verified = plugin.check_verified();
@@ -816,7 +888,7 @@ fn a_case_not_presented_is_one_the_suite_lets_a_source_never_present() {
     let line = plugin
         .read("tests/test_suite.py")
         .lines()
-        .position(|line| line.contains("reads-its-datasets-licences\": \"it reads none"))
+        .position(|line| line.contains("an-asset-that-does-not-resolve\": \"it resolves none"))
         .unwrap()
         + 1;
     let found: Vec<(&str, usize)> = verified
@@ -828,7 +900,7 @@ fn a_case_not_presented_is_one_the_suite_lets_a_source_never_present() {
         found,
         [
             (
-                "it names `reads-its-datasets-licences` not presented, a case of the data suite \
+                "it names `an-asset-that-does-not-resolve` not presented, a case of the data suite \
                  every plugin of the role passes",
                 line
             ),
@@ -884,7 +956,14 @@ fn the_suites_are_suites_jsons() {
     };
     assert_eq!(optional("the-takers-side-stated"), Some(true));
     assert_eq!(optional("a-daily-close"), Some(true), "about closes");
-    assert_eq!(optional("reads-its-datasets-licences"), Some(false));
+    assert_eq!(optional("an-asset-that-does-not-resolve"), Some(false));
+    // Contract v29 (meridian-schema 1afbd3e): every read carries its `about`,
+    // so reads-its-datasets-licences is about datasets.
+    assert_eq!(
+        optional("reads-its-datasets-licences"),
+        Some(true),
+        "about datasets"
+    );
     assert_eq!(
         optional("a-restarts-gap-backfilled"),
         Some(true),
@@ -958,12 +1037,102 @@ fn v28s_cases_are_about_what_a_plugin_may_never_touch_and_latency_is_required_ag
     ] {
         assert_eq!(optional(role, name), Some(true), "{role}: {name}");
     }
+    // Ruling 518 (v28): the session's round trip stays required; contract
+    // v29 marks the data suite's feed delay `about` publication times, a
+    // source that states none (see the v29 test).
+    assert_eq!(
+        optional("connectivity", "reports-a-sessions-round-trip"),
+        Some(false)
+    );
+}
+
+#[test]
+fn v29s_cases_are_about_what_a_plugin_may_never_touch_and_name_not_presented_is_accepted() {
+    // Contract v29 (meridian-schema 1afbd3e, SDK 0.35.2): records-a-derived-series
+    // and records-a-pools-factor are data cases about a kind of data, and
+    // every read in the suites now
+    // carries its `about`, so a plugin that never makes the read names the
+    // case not presented, with why.
+    let published: serde_json::Value =
+        serde_json::from_str(include_str!("suites.json")).expect("suites.json reads");
+    let mut since_v29 = Vec::new();
+    for suite in published["suites"].as_array().into_iter().flatten() {
+        let role = suite["role"].as_str().expect("a role");
+        if !super::rules::SUITES.contains(&role) {
+            continue;
+        }
+        for case in suite["cases"].as_array().into_iter().flatten() {
+            if case["since"] == "v29" {
+                since_v29.push((role, case["name"].as_str().expect("a name").to_string()));
+            }
+        }
+    }
+    assert!(
+        since_v29.contains(&("data", "records-a-pools-factor".to_string())),
+        "{since_v29:?}"
+    );
+    for (role, name) in &since_v29 {
+        let case = super::rules::suite_cases(role)
+            .into_iter()
+            .find(|(case, _)| case == name);
+        assert_eq!(case, Some((name.clone(), true)), "{role}: {name}");
+    }
+    let optional = |role: &str, name: &str| {
+        super::rules::suite_cases(role)
+            .into_iter()
+            .find(|(case, _)| case == name)
+            .map(|(_, may)| may)
+    };
     for (role, name) in [
-        ("connectivity", "reports-a-sessions-round-trip"),
+        ("data", "records-a-derived-series"),
+        ("data", "records-a-pools-factor"),
+        ("data", "reads-its-datasets-licences"),
+        ("custody", "resolve-gives-the-currency-with-its-provenance"),
         ("data", "reports-its-feed-delay"),
+        ("data", "hears-and-reads-an-event-group"),
+        ("connectivity", "reads-its-placements-orders-on-start"),
+        ("connectivity", "sends-nothing-new-on-a-pause"),
+        ("custody", "read-accounts-for-linking"),
+        ("pricing", "reads-the-batches-waiting-after-a-restart"),
+    ] {
+        assert_eq!(optional(role, name), Some(true), "{role}: {name}");
+    }
+    // What no plugin of the role may leave out stays required.
+    for (role, name) in [
+        ("data", "an-asset-that-does-not-resolve"),
+        ("connectivity", "cancels-at-the-venue-on-a-stop"),
+        ("custody", "link-a-new-account"),
+        ("pricing", "answers-a-batch"),
     ] {
         assert_eq!(optional(role, name), Some(false), "{role}: {name}");
     }
+
+    // A data plugin that publishes neither names both, with why, and passes
+    // as verified; a name no case has is still refused.
+    let plugin = Scaffolded::of_role("data-v29-cases", "data");
+    plugin.replace(
+        "tests/test_suite.py",
+        "not_presented=NOT_PRESENTED,",
+        "not_presented={\n        **NOT_PRESENTED,\n        \"records-a-derived-series\": \"its datasets publish no index level\",\n        \"records-a-pools-factor\": \"it publishes no pool factors\",\n    },",
+    );
+    let verified = plugin.check_verified();
+    assert!(verified.passed(), "{}", text(&verified));
+    plugin.replace(
+        "tests/test_suite.py",
+        "\"records-a-pools-factor\": \"it publishes no pool factors\",",
+        "\"records-a-pools-factors\": \"it publishes no pool factors\",",
+    );
+    let verified = plugin.check_verified();
+    assert_eq!(
+        verified
+            .failures
+            .iter()
+            .map(|failure| failure.found.as_str())
+            .collect::<Vec<_>>(),
+        ["it names `records-a-pools-factors` not presented, and the data suite has no such case"],
+        "{}",
+        text(&verified)
+    );
 }
 
 #[test]
@@ -1022,9 +1191,10 @@ fn records_an_outcome_expects_its_determined_or_its_final_stage() {
     // resolve-gives-the-currency-with-its-provenance (meridian-schema
     // 4b193b4, approved 2026-10-13): required, any_of the currency stated and
     // one supplied or derived with its entry on ResolveIdentifier.
+    // (Contract v29 marks it `about: instruments`.)
     assert!(custody.contains(&(
         "resolve-gives-the-currency-with-its-provenance".to_string(),
-        false
+        true
     )));
     assert!(!custody
         .iter()
@@ -1096,11 +1266,12 @@ fn connectivity_suite_test(not_presented: &str) -> String {
 }
 
 #[test]
-fn a_verified_connectivity_plugin_runs_its_suite_and_names_no_pause_or_stop_not_presented() {
+fn a_verified_connectivity_plugin_runs_its_suite_and_names_no_acknowledgement_or_stop_not_presented(
+) {
     // Build row 18 (plans/an-order-reaches-a-venue-through-the-book):
     // `check` runs the `connectivity` suite. Its cases are every connectivity
-    // plugin's, sending nothing new on a pause and cancelling at the venue on
-    // a stop among them, so none may be named not presented.
+    // plugin's, acknowledging a placement naming it and cancelling at the
+    // venue on a stop among them, so none may be named not presented.
     let plugin = Scaffolded::tested("connectivity-suite");
     plugin.hold(&["connectivity"]);
     let unverified = plugin.check();
@@ -1134,7 +1305,7 @@ fn a_verified_connectivity_plugin_runs_its_suite_and_names_no_pause_or_stop_not_
     plugin.write(
         "tests/test_suite.py",
         &connectivity_suite_test(
-            "        not_presented={\n            \"sends-nothing-new-on-a-pause\": \"it never pauses\",\n            \
+            "        not_presented={\n            \"acknowledges-a-placement-naming-it\": \"it never acknowledges\",\n            \
              \"cancels-at-the-venue-on-a-stop\": \"its venue cancels nothing\",\n        },\n",
         ),
     );
@@ -1148,7 +1319,7 @@ fn a_verified_connectivity_plugin_runs_its_suite_and_names_no_pause_or_stop_not_
     let line = plugin
         .read("tests/test_suite.py")
         .lines()
-        .position(|line| line.contains("sends-nothing-new-on-a-pause"))
+        .position(|line| line.contains("acknowledges-a-placement-naming-it"))
         .unwrap()
         + 1;
     let found: Vec<(&str, &str, usize)> = verified
@@ -1160,7 +1331,7 @@ fn a_verified_connectivity_plugin_runs_its_suite_and_names_no_pause_or_stop_not_
         found,
         [
             (
-                "it names `sends-nothing-new-on-a-pause` not presented, a case of the \
+                "it names `acknowledges-a-placement-naming-it` not presented, a case of the \
                  connectivity suite every plugin of the role passes",
                 "tests/test_suite.py",
                 line
@@ -1193,9 +1364,9 @@ fn only_the_connectivity_suites_marked_cases_may_be_named_not_presented() {
         assert!(cases.iter().all(|(case, _)| case != gone), "{gone}");
     }
     for name in [
-        "sends-nothing-new-on-a-pause",
+        "acknowledges-a-placement-naming-it",
         "cancels-at-the-venue-on-a-stop",
-        "reads-the-instructions-in-force-on-start",
+        "hears-no-placement-of-another-instance",
     ] {
         assert_eq!(
             cases
@@ -1233,6 +1404,17 @@ fn only_the_connectivity_suites_marked_cases_may_be_named_not_presented() {
         // package's fill (`about: packages`).
         "reports-an-expiry",
         "reports-a-package-fill",
+        // Contract v29 (meridian-schema 1afbd3e): every read carries its
+        // `about`, so a plugin that never makes it names the case not
+        // presented.
+        "sends-nothing-new-on-a-pause",
+        "reads-the-instrument-it-places",
+        "reads-its-placements-orders-on-start",
+        "catches-up-placements-after-a-loss",
+        "reads-the-instructions-in-force-on-start",
+        "hears-and-reads-a-replacement",
+        "reads-the-template-catalogue",
+        "hears-and-reads-an-event-group",
     ];
     for (case, may) in &cases {
         assert_eq!(*may, marked.contains(&case.as_str()), "{case}");
@@ -2939,6 +3121,170 @@ fn a_tests_run_is_the_plugins_own_python_and_says_what_failed() {
     );
 }
 
+/// A directory of stand-in programs, removed with the test.
+struct Programs(PathBuf);
+
+impl Programs {
+    fn new(label: &str) -> Self {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("after 1970")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("meridian-check-programs-{label}-{unique}"));
+        std::fs::create_dir_all(&dir).expect("a directory");
+        Programs(dir)
+    }
+
+    /// An executable `name` running `script`, the shell's builtins alone.
+    fn add(&self, name: &str, script: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = self.0.join(name);
+        std::fs::write(&path, script).expect("written");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn said(&self, file: &str) -> String {
+        std::fs::read_to_string(self.0.join(file)).unwrap_or_default()
+    }
+}
+
+impl Drop for Programs {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn the_tests_run_in_the_environment_the_project_keeps() {
+    use super::rules::{test_environment, TestEnvironment};
+    let plugin = Scaffolded::tested("environment");
+    let programs = Programs::new("environment");
+    programs.add("uv", "#!/bin/sh\n");
+    let path = programs.0.as_os_str();
+    let nothing = Programs::new("empty");
+
+    // A bare project: the host's python3 on the PATH, as before.
+    assert_eq!(
+        test_environment(&plugin.0, Some(path)),
+        TestEnvironment::Path
+    );
+    assert_eq!(test_environment(&plugin.0, None), TestEnvironment::Path);
+
+    // Its virtual environment, `.venv` or `venv`.
+    plugin.write("venv/bin/python", "");
+    assert_eq!(
+        test_environment(&plugin.0, Some(path)),
+        TestEnvironment::Venv(plugin.path("venv/bin/python"))
+    );
+    plugin.write(".venv/bin/python", "");
+    assert_eq!(
+        test_environment(&plugin.0, Some(path)),
+        TestEnvironment::Venv(plugin.path(".venv/bin/python"))
+    );
+
+    // A uv project, with uv to run it: uv brings its environment up, so it
+    // comes before a .venv. Without uv on the PATH, the .venv it left.
+    plugin.write("uv.lock", "version = 1\n");
+    assert_eq!(
+        test_environment(&plugin.0, Some(path)),
+        TestEnvironment::Uv(programs.0.join("uv"))
+    );
+    assert_eq!(
+        test_environment(&plugin.0, Some(nothing.0.as_os_str())),
+        TestEnvironment::Venv(plugin.path(".venv/bin/python"))
+    );
+    std::fs::remove_dir_all(plugin.path(".venv")).unwrap();
+    std::fs::remove_dir_all(plugin.path("venv")).unwrap();
+    assert_eq!(
+        test_environment(&plugin.0, Some(nothing.0.as_os_str())),
+        TestEnvironment::Path
+    );
+}
+
+#[test]
+fn a_uv_projects_tests_run_with_uv_run_in_its_directory_and_say_what_is_missing() {
+    let plugin = Scaffolded::tested("uv-run");
+    plugin.write("uv.lock", "version = 1\n");
+    let programs = Programs::new("uv-run");
+    let record = "printf '%s\\n' \"$@\" > \"${0%/*}/uv-args\"\npwd > \"${0%/*}/uv-cwd\"\n";
+    let read = || super::read(&plugin.0).expect("a directory");
+    let run = || super::rules::run_tests_in(&read(), Some(programs.0.as_os_str()));
+
+    programs.add("uv", &format!("#!/bin/sh\n{record}echo \"1 passed\"\n"));
+    assert_eq!(run().len(), 0);
+    assert_eq!(
+        programs.said("uv-args"),
+        "run\n--frozen\npython\n-m\npytest\n-q\n-p\nno:cacheprovider\n"
+    );
+    let name = plugin.0.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(programs.said("uv-cwd").trim().ends_with(&name));
+
+    programs.add(
+        "uv",
+        "#!/bin/sh\necho 'FAILED tests/test_page.py::test_it' >&2\nexit 1\n",
+    );
+    let failed = run();
+    assert!(failed[0]
+        .found
+        .contains("FAILED tests/test_page.py::test_it"));
+
+    programs.add(
+        "uv",
+        "#!/bin/sh\necho 'No module named pytest' >&2\nexit 1\n",
+    );
+    let missing = run();
+    assert_eq!(missing[0].found, "pytest is not installed for uv run");
+    assert!(missing[0].instead.contains("uv add --dev pytest"));
+}
+
+#[test]
+fn a_bare_python3_that_lacks_the_plugin_says_so_rather_than_that_the_tests_failed() {
+    // The host's python3 has neither the SDK nor the plugin: the import error
+    // names the way out, not a failure of the plugin's tests.
+    let plugin = Scaffolded::tested("bare-python");
+    let programs = Programs::new("bare-python");
+    programs.add(
+        "python3",
+        "#!/bin/sh\necho \"ModuleNotFoundError: No module named 'meridian.roles'\" >&2\nexit 2\n",
+    );
+    let found = super::rules::run_tests_in(
+        &super::read(&plugin.0).expect("a directory"),
+        Some(programs.0.as_os_str()),
+    );
+    assert_eq!(
+        found[0].found,
+        "python3 has no module `meridian`, which the tests import"
+    );
+    assert!(
+        found[0].instead.contains("a .venv in the plugin's"),
+        "{}",
+        found[0].instead
+    );
+    assert!(found[0].instead.contains("uv.lock"), "{}", found[0].instead);
+
+    // In an environment the project keeps, the module is a dependency to install.
+    plugin.write(
+        ".venv/bin/python",
+        "#!/bin/sh\necho \"ModuleNotFoundError: No module named 'checked_plugin'\" >&2\nexit 2\n",
+    );
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            plugin.path(".venv/bin/python"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let found = super::rules::run_tests_in(
+        &super::read(&plugin.0).expect("a directory"),
+        Some(programs.0.as_os_str()),
+    );
+    assert!(found[0]
+        .found
+        .ends_with("has no module `checked_plugin`, which the tests import"));
+    assert!(found[0].instead.starts_with("install `checked_plugin`"));
+}
+
 #[test]
 fn a_directory_that_is_not_there_is_refused_rather_than_checked() {
     assert!(check(Path::new("/nowhere/at/all"), false)
@@ -3635,14 +3981,19 @@ fn a_reference_plugin_names_a_role_of_the_deployment_and_runs_no_suite_yet() {
 }
 
 #[test]
-fn every_suite_holds_v24s_replacement_and_template_cases_which_every_plugin_passes() {
+fn every_suite_holds_v24s_replacement_and_template_cases_about_what_they_read() {
     // Pricing's suite (contract v26) holds its own five cases alone: a
     // pricing plugin answers the batches the analytics component routes to
     // it, from what each batch carries.
     let pricing: Vec<String> = super::rules::suite_cases("pricing")
         .into_iter()
         .map(|(name, optional)| {
-            assert!(!optional, "{name}: every pricing plugin passes it");
+            // Contract v29: the restart read is about analytic jobs.
+            assert_eq!(
+                optional,
+                name == "reads-the-batches-waiting-after-a-restart",
+                "{name}"
+            );
             name
         })
         .collect();
@@ -3661,13 +4012,14 @@ fn every_suite_holds_v24s_replacement_and_template_cases_which_every_plugin_pass
         .filter(|role| **role != "pricing")
     {
         let cases = super::rules::suite_cases(role);
+        // From contract v29 each is `about` replacements and templates.
         for case in [
             "hears-and-reads-a-replacement",
             "reads-the-template-catalogue",
         ] {
             assert_eq!(
                 cases.iter().find(|(name, _)| name == case),
-                Some(&(case.to_string(), false)),
+                Some(&(case.to_string(), true)),
                 "{role}: {case}"
             );
         }

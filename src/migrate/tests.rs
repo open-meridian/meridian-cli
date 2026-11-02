@@ -97,6 +97,9 @@ fn ran(code: i32, stdout: &str, stderr: &str) -> Ran {
 struct Fake {
     git: Ran,
     index: Result<(u16, String), String>,
+    /// The simple index's page (PEP 503), which lists a release before the
+    /// JSON does.
+    simple: Result<(u16, String), String>,
     build: Ran,
     migrations: Ran,
     digest: Result<String, String>,
@@ -112,6 +115,7 @@ impl Fake {
                 r#"{"info": {"version": "0.7.0"}, "releases": {"0.6.0": [], "0.6.1": [], "0.7.0": []}}"#
                     .into(),
             )),
+            simple: Ok((404, String::new())),
             build: ran(0, "sha256:abc", ""),
             migrations: ran(0, migrations, ""),
             digest: Ok(NEW_DIGEST.into()),
@@ -160,6 +164,9 @@ impl Host for Fake {
             .lock()
             .unwrap()
             .push(("GET".into(), vec![url.into()], String::new()));
+        if url == PYTHON.simple {
+            return self.simple.clone();
+        }
         self.index.clone()
     }
 
@@ -443,6 +450,130 @@ async fn a_release_that_is_not_released_is_refused_unless_its_image_is_named() {
     assert_eq!(report.image.as_deref(), Some("plugin-python:local"));
     // Both named: the index is not asked at all.
     assert!(!fake.calls().iter().any(|(program, _, _)| program == "GET"));
+}
+
+/// The simple index's page listing `files`, as PyPI writes it.
+fn simple_page(files: &[&str]) -> String {
+    let links: String = files
+        .iter()
+        .map(|file| {
+            format!(
+                "    <a href=\"https://files.pythonhosted.org/packages/ab/cd/ef0123/{file}#sha256=0123abcd\" \
+                 data-requires-python=\"&gt;=3.11\">{file}</a><br />\n"
+            )
+        })
+        .collect();
+    format!(
+        "<!DOCTYPE html>\n<html><head><title>Links for open-meridian</title></head>\n\
+         <body>\n    <h1>Links for open-meridian</h1>\n{links}</body></html>\n"
+    )
+}
+
+#[tokio::test]
+async fn a_release_the_json_lacks_and_the_simple_index_lists_is_accepted() {
+    // The registry's JSON trails a release by minutes (its publish lag); the
+    // simple index lists it first. The release is real, and its own image
+    // carries the steps up to it: the latest the JSON knows would not.
+    let plugin = Plugin::at("publish-lag", "0.6.1");
+    let mut fake = Fake::new(&answered("x = 1\n"));
+    fake.simple = Ok((
+        200,
+        simple_page(&[
+            "open_meridian-0.7.0-py3-none-any.whl",
+            "open_meridian-0.8.0-py3-none-any.whl",
+            "open_meridian-0.8.0.tar.gz",
+        ]),
+    ));
+    let asked = Asked {
+        to: Some("0.8.0".into()),
+        ..plugin.asked()
+    };
+    let report = done(migrate(&fake, &PYTHON, &asked).await);
+    assert_eq!(report.to, "0.8.0");
+    assert_eq!(
+        report.image.as_deref(),
+        Some("ghcr.io/open-meridian/plugin-python:0.8.0")
+    );
+    let (build, dockerfile) = fake.ran_docker("build").expect("the image is built");
+    assert!(
+        build.contains(&"meridian-migrate:ghcr.io-open-meridian-plugin-python-0.8.0".to_string())
+    );
+    assert!(
+        dockerfile.starts_with("FROM ghcr.io/open-meridian/plugin-python:0.8.0\n"),
+        "{dockerfile}"
+    );
+    assert!(plugin.read("pyproject.toml").contains("==0.8.0"));
+    // The JSON was asked first, then the simple index.
+    let asked_urls: Vec<String> = fake
+        .calls()
+        .into_iter()
+        .filter(|(program, _, _)| program == "GET")
+        .map(|(_, arguments, _)| arguments[0].clone())
+        .collect();
+    assert_eq!(asked_urls, [PYTHON.releases, PYTHON.simple]);
+
+    // A release the JSON lists is not looked up in the simple index at all.
+    let plugin = Plugin::at("no-lag", "0.6.1");
+    let fake = Fake::new(&answered("x = 1\n"));
+    let report = done(migrate(&fake, &PYTHON, &plugin.asked()).await);
+    assert_eq!(report.to, "0.7.0");
+    assert!(!fake
+        .calls()
+        .iter()
+        .any(|(program, arguments, _)| program == "GET" && arguments[0] == PYTHON.simple));
+}
+
+#[tokio::test]
+async fn a_release_neither_index_lists_is_still_not_released() {
+    // Not a prefix of a listed one, a pre-release of it, another package's
+    // file, nor an index that does not answer: only a file named for this
+    // package at exactly this version counts.
+    for (label, simple) in [
+        (
+            "other-versions",
+            Ok((
+                200,
+                simple_page(&[
+                    "open_meridian-0.8.0.1-py3-none-any.whl",
+                    "open_meridian-0.8.0rc1-py3-none-any.whl",
+                    "open_meridian-0.8.01.tar.gz",
+                    "open_meridian_extras-0.8.0-py3-none-any.whl",
+                ]),
+            )),
+        ),
+        ("not-found", Ok((404, "not found".to_string()))),
+        ("unreachable", Err("connection refused".to_string())),
+    ] {
+        let plugin = Plugin::at(label, "0.6.1");
+        let mut fake = Fake::new(&answered("x = 1\n"));
+        fake.simple = simple;
+        let asked = Asked {
+            to: Some("0.8.0".into()),
+            ..plugin.asked()
+        };
+        let said = refused(migrate(&fake, &PYTHON, &asked).await);
+        assert!(
+            said.contains("0.8.0 is not released") && said.contains("--image"),
+            "{label}: {said}"
+        );
+        assert_eq!(plugin.read("pyproject.toml").matches("==0.6.1").count(), 1);
+    }
+}
+
+#[test]
+fn the_simple_index_is_read_for_a_file_of_the_package_at_the_version() {
+    let page = simple_page(&[
+        "open_meridian-0.35.2-py3-none-any.whl",
+        "open-meridian-0.35.3.tar.gz",
+        "Open_Meridian-0.36.0.zip",
+    ]);
+    for version in ["0.35.2", "0.35.3", "0.36.0"] {
+        assert!(simple_lists(&page, "open-meridian", version), "{version}");
+    }
+    for version in ["0.35", "0.35.30", "0.3", "0.35.2.1", "1.35.2"] {
+        assert!(!simple_lists(&page, "open-meridian", version), "{version}");
+    }
+    assert!(!simple_lists("", "open-meridian", "0.35.2"));
 }
 
 #[tokio::test]

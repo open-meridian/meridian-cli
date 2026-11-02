@@ -21,6 +21,12 @@
 //! Then `meridian plugin check`, and a report of what changed and what is
 //! left by hand, each with its rule, file and line.
 //!
+//! **A release the registry lists late** (CLI 0.1.58): the JSON the releases
+//! are read from can trail a publish by minutes. A `--to` it does not list is
+//! looked up in the package's simple index, which lists a file first; one
+//! found there is released, and runs in its own image (the latest the JSON
+//! knows would lack its step).
+//!
 //! **A base pinned by digest** (`ARG BASE=...plugin-python:<v>@sha256:...`,
 //! as plugins pin it from SDK 0.29.0's releases) moves with its tag: the new
 //! release's digest is read from its registry anonymously, as a `docker pull`
@@ -45,6 +51,9 @@ pub struct Sdk {
     pub package: &'static str,
     pub image: &'static str,
     pub releases: &'static str,
+    /// The package's simple index, which lists a release the JSON above does
+    /// not yet while the registry catches up (its publish lag).
+    pub simple: &'static str,
     pub runner: &'static [&'static str],
     /// What the migrations are given: files with these extensions, and these
     /// files by name, from the plugin's directory.
@@ -56,6 +65,7 @@ pub const PYTHON: Sdk = Sdk {
     package: "open-meridian",
     image: "ghcr.io/open-meridian/plugin-python",
     releases: "https://pypi.org/pypi/open-meridian/json",
+    simple: "https://pypi.org/simple/open-meridian/",
     runner: &["python", "-m", "meridian.migrations"],
     extensions: &["py"],
     named: &["pyproject.toml", "Dockerfile", "Makefile"],
@@ -578,6 +588,28 @@ pub enum Migrated {
     Done(Box<Report>),
 }
 
+/// Whether the simple index's page lists `version` of `package`: a file
+/// (`open_meridian-0.35.3-py3-none-any.whl`, `open-meridian-0.35.3.tar.gz`)
+/// named for the package, then the version, then what follows a version in a
+/// filename. `-` and `_` in the package are the same name (PEP 503).
+fn simple_lists(page: &str, package: &str, version: &str) -> bool {
+    let package = package.to_ascii_lowercase();
+    let underscored = package.replace('-', "_");
+    page.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '#' | '?' | '/'))
+        .map(str::to_ascii_lowercase)
+        .any(|file| {
+            [&package, &underscored].iter().any(|name| {
+                file.strip_prefix(&format!("{name}-"))
+                    .and_then(|rest| rest.strip_prefix(version))
+                    .is_some_and(|after| {
+                        after.starts_with('-')
+                            || after.starts_with(".tar.")
+                            || after.starts_with(".zip")
+                    })
+            })
+        })
+}
+
 /// The releases the index lists, and the latest.
 fn releases(said: &str) -> Result<(String, Vec<String>), String> {
     let value: serde_json::Value =
@@ -683,17 +715,29 @@ pub async fn migrate(host: &dyn Host, sdk: &Sdk, asked: &Asked) -> Migrated {
         std::cmp::Ordering::Equal => return finish(sdk, asked, from, to, Did::default()),
         std::cmp::Ordering::Greater => {}
     }
+    // The registry's JSON can trail a release by minutes (its publish lag):
+    // a release its simple index lists is released, and its own image carries
+    // the steps up to it, which the latest the JSON knows does not.
+    let mut lagging = false;
     if let (Some((_, releases)), None) = (&listed, &asked.image) {
         if !releases.contains(&to) {
-            return Refused(format!(
-                "{} {to} is not released. To migrate to one built here, name its image: --image",
-                sdk.package
-            ));
+            lagging = match host.fetch(sdk.simple).await {
+                Ok((200, page)) => simple_lists(&page, sdk.package, &to),
+                _ => false,
+            };
+            if !lagging {
+                return Refused(format!(
+                    "{} {to} is not released. To migrate to one built here, name its image: \
+                     --image",
+                    sdk.package
+                ));
+            }
         }
     }
     let image = asked.image.clone().unwrap_or_else(|| {
         let latest = listed
             .as_ref()
+            .filter(|_| !lagging)
             .map(|(latest, _)| latest.as_str())
             .unwrap_or(&to);
         format!("{}:{latest}", sdk.image)
