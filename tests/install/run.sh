@@ -52,6 +52,14 @@ status=$?
 check "$([ $status != 0 ] && [ ! -e /tmp/broken/meridian ] && echo 0 || echo 1)" "a download that is not its checksum is refused, and nothing installed"
 check "$(holds "$said" "not what its checksum says")" "and it says so: $said"
 
+mkdir -p /tmp/older && cp /tmp/latest/meridian /tmp/older/meridian
+kept="$(/tmp/older/meridian --version)"
+said="$(MERIDIAN_RELEASES="$RELEASES" MERIDIAN_INSTALL_DIR=/tmp/older MERIDIAN_VERSION=7.7.7 sh "$SCRIPT" 2>&1)"
+status=$?
+check "$([ $status != 0 ] && [ "$(/tmp/older/meridian --version)" = "$kept" ] && echo 0 || echo 1)" "a release that does not run on this system is refused, and the meridian there kept: $said"
+check "$(holds "$said" "does not run on this system; nothing was installed")" "and it says so, naming where the supported systems are: $said"
+check "$([ -z "$(find /tmp/older -name '.meridian-*')" ] && echo 0 || echo 1)" "and nothing is left beside it"
+
 said="$(MERIDIAN_RELEASES="$RELEASES" MERIDIAN_INSTALL_DIR=/tmp/none MERIDIAN_VERSION=1.2.3 sh "$SCRIPT" 2>&1)"
 status=$?
 check "$([ $status != 0 ] && echo 0 || echo 1)" "a release that is not there is refused: $said"
@@ -106,6 +114,12 @@ check "$(holds "$said" "nothing to do")" "upgrade to the release it is says ther
 said="$(MERIDIAN_RELEASES="$RELEASES" /tmp/u/meridian upgrade --to 6.6.6 2>&1)"
 status=$?
 check "$([ $status != 0 ] && [ "$(/tmp/u/meridian --version)" = "$before" ] && echo 0 || echo 1)" "a release that is not its checksum is refused, and the binary left: $said"
+
+said="$(MERIDIAN_RELEASES="$RELEASES" /tmp/u/meridian upgrade --to 7.7.7 2>&1)"
+status=$?
+check "$([ $status != 0 ] && [ "$(/tmp/u/meridian --version)" = "$before" ] && echo 0 || echo 1)" "a release that does not run on this system is refused, and the binary left: $said"
+check "$(holds "$said" "does not run on this system (built for macOS 15.0")" "and it says why, as the system said it: $said"
+check "$([ -z "$(find /tmp/u -name '.meridian-*')" ] && echo 0 || echo 1)" "and nothing is left beside it"
 
 said="$(su tester -s /bin/sh -c "MERIDIAN_RELEASES=$RELEASES /tmp/u/meridian upgrade" 2>&1)"
 status=$?

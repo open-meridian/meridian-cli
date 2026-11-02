@@ -12,7 +12,7 @@ unexport GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
 
 .PHONY: help ci-local ci-local-deep build test lint fmt lock install-hooks e2e-up e2e-migrate \
         vendor-template check-vendored-template check-install check-c-deps check-scaffolds \
-        check-fresh-sources \
+        check-fresh-sources smoke-linux \
         ci-mirror-check e2e-authority-macos advisories
 
 help:
@@ -25,6 +25,7 @@ help:
 	@echo "  make check-fresh-sources  the target cache's wrapper gives each source the time its content was first seen"
 	@echo "  make check-install  the install script, upgrade and uninstall, against stand-in releases"
 	@echo "  make check-scaffolds  each scaffold plugin new writes, its tests and suite run, a float and a send on a pause caught"
+	@echo "  make smoke-linux  the static Linux binary in each distribution of the supported window: --version, status, plugin check"
 	@echo "  make fmt        apply rustfmt"
 	@echo "  make lock       regenerate Cargo.lock"
 	@echo "  make e2e-up     install into a throwaway namespace and answer the wizard"
@@ -34,8 +35,8 @@ help:
 	@echo "  make vendor-template  move the scaffolds \`plugin new\` writes to SDK_REV"
 
 # Local green is the completion signal; CI is confirmation.
-ci-local: ci-mirror-check check-vendored-template advisories build test lint check-c-deps \
-          check-fresh-sources check-install check-scaffolds
+ci-local: ci-mirror-check check-vendored-template advisories build test lint smoke-linux \
+          check-c-deps check-fresh-sources check-install check-scaffolds
 	@echo
 	@echo "ci-local: GREEN"
 
@@ -175,6 +176,47 @@ check-scaffolds:
 		|| { echo "check-scaffolds FAILED; see the output with:" >&2; \
 		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target scaffolds --build-arg SDK_REV=$(SDK_REV) --progress=plain --no-cache-filter scaffolds ." >&2; exit 1; }
 	@echo "check-scaffolds OK: each scaffold keeps the rules, its suite run; a data plugin pricing through a float and a connectivity plugin sending on a pause fail"
+
+# The supported window's Linux systems (README, "Supported systems"; ruling
+# 1033): the static Linux binary run in a container of each, where
+# tests/smoke/run.sh checks `--version`, `status` against a stand-in kubectl
+# and helm, and `plugin new` then `plugin check` on the vendored reference
+# plugin. Here it is the binary release.yaml would build for this machine's
+# architecture, built in Dockerfile.rust; release.yaml's smoke-linux jobs run
+# the same target on each release binary, one system each, with SMOKE_BINARY,
+# SMOKE_TARGET and SMOKE_IMAGE, before anything is published. The systems
+# are named here and in release.yaml's matrix, and this fails when the two
+# differ. A system entering the window is added to both; one leaving it is
+# dropped from both.
+SMOKE_IMAGES := ubuntu:22.04 ubuntu:26.04 debian:13 rockylinux/rockylinux:9 alpine:3.24
+SMOKE_VERSION = $(shell sed -n 's/^version = "\(.*\)"$$/\1/p' Cargo.toml | head -n 1)
+SMOKE_BINARY ?=
+SMOKE_TARGET ?=
+SMOKE_IMAGE ?=
+
+smoke-linux:
+	@listed="$$(sed -n 's/^ *image: *\[\(.*\)\] *$$/\1/p' .github/workflows/release.yaml | tr -d '" ' | tr ',' '\n' | sort | tr '\n' ' ')"; \
+	 named="$$(printf '%s\n' $(SMOKE_IMAGES) | sort | tr '\n' ' ')"; \
+	 [ "$$listed" = "$$named" ] || { echo "smoke-linux FAILED: release.yaml's smoke systems ($$listed) are not the Makefile's ($$named)" >&2; exit 1; }
+	@if [ -n "$(SMOKE_BINARY)" ]; then \
+		binary="$(abspath $(SMOKE_BINARY))"; target="$(SMOKE_TARGET)"; \
+	 else \
+		$(DOCKER) build -f Dockerfile.rust --target release-musl-binary --output type=local,dest=target/smoke . >/dev/null 2>&1 \
+			|| { echo "smoke-linux FAILED: the static binary did not build; see it with:" >&2; \
+			     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target release-musl-binary --output type=local,dest=target/smoke --progress=plain ." >&2; exit 1; }; \
+		binary="$(CURDIR)/target/smoke/meridian"; target="$$(cat target/smoke/target)"; \
+	 fi; \
+	 chmod 755 "$$binary"; failed=""; \
+	 for image in $(or $(SMOKE_IMAGE),$(SMOKE_IMAGES)); do \
+		if said="$$(docker run --rm --pull missing -v "$$binary":/usr/local/bin/meridian:ro \
+				-v "$(CURDIR)/tests/smoke":/smoke:ro "$$image" sh /smoke/run.sh "$(SMOKE_VERSION)" "$$target" 2>&1)"; then \
+			printf '%s\n' "$$said" | sed -n 's/^smoke   /smoke-linux: /p'; \
+		else \
+			printf '%s\n' "$$said" >&2; failed="$$failed $$image"; \
+		fi; \
+	 done; \
+	 if [ -n "$$failed" ]; then echo "smoke-linux FAILED on:$$failed" >&2; exit 1; fi; \
+	 echo "smoke-linux OK: $$target, --version, status and plugin check on $(or $(SMOKE_IMAGE),$(SMOKE_IMAGES))"
 
 # Applied in a container and written back, because the host has no toolchain.
 fmt:

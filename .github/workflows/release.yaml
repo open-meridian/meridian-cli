@@ -1,4 +1,5 @@
-# One artifact per target, built on that target's own runner.
+# One artifact per target, built on that target's own runner, then run on
+# every system of the supported window before anything is published.
 #
 # No package manager in the first pass (spec/the-cli, ruling 2): a formula that
 # lags the release is worse than a download. A tag starts the release, and
@@ -11,22 +12,44 @@
 # it to one), so the Linux runners are given musl's C compiler and nothing
 # else. macOS has Xcode's.
 #
-# A tag publishes once approved. Run by hand (workflow_dispatch) it builds
-# every target and publishes nothing: the way to find out a release would build
-# before cutting one.
+# The supported window (ruling 1033; README, "Supported systems"): macOS's
+# current major and the two before it, Linux on x86_64 and arm64, and Windows
+# through WSL2 with the Linux binary. Each release binary is smoke-tested on
+# that window -- the smoke-linux and smoke-macos jobs below, tests/smoke/run.sh
+# on each system -- and `publish` needs every one of them.
+#
+# On a pull request the same builds and the same smoke matrix run, and
+# nothing is published: each smoke job is a required check, so a change that
+# breaks a system in the window does not reach main. Run by hand
+# (workflow_dispatch) it does the same: the way to find out a release would
+# build and run before cutting one.
 
 name: release
 
 on:
   push:
     tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+# A newer push to a pull request replaces its run; a tag's run is never
+# cancelled.
+concurrency:
+  group: release-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  # The oldest macOS in the window: both macOS binaries are built to run on
+  # it and no older (README, "Supported systems"). When the window moves, this
+  # moves with smoke-macos's runners below.
+  MACOS_FLOOR: "15.0"
 
 jobs:
   build:
+    name: build (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
@@ -37,8 +60,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - runner: macos-15
             target: aarch64-apple-darwin
-          # GitHub has retired its Intel macOS runners; Apple's toolchain
-          # builds Intel binaries on Apple silicon.
+          # Apple's toolchain builds Intel binaries on Apple silicon; they
+          # are run on GitHub's Intel runners in smoke-macos.
           - runner: macos-15
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.runner }}
@@ -52,7 +75,30 @@ jobs:
       - run: rustup toolchain install 1.90 --profile minimal
       - run: rustup target add ${{ matrix.target }} --toolchain 1.90
 
-      - run: cargo +1.90 build --release --locked --target ${{ matrix.target }}
+      # rustc and the C the TLS provider compiles both read
+      # MACOSX_DEPLOYMENT_TARGET: the macOS binaries name the window's floor
+      # as the oldest macOS they run on.
+      - name: cargo build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          case "$TARGET" in
+            *-apple-darwin) export MACOSX_DEPLOYMENT_TARGET="$MACOS_FLOOR" ;;
+          esac
+          cargo +1.90 build --release --locked --target "$TARGET"
+
+      - name: The macOS binary's oldest macOS is the window's floor
+        if: runner.os == 'macOS'
+        env:
+          BINARY: target/${{ matrix.target }}/release/meridian
+        run: |
+          vtool -show-build "$BINARY"
+          minos="$(vtool -show-build "$BINARY" | awk '$1 == "minos" { print $2 }')"
+          if [ "$minos" != "$MACOS_FLOOR" ]; then
+            echo "$BINARY runs on macOS $minos and newer, not the window's floor, $MACOS_FLOOR" >&2
+            exit 1
+          fi
+          echo "$BINARY: minos $minos, the window's floor"
 
       - name: Name it for the target it runs on
         run: |
@@ -71,16 +117,83 @@ jobs:
           name: meridian-${{ matrix.target }}
           path: dist/*
 
+  # Each Linux binary in a container of each Linux system in the window, on a
+  # runner of its architecture: `make smoke-linux`, which ci-local runs too on
+  # the binary it builds for its own machine. The systems are listed here and
+  # in the Makefile's SMOKE_IMAGES, on one line each, and smoke-linux fails
+  # when the two differ. Containers share the runner's kernel, which each job
+  # prints: that kernel is the one this matrix tests.
+  smoke-linux:
+    name: smoke (${{ matrix.image }}, ${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+        image: [ubuntu:22.04, ubuntu:26.04, debian:13, rockylinux/rockylinux:9, alpine:3.24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: meridian-${{ matrix.arch }}-unknown-linux-musl
+          path: dist
+      - name: make smoke-linux
+        env:
+          TARGET: ${{ matrix.arch }}-unknown-linux-musl
+          IMAGE: ${{ matrix.image }}
+        run: make smoke-linux SMOKE_BINARY="dist/meridian-$TARGET" SMOKE_TARGET="$TARGET" SMOKE_IMAGE="$IMAGE"
+
+  # Each macOS binary on each macOS runner GitHub offers inside the window,
+  # Apple silicon and Intel. GitHub has no runner of macOS's current major
+  # yet; it joins here when GitHub offers it, and a major leaving the window
+  # leaves here, with MACOS_FLOOR above moving to the oldest one left.
+  smoke-macos:
+    name: smoke (${{ matrix.runner }}, ${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: aarch64
+          - runner: macos-26
+            arch: aarch64
+          - runner: macos-15-intel
+            arch: x86_64
+          - runner: macos-26-intel
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: meridian-${{ matrix.arch }}-apple-darwin
+          path: dist
+      - name: tests/smoke/run.sh
+        env:
+          TARGET: ${{ matrix.arch }}-apple-darwin
+        run: |
+          mkdir -p bin
+          cp "dist/meridian-$TARGET" bin/meridian
+          chmod 755 bin/meridian
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          PATH="$PWD/bin:$PATH" sh tests/smoke/run.sh "$version" "$TARGET"
+
   # The release is a decision made at this environment's approval, not at the
   # tag (ruled 2026-10-06: an agent starts the release, the product owner
-  # approves it on GitHub). The binaries above are built and tested from the
-  # tag first; nothing is published until a required reviewer of `release`
-  # approves this job.
+  # approves it on GitHub). The binaries above are built and run on every
+  # system of the window from the tag first; nothing is published until a
+  # required reviewer of `release` approves this job.
   publish:
-    needs: build
+    needs: [build, smoke-linux, smoke-macos]
     if: startsWith(github.ref, 'refs/tags/v')
     environment: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:

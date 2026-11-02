@@ -77,6 +77,13 @@ main() {
     # Beside it first, then renamed: never half a binary where meridian was.
     mv "${work}/${name}" "${dir}/.meridian-install-$$" ||
         fail "could not write ${dir}; set MERIDIAN_INSTALL_DIR to a directory you own"
+    # It runs here before it takes meridian's place: a system outside the
+    # supported window (a macOS older than the release's floor) keeps what
+    # it had.
+    if ! "${dir}/.meridian-install-$$" --version >/dev/null 2>&1; then
+        rm -f "${dir}/.meridian-install-$$"
+        fail "${name} ${tag} does not run on this system; nothing was installed. The systems it runs on: https://github.com/open-meridian/meridian-cli#supported-systems"
+    fi
     mv "${dir}/.meridian-install-$$" "${dir}/meridian"
 
     say "Installed $("${dir}/meridian" --version) at ${dir}/meridian"
@@ -118,7 +125,7 @@ target_of() {
                 echo x86_64-apple-darwin
             fi
             ;;
-        *) fail "there is no meridian built for $1 on $2. There are: Linux on x86_64 and arm64, macOS on Apple silicon and Intel" ;;
+        *) fail "there is no meridian built for $1 on $2. There are: Linux on x86_64 and arm64 (on Windows, inside WSL2), macOS on Apple silicon and Intel" ;;
     esac
 }
 

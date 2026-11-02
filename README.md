@@ -6,7 +6,7 @@ works with one that is already running. The whole install, step by step, is
 meridian-core's [INSTALL.md](https://github.com/open-meridian/meridian-core/blob/main/INSTALL.md),
 and every command and flag is in the
 [command line reference](https://open-meridian.dev/api/cli/). This is release
-0.1.25.
+0.1.56.
 
 ```
 meridian doctor              # can this machine and this cluster run a deployment?
@@ -36,7 +36,8 @@ Every command exits non-zero on failure, and `plugin check`, `migrate`, `dev`,
 
 ## Install
 
-On macOS (Apple silicon or Intel) or Linux (x86_64 or arm64):
+On macOS (Apple silicon or Intel), Linux (x86_64 or arm64), or Windows inside
+WSL2 -- the systems under [Supported systems](#supported-systems):
 
 ```sh
 curl -fsSL https://open-meridian.com/install | sh
@@ -48,7 +49,9 @@ the same: `curl -fsSL https://raw.githubusercontent.com/open-meridian/meridian-c
 It downloads this machine's binary from the latest release, checks it against
 the `.sha256` published beside it, and puts it in `~/.local/bin` -- no `sudo`.
 `MERIDIAN_INSTALL_DIR` puts it elsewhere and `MERIDIAN_VERSION` picks a
-release. On macOS, when you are at a terminal, it then runs `meridian authority
+release. It runs the binary once before putting it in place, so a release
+that does not run on this system (a macOS older than the window's) installs
+nothing. On macOS, when you are at a terminal, it then runs `meridian authority
 trust`: it makes this machine's own certificate authority (below), says what it
 is for, and asks once to trust it. With no terminal to ask at, it skips that,
 and `meridian up` asks instead. Then:
@@ -65,6 +68,47 @@ release; signing is not built yet.
 
 `meridian` is the way to install a deployment: `doctor` checks, `up` installs
 and opens the wizard, and the deployment's own wizard does the rest.
+
+## Supported systems
+
+Each release binary runs, and is checked to run before it is published, on
+(ruling 1033):
+
+- **macOS**, the current major and the two before it -- macOS 27, 26 and 15
+  today -- on Apple silicon, and on Intel for as long as Apple ships macOS for
+  Intel Macs (macOS 26 is the last major that runs on them). Both macOS
+  binaries are built for macOS 15 and newer (`MACOSX_DEPLOYMENT_TARGET` 15.0),
+  so an older macOS will not start them; the install script and `meridian
+  upgrade` run a new binary once before putting it in place, and leave what
+  was there when it does not run.
+- **Linux** on x86_64 and arm64 (aarch64), any distribution: the binary is
+  statically linked against musl and needs nothing from the system but its
+  kernel. It is checked in containers of Ubuntu 22.04 and 26.04, Debian 13,
+  Rocky Linux 9 and Alpine 3.24, on each architecture; containers share
+  their host's kernel, so the kernel tested is the one GitHub's Ubuntu 24.04
+  runners run, Linux 7.0 when this was written, and Linux 6.6 under Rancher
+  Desktop locally; any recent kernel is supported.
+- **Windows** through WSL2, with the Linux binary: install it from a WSL2
+  terminal, as on Linux. There is no native Windows binary; one will be built
+  if asked for.
+
+On each, the check (`tests/smoke/run.sh`) runs `meridian --version`, `meridian
+status` against a stand-in `kubectl` and `helm` answering for a one-component
+deployment, and `meridian plugin new` then `meridian plugin check` on the
+reference plugin it writes. The Linux binaries are checked in each container
+on both architectures; the macOS binaries on each macOS runner GitHub offers
+inside the window -- macOS 15 and 26, each on Apple silicon (`macos-15`,
+`macos-26`) and on Intel (`macos-15-intel`, `macos-26-intel`). GitHub offers
+no macOS 27 runner yet. `helm` and `kubectl` are not part of the window:
+`meridian doctor` checks their versions on the machine where they run.
+
+The window moves with the systems' own releases, as the deployment's
+Kubernetes window does. When Apple releases a new macOS major, it joins and
+the oldest leaves: the next release's binaries are built for the new oldest
+(`MACOS_FLOOR` in `release.yaml`), and its smoke jobs drop that major's
+runners and take the new one's when GitHub offers it. A Linux distribution's
+release joins the containers when it is out, and one leaves when its maker
+stops supporting it. A release already published keeps running where it ran.
 
 ## doctor
 
@@ -1005,7 +1049,10 @@ The host needs Docker and nothing else: the toolchain is pinned inside
 
 A version tag, `v<version>` (the version in `Cargo.toml`), publishes a release: one
 binary per target (macOS and Linux, each on x86_64 and arm64), each with its
-`.sha256`, which `install.sh` and `meridian upgrade` fetch. Nothing is
+`.sha256`, which `install.sh` and `meridian upgrade` fetch. Each binary is
+first run on every system of the [supported window](#supported-systems)
+(`release.yaml`'s smoke jobs), and `publish` waits on all of them; the same
+builds and smoke jobs run on every pull request, publishing nothing. Nothing is
 published from a merge to `main`. `plugin new`'s templates are vendored from
 meridian-python's `template/` and `templates/` at a pinned commit (`make vendor-template`,
 which copies the role modules declaring pages to `sdk-roles/` beside them;

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.56
+
+- The supported systems (ruling 1033), in README's "Supported systems": macOS's current major and the
+  two before it (27, 26 and 15), on Apple silicon and on Intel while Apple ships macOS for Intel Macs;
+  Linux on x86_64 and arm64, any distribution (static, against musl); Windows through WSL2 with the
+  Linux binary. Both macOS binaries are built for macOS 15 and newer (`MACOSX_DEPLOYMENT_TARGET`
+  15.0, checked with `vtool` in the release build), so macOS 14 and older no longer start them.
+- Each release binary is run on every system of the window before it is published: in Ubuntu 22.04
+  and 26.04, Debian 13, Rocky Linux 9 and Alpine 3.24 containers on x86_64 and arm64, and on GitHub's
+  macOS 15 and 26 runners, Apple silicon and Intel. Each runs `meridian --version`, `meridian status`
+  against a stand-in `kubectl` and `helm`, and `meridian plugin new` then `plugin check`
+  (`tests/smoke/run.sh`). `publish` waits on every one, and the same builds and checks run on each
+  pull request, publishing nothing. `make smoke-linux`, in `ci-local`, runs them on the static binary
+  for the machine it runs on.
+- The install script and `meridian upgrade` run a new binary once before it takes `meridian`'s place:
+  a release that does not run on this system -- a macOS older than the window's floor -- installs
+  nothing and leaves the binary that was there, saying why and where the supported systems are.
+
 ## 0.1.55
 
 - `meridian plugin new` writes the SDK's 0.35.0 scaffolds (contract v29, no contract change; rulings
