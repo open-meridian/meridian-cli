@@ -489,6 +489,38 @@ async fn a_dockerfile_a_step_rewrote_is_written_as_the_step_left_it() {
 }
 
 #[tokio::test]
+async fn a_makefile_is_given_to_the_steps_and_one_a_step_rewrote_is_written() {
+    // SDK 0.35.1's `core-images` finding reads the Makefile's RUNTIME_IMAGE
+    // and HARNESS_IMAGE pins; the steps are given it beside the code, and what
+    // one answers for it is written as it left it.
+    let plugin = Plugin::at("migrated", "0.6.1");
+    let makefile = "RUNTIME_IMAGE ?= ghcr.io/open-meridian/core-runtime:0.1.100\n\
+                    HARNESS_IMAGE ?= ghcr.io/open-meridian/core-harness:0.1.100\n";
+    plugin.write("Makefile", makefile);
+    let rewritten = makefile.replace("0.1.100", "0.1.331");
+    let mut said: serde_json::Value = serde_json::from_str(&answered("")).unwrap();
+    said["files"] = serde_json::json!({ "Makefile": rewritten });
+    said["by_hand"] = serde_json::json!([]);
+    said["steps"][0]["rewrote"] = serde_json::json!([]);
+    let fake = Fake::new(&said.to_string());
+    let report = done(migrate(&fake, &PYTHON, &plugin.asked()).await);
+
+    let (_, given) = fake.ran_docker("run").unwrap();
+    let given: serde_json::Value = serde_json::from_str(&given).unwrap();
+    assert_eq!(given["files"]["Makefile"].as_str().unwrap(), makefile);
+    assert_eq!(plugin.read("Makefile"), rewritten);
+    assert_eq!(report.wrote, ["Dockerfile", "Makefile", "pyproject.toml"]);
+
+    // A plugin with no Makefile is given none.
+    let bare = Plugin::at("migrated-bare", "0.6.1");
+    let fake = Fake::new(&answered(&bare.read("src/migrated_plugin/page.py")));
+    done(migrate(&fake, &PYTHON, &bare.asked()).await);
+    let (_, given) = fake.ran_docker("run").unwrap();
+    let given: serde_json::Value = serde_json::from_str(&given).unwrap();
+    assert!(!given["files"].as_object().unwrap().contains_key("Makefile"));
+}
+
+#[tokio::test]
 async fn the_pins_move_the_steps_run_in_the_latest_image_and_what_they_wrote_is_written() {
     let plugin = Plugin::at("migrated", "0.6.1");
     // A Makefile naming the base too, as meridian-snaptrade's does.
@@ -549,6 +581,12 @@ async fn the_pins_move_the_steps_run_in_the_latest_image_and_what_they_wrote_is_
         .contains("plugin-python:0.7.0"));
     assert!(files.contains_key("src/migrated_plugin/page.py"));
     assert!(files.contains_key("tests/test_page.py"));
+    // The Makefile too (SDK 0.35.1's core-images step reads its image pins),
+    // as it stands: its pin is said, not moved.
+    assert_eq!(
+        files["Makefile"].as_str().unwrap(),
+        "BASE ?= ghcr.io/open-meridian/plugin-python:0.6.1\n"
+    );
     assert!(!files.contains_key("AGENTS.md"));
 
     // Written: the pins, and the file the steps rewrote.

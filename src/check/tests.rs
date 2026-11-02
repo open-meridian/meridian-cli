@@ -3800,6 +3800,53 @@ fn an_instrument_id_kept_in_the_code_is_warned_and_fails_nothing_verified_or_not
 }
 
 #[test]
+fn the_advice_for_a_kept_id_is_in_the_shape_of_the_sdk_the_plugin_pins() {
+    let kept = "HELD = \"INS-7KQ2M9X4\"\n";
+    let advice = |label: &str, pin: Option<&str>| -> String {
+        let plugin = Scaffolded::tested(label);
+        plugin.replace(&main_py(), "roles=[CUSTODY]", "roles=[]");
+        if let Some(pin) = pin {
+            plugin.replace("pyproject.toml", "open-meridian==0.35.0", pin);
+            let version = pin.trim_start_matches("open-meridian==");
+            plugin.replace(
+                "Dockerfile",
+                "plugin-python:0.35.0",
+                &format!("plugin-python:{version}"),
+            );
+        }
+        plugin.add_after(&page_py(), "TITLE = ", kept.trim_end());
+        let report = plugin.check();
+        assert_eq!(report.warnings.len(), 1, "{}", text(&report));
+        report.warnings[0].instead.clone()
+    };
+
+    // From 0.35: the role's method, not `receive(...)`.
+    for pin in [
+        None,
+        Some("open-meridian==0.35.1"),
+        Some("open-meridian==0.36.0"),
+    ] {
+        let instead = advice("kept-id-new", pin);
+        assert!(
+            instead.contains("`on_replace_merged_instrument`")
+                && instead.contains("await ids.heard(heard)")
+                && instead.contains("await ids.catch_up(self)")
+                && instead.contains("meridian.CurrentIdMap")
+                && !instead.contains("receive("),
+            "{pin:?}: {instead}"
+        );
+    }
+
+    // Before it: the advice as it was.
+    let instead = advice("kept-id-old", Some("open-meridian==0.34.2"));
+    assert!(
+        instead.contains("receive(replace_merged_instrument=ids.heard)")
+            && !instead.contains("on_replace_merged_instrument"),
+        "{instead}"
+    );
+}
+
+#[test]
 fn a_plugin_keeping_no_instrument_id_is_warned_of_nothing() {
     let plugin = Scaffolded::tested("no-kept-id");
     // Holding no role, it registers no role's class.

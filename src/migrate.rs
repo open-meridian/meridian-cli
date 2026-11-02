@@ -58,7 +58,7 @@ pub const PYTHON: Sdk = Sdk {
     releases: "https://pypi.org/pypi/open-meridian/json",
     runner: &["python", "-m", "meridian.migrations"],
     extensions: &["py"],
-    named: &["pyproject.toml", "Dockerfile"],
+    named: &["pyproject.toml", "Dockerfile", "Makefile"],
 };
 
 /// What the migrations run in: the SDK's image with its `migrate` extra. It
