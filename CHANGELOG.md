@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.57
+
+- `meridian plugin migrate` gives the SDK's migration steps the plugin's `Makefile` beside its `.py`
+  files, `pyproject.toml` and `Dockerfile`, so SDK 0.35.1's `core-images` finding (the Makefile's
+  `RUNTIME_IMAGE` and `HARNESS_IMAGE` pins below the contract) can see it. A Makefile a step
+  rewrites is written as the step left it; a plugin with none is given none. A pin to the old
+  release that no step moves is still said by hand (`pin-elsewhere`).
+- `plugin check`'s `replaced-ids-followed` advice follows the SDK the plugin pins: from 0.35 it
+  names the role's `on_replace_merged_instrument` method (`await ids.heard(heard)`, with
+  `await ids.catch_up(self)` in `on_start`), and for an earlier pin it keeps
+  `receive(replace_merged_instrument=ids.heard)`. The rule and the warning are unchanged.
+
 ## 0.1.56
 
 - The supported systems (ruling 1033), in README's "Supported systems": macOS's current major and the
