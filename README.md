@@ -6,7 +6,7 @@ works with one that is already running. The whole install, step by step, is
 meridian-core's [INSTALL.md](https://github.com/open-meridian/meridian-core/blob/main/INSTALL.md),
 and every command and flag is in the
 [command line reference](https://open-meridian.dev/api/cli/). This is release
-0.1.56.
+0.1.57.
 
 ```
 meridian doctor              # can this machine and this cluster run a deployment?
@@ -665,7 +665,8 @@ accepted forever and recorded under that record
 a Python string holding an `INS-` or `LCL-` ID and nothing else, outside its
 tests -- at its line (`replaced-ids-followed`): resolve the instrument from an
 identifier it states, or follow the kept ID to the record it became with
-`meridian.CurrentIdMap`; one written as `<map>.current("<id>")` is followed
+`meridian.CurrentIdMap` (fed by the role's `on_replace_merged_instrument` method on a plugin
+pinning SDK 0.35 or later, by `receive(replace_merged_instrument=...)` before it); one written as `<map>.current("<id>")` is followed
 already. A warning fails nothing, verified or not: it is printed with its
 rule, file and line, and listed under `warnings` in `--json`. The check reads
 meridian-schema's v28 `roles.json` and `suites.json` (dcca81b, as SDK 0.33.0
@@ -927,7 +928,8 @@ plugin's two pins, `open-meridian==` in `pyproject.toml` and the Dockerfile's
 this meridian's own where it names an older one, runs each step between in
 the SDK's image, then `plugin check`, and says what is left by hand with its rule, file and line. The
 steps run in docker, cut off from the network and given the plugin's files
-on stdin; this binary alone writes the plugin's directory, once every step
+on stdin (the plugin's code, `pyproject.toml`, the Dockerfile and the Makefile, the files
+the steps read for a pin); this binary alone writes the plugin's directory, once every step
 has run. A base pinned by digest (`plugin-python:<v>@sha256:...`) takes the
 new release's digest, read from ghcr.io as any `docker pull` reads it; where
 it cannot be read, the old digest is dropped, never kept under the new tag,

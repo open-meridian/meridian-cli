@@ -4587,12 +4587,24 @@ fn through_the_sdk(plugin: &Plugin) -> Vec<Failure> {
 
 // ── replaced-ids-followed (contract v24) ─────────────────────────────────
 
-const FOLLOWED: &str = "keep no instrument's ID in the code: resolve the instrument from an \
-    identifier it states (`resolve_identifier`), or follow the kept ID to the record it became \
-    before writing it, with `meridian.CurrentIdMap` (`ids.current(\"<id>\")`, the map caught up \
-    on start and fed by `receive(replace_merged_instrument=ids.heard)`). A replaced ID is \
-    accepted on every write, forever, and recorded under the record it became, so this fails \
-    nothing";
+/// The advice, in the shape of the SDK the plugin pins: from 0.35 each role is
+/// one class and hears the replacement in its `on_replace_merged_instrument`
+/// method; before it, the plugin's `receive(replace_merged_instrument=...)`.
+fn followed(plugin: &Plugin) -> String {
+    let fed = if sdk_pinned(plugin).is_some_and(|pinned| pinned >= (0, 35)) {
+        "the map caught up on start (`await ids.catch_up(self)` in `on_start`) and fed by the \
+         role's `on_replace_merged_instrument` method (`await ids.heard(heard)`)"
+    } else {
+        "the map caught up on start and fed by `receive(replace_merged_instrument=ids.heard)`"
+    };
+    format!(
+        "keep no instrument's ID in the code: resolve the instrument from an identifier it \
+         states (`resolve_identifier`), or follow the kept ID to the record it became before \
+         writing it, with `meridian.CurrentIdMap` (`ids.current(\"<id>\")`, {fed}). A replaced \
+         ID is accepted on every write, forever, and recorded under the record it became, so \
+         this fails nothing"
+    )
+}
 
 /// An instrument ID written in the plugin's code: a string holding the
 /// platform's (`INS-`) or the deployment's (`LCL-`) ID and nothing else. A
@@ -4607,6 +4619,7 @@ fn replaced_ids_followed(plugin: &Plugin) -> Vec<Failure> {
         Regex::new(r#""((?:INS|LCL)-[0-9A-Za-z][0-9A-Za-z_-]*)"|'((?:INS|LCL)-[0-9A-Za-z][0-9A-Za-z_-]*)'"#)
             .unwrap()
     });
+    let instead = followed(plugin);
     let mut warnings = Vec::new();
     for source in python(plugin) {
         let text = python_uncommented(&source.text);
@@ -4633,7 +4646,7 @@ fn replaced_ids_followed(plugin: &Plugin) -> Vec<Failure> {
                     "`{id}` is an instrument's ID kept in the code ({whose}): a write naming it \
                      then names a replaced ID"
                 ),
-                FOLLOWED,
+                &instead,
             ));
         }
     }
