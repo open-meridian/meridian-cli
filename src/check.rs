@@ -78,7 +78,8 @@ pub enum Outcome {
     /// Not run: the tests, without `--run-tests`; a rule only `--verified`
     /// holds, without it.
     Skipped,
-    /// Found what a warning rule warns of (`rules::WARNED`): said, and
+    /// Found what a warning rule warns of (`rules::WARNED`), or only what a
+    /// rule warns of beside its failures (`rules::WARNING`): said, and
     /// failing nothing, whether or not the plugin is checked as verified.
     Warned,
 }
@@ -102,8 +103,9 @@ pub struct Report {
     /// verified (`rules::ADVISED`), and what a rule advises beside what it
     /// fails (`rules::ADVISING`): said as advice, failing nothing.
     pub advice: Vec<Failure>,
-    /// What a warning rule found (`rules::WARNED`): failing nothing, in
-    /// every mode, since what it warns of the deployment accepts.
+    /// What a warning rule found (`rules::WARNED`), and what a rule warns of
+    /// beside its failures (`rules::WARNING`): failing nothing, in every mode,
+    /// since what it warns of the deployment accepts.
     pub warnings: Vec<Failure>,
 }
 
@@ -236,17 +238,24 @@ pub fn check_as(dir: &Path, run_tests: bool, verified: bool) -> Result<Report, S
         if let Some((_, advising)) = rules::ADVISING.iter().find(|(id, _)| *id == rule.id) {
             report.advice.extend(advising(&plugin));
         }
+        // What the rule warns of beside what it fails (`rules::WARNING`).
+        let warned: Vec<Failure> = rules::WARNING
+            .iter()
+            .filter(|(id, _)| *id == rule.id)
+            .flat_map(|(_, warning)| warning(&plugin))
+            .collect();
         let outcome = match (failures.is_empty(), rules::WARNED.contains(&rule.id)) {
-            (true, _) => Outcome::Passed,
-            (false, true) => Outcome::Warned,
+            (true, _) if warned.is_empty() => Outcome::Passed,
+            (true, _) | (false, true) => Outcome::Warned,
             (false, false) => Outcome::Failed,
         };
         report.outcomes.push((rule.id, rule.holds, outcome));
-        if outcome == Outcome::Warned {
-            report.warnings.extend(failures);
-        } else {
+        if outcome == Outcome::Failed {
             report.failures.extend(failures);
+        } else {
+            report.warnings.extend(failures);
         }
+        report.warnings.extend(warned);
     }
     let pass = &rules::TESTS_PASS;
     if run_tests {

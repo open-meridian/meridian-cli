@@ -38,7 +38,11 @@ class Sidecar:
 
 
 def client(sidecar: Sidecar | None = None) -> PageClient:
-    return PageClient(pages, sidecar or Sidecar(), read={"ACC-1"}, write={"ACC-1"})
+    held = sidecar or Sidecar()
+    # The pages act through the operations role object they are given (SDK
+    # 0.35); here the stand-in answers its acts.
+    running["role"] = held
+    return PageClient(pages, held, read={"ACC-1"}, write={"ACC-1"})
 
 
 def test_each_page_is_served_at_open_and_view_the_daily_page_first() -> None:
@@ -100,9 +104,10 @@ def test_a_page_opened_from_a_prepared_change_starts_from_it() -> None:
 
 
 def test_under_a_second_pair_of_eyes_the_page_offers_prepare_and_no_confirm() -> None:
+    running["role"] = Sidecar()
     gated = PageClient(
         pages,
-        Sidecar(),
+        running["role"],
         read={"ACC-1"},
         write={"ACC-1"},
         second_pair_of_eyes=["confirm_opening_balance"],

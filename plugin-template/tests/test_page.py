@@ -22,12 +22,12 @@ from contextlib import contextmanager
 from typing import Any, cast
 
 import meridian
-from meridian.operations import Operations
 from meridian.plugin.v1 import operations_pb2 as ops
+from meridian.suites import Recorder
 from meridian.testing import PageClient, caller_header
 from meridian.v1 import sidecar_pb2
 
-from reference_plugin.page import pages
+from reference_plugin.page import CUSTODY, pages
 
 
 class _Named:
@@ -41,9 +41,10 @@ class _Named:
 LINKED = meridian.LinkedExternalAccount("reference-1", "ACC-2", "Ada's brokerage")
 
 
-class Sidecar(Operations):
-    """The SDK's operations, answered here rather than by a sidecar, who the
-    plugin was launched as, and its account scope with its links."""
+class Sidecar(Recorder):
+    """The SDK's recorder, answering here rather than a sidecar, who the
+    plugin was launched as, and its account scope with its links; the
+    plugin's custody class is bound to it (SDK 0.35)."""
 
     identity = meridian.Identity("reference-1", roles=("custody",))
     grants = meridian.Grants(
@@ -60,7 +61,8 @@ class Sidecar(Operations):
         links: tuple[meridian.LinkedExternalAccount, ...] = (LINKED,),
         grants: meridian.Grants | None = None,
     ) -> None:
-        self.sent: list[tuple[str, Any]] = []
+        super().__init__("reference-1")
+        self.sent: list[tuple[str, Any]] = []  # type: ignore[assignment]
         self._refuse = refuse
         self.links = links
         if grants is not None:
@@ -98,7 +100,9 @@ class Sidecar(Operations):
 
 def client(sidecar: Sidecar | None = None) -> PageClient:
     """Ada, who may read ACC-1 and ACC-2 and write ACC-2 through the plugin."""
-    return PageClient(pages, sidecar or Sidecar(), read={"ACC-1", "ACC-2"}, write={"ACC-2"})
+    held = sidecar or Sidecar()
+    held.bind(CUSTODY)
+    return PageClient(pages, held, read={"ACC-1", "ACC-2"}, write={"ACC-2"})
 
 
 def statement_form(page: str) -> bool:

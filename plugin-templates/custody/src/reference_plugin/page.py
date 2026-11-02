@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import meridian
 from meridian.roles import custody
@@ -27,15 +28,27 @@ TITLE = "Reference custodian"
 
 pages = meridian.Pages(TITLE, templates=Path(__file__).parent / "templates")
 
-#: The running plugin's custodian, whether its key is set, and its account
-#: scope with its links, as __main__.py last gave them the pages.
-running: dict[str, object] = {}
+#: The running plugin's custodian, whether its key is set, its account scope
+#: with its links, and its custody role object, whose acts the pages make
+#: (SDK 0.35), as __main__.py last gave them the pages.
+running: dict[str, Any] = {}
 
 
 def use(
-    custodian: Custodian, *, key_set: bool, scope: meridian.AccountScope | None = None
+    custodian: Custodian,
+    *,
+    key_set: bool,
+    scope: meridian.AccountScope | None = None,
+    role: Any = None,
 ) -> None:
     running.update(custodian=custodian, key_set=key_set, scope=scope or meridian.AccountScope())
+    if role is not None:
+        running["role"] = role
+
+
+def _role() -> Any:
+    """The custody role object the pages act through."""
+    return running["role"]
 
 
 def _links() -> tuple[meridian.LinkedExternalAccount, ...]:
@@ -83,7 +96,7 @@ async def account_links(request: meridian.Request) -> meridian.Response:
 
 
 async def _links_read(request: meridian.Request) -> custody.AccountLinksRead:
-    granted = await request.plugin.read_accounts_for_linking(acting_for=request.caller.header)
+    granted = await _role().read_accounts_for_linking(acting_for=request.caller.header)
     return custody.AccountLinksRead(
         external_accounts=[
             custody.ExternalAccountRead(
@@ -124,7 +137,7 @@ async def check_link_account(request: meridian.Request) -> meridian.Response:
         pages.refuse(
             "the custodian reaches no such account", ("external_account_id", "not reached")
         )
-    granted = await request.plugin.read_accounts_for_linking(acting_for=request.caller.header)
+    granted = await _role().read_accounts_for_linking(acting_for=request.caller.header)
     names = {each.account_id: each.name for each in granted.accounts}
     if link.account_id not in names:
         pages.refuse("the account is not granted to this plugin", ("account_id", "not granted"))
@@ -147,7 +160,7 @@ async def link_account(request: meridian.Request) -> meridian.Response:
     """Link one external account to one of the accounts granted to this
     plugin (W6.4); one not granted is refused."""
     link: Link = request.params
-    made = await request.plugin.link_external_account(
+    made = await _role().link_external_account(
         external_account_id=link.external_account_id,
         account_id=link.account_id,
         acting_for=request.caller.header,

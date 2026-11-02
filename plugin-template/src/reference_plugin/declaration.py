@@ -2,7 +2,7 @@
 tools their typed routes make, and its documentation, the Markdown in
 `docs/`.
 
-`connect(declaration=DECLARATION)` registers it, and `meridian plugin upload`
+`meridian.run(declaration=DECLARATION, ...)` registers it, and `meridian plugin upload`
 reads the same one from the built image, as pyproject.toml's
 `[tool.meridian]` names it, with the texts of `docs/` beside it. A version
 registers exactly the declaration it was uploaded with, so everything it says

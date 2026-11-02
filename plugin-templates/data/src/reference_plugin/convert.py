@@ -19,14 +19,22 @@ withdrawn, records rows in the lake's batches and counts them for the
 Datasets page, and reads the datasets' licences; `Venue` resolves a venue
 once. Only the vendor's words are this module's.
 
+It is the plugin's data role class (SDK 0.35, `data.Role`): the role's
+acts on `self`, what the lake wants of it heard by `on_observations_wanted`
+and `on_want_withdrawn`, its products resolved and its licences read in
+`on_start`. `meridian.run(roles=[...])` registers it on the connection
+(__main__.py); its plugin-wide items -- its identity, its raw records -- are
+reached through `self.plugin`.
+
 `meridian.suites.run("data", producers)` holds this to the role's suite
 (tests/test_suite.py): each case mapped to one of the vendor's responses,
-run through this code, against a recorder standing in for the sidecar.
+run through this code, bound to a recorder standing in for the sidecar.
 """
 
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -68,12 +76,11 @@ def _as_of(want: ops.ObservationsWantedEvent) -> int:
     return _ns(datetime.now(UTC))
 
 
-@dataclass
-class Converter:
-    """The plugin's conversion, against whatever operations it is given: the
-    plugin's own when it runs, a recorder's in its tests."""
+@dataclass(eq=False)
+class Converter(data.Role):
+    """The plugin's conversion: its data role class, registered on the
+    connection when it runs, bound to a recorder in its tests."""
 
-    plugin: meridian.Plugin
     vendor: Vendor = field(default_factory=Vendor)
     #: The vendor's symbols by the instrument each resolved to: what a want,
     #: which names instruments, is served from. A plugin owning storage keeps
@@ -88,12 +95,18 @@ class Converter:
     venues: dict[str, data.Venue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        self.wants = data.Wants(self.plugin, (KEY,))
+        self.wants = data.Wants(self, (KEY,))
 
     @property
     def dataset(self) -> str:
         """The dataset its rows name: the instance, a colon and the key."""
         return self.wants.dataset(KEY)
+
+    async def on_start(self) -> None:
+        """Before anything is heard: its datasets' licences read, and the
+        vendor's symbols resolved."""
+        await self.read_licences()
+        await self.map_products(time.time_ns())
 
     async def read_licences(self) -> None:
         """Its own declared datasets' licences (contract v20, W10.9): a
@@ -107,10 +120,10 @@ class Converter:
         """The deployment's instrument for the vendor's symbol, as of a date;
         empty, with the miss reported, where it does not resolve to one."""
         named = [meridian.Identifier(scheme="symbol", value=symbol, source=SOURCE)]
-        found = await self.plugin.resolve_identifier(identifiers=named, as_of_ns=as_of_ns)
+        found = await self.resolve_identifier(identifiers=named, as_of_ns=as_of_ns)
         if found.found and found.instrument_id:
             return str(found.instrument_id)
-        await self.plugin.report_missing_instrument(
+        await self.report_missing_instrument(
             source=SOURCE,
             identifiers=named,
             as_of_ns=as_of_ns,
@@ -123,7 +136,7 @@ class Converter:
         empty, with the miss reported once, where the deployment holds no
         such venue."""
         held = self.venues.setdefault(mic, data.Venue())
-        return await held.resolve(self.plugin, (("iso10383", mic, ""),), SOURCE, as_of_ns)
+        return await held.resolve(self, (("iso10383", mic, ""),), SOURCE, as_of_ns)
 
     async def map_products(self, as_of_ns: int) -> None:
         """Resolve each symbol the vendor serves this key, so a want naming
@@ -145,9 +158,7 @@ class Converter:
         known = self.products.get(instrument)
         if known is not None:
             return known
-        found = await self.plugin.resolve_instrument(
-            instrument_id=instrument, as_of_ns=as_of_ns
-        )
+        found = await self.resolve_instrument(instrument_id=instrument, as_of_ns=as_of_ns)
         if not found.found:
             return None
         named = {i.value for i in found.instrument.identifiers if i.scheme == "symbol"}
@@ -237,7 +248,9 @@ class Converter:
 
     # ── Wants ───────────────────────────────────────────────────────────
 
-    async def on_want(self, heard: meridian.Heard[ops.ObservationsWantedEvent]) -> None:
+    async def on_observations_wanted(
+        self, heard: meridian.Heard[ops.ObservationsWantedEvent]
+    ) -> None:
         """What the lake wants of this plugin's datasets: recorded against,
         where the vendor serves the subject, and declined where it does not
         (the SDK's `Wants.hear`, answered by `answer`)."""
@@ -270,7 +283,7 @@ class Converter:
             self.wants.stand(want, subjects, kinds)
         return declined
 
-    async def on_withdrawn(self, heard: meridian.Heard[ops.WantWithdrawnEvent]) -> None:
+    async def on_want_withdrawn(self, heard: meridian.Heard[ops.WantWithdrawnEvent]) -> None:
         """A standing want no reader asked for within the dataset's cadence:
         no longer kept current."""
         self.wants.withdraw(heard.message.want_id)

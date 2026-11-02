@@ -130,15 +130,26 @@ fi
 
 # The fixture: a connectivity plugin that hears a pause on itself, then a
 # placement naming it, and acknowledges the placement at its venue anyway.
+# Its role class is bound to the suite's recorder and hears through it
+# (SDK 0.35: `Recorder.bind` and `Recorder.hear`; `receive` is gone).
 meridian plugin new pausing --into pausing >/dev/null
 install pausing
 sed -i 's/^roles = \[\]$/roles = ["connectivity"]/' pausing/pyproject.toml
 cat >pausing/tests/test_suite.py <<'PY'
 from meridian.plugin.v1 import operations_pb2 as ops
+from meridian.roles import connectivity
 from meridian.suites import Recorder, run
 
 PLACEMENT = "PLC-01JAE00000000000000000001"
 INSTANCE = "pausing-1"
+
+
+class Pausing(connectivity.Role):
+    async def on_trading_instruction_changed(self, heard: object) -> None:
+        return None
+
+    async def on_placement_updated(self, heard: object) -> None:
+        return None
 
 
 async def sends_on_a_pause(recorder: Recorder) -> None:
@@ -154,11 +165,9 @@ async def sends_on_a_pause(recorder: Recorder) -> None:
     recorder.answer("TradingInstructionChanged", lambda _: pause)
     recorder.answer("PlacementUpdated", lambda _: placement)
 
-    async def heard(_: object) -> None:
-        return None
-
-    await recorder.receive(trading_instruction_changed=heard, placement_updated=heard)
-    await recorder.report_placement(
+    role = recorder.bind(Pausing())
+    await recorder.hear(role)
+    await role.report_placement(
         placement_id=PLACEMENT,
         event="acknowledged",
         venue_order_id="VENUE-1",

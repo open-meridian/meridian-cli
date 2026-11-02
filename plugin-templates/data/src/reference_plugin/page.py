@@ -44,7 +44,7 @@ def use(converter: Converter) -> None:
 
 
 def _converter(request: meridian.Request) -> Converter:
-    return running[0] if running else Converter(request.plugin)
+    return running[0] if running else Converter()
 
 
 def connection_read(converter: Converter) -> data.ConnectionRead:
@@ -71,7 +71,7 @@ def datasets_read(converter: Converter) -> data.DatasetsRead:
     from .declaration import DECLARATION
 
     entitled = f"{len(converter.vendor.entitled)} symbols"
-    instance = converter.plugin.identity.instance_id
+    instance = converter.plugin.identity.instance_id if running else ""
     return data.DatasetsRead(
         served=data.served(DECLARATION.catalogue, instance, converter.wants, entitled),
         wants=list(data.want_rows(converter.wants)),

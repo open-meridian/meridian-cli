@@ -84,6 +84,38 @@ impl Scaffolded {
     fn check(&self) -> Report {
         check(&self.0, false).expect("a directory")
     }
+
+    /// Its `__main__.py` registering a class of each of `roles` in
+    /// `roles=[...]`, beside what it registers already (SDK 0.35, ruling
+    /// 1015).
+    fn register(&self, roles: &[&str]) {
+        for role in roles {
+            let class = format!("Held{}{}", role[..1].to_uppercase(), &role[1..]);
+            self.replace(
+                &main_py(),
+                "def main(",
+                &format!(
+                    "from meridian.roles import {role}\n\n\nclass {class}({role}.Role):\n    \
+                     pass\n\n\ndef main("
+                ),
+            );
+            self.replace(&main_py(), "roles=[", &format!("roles=[{class}(), "));
+        }
+    }
+
+    /// The reference plugin holding `roles`: each declared in
+    /// `[tool.meridian]`, and a class of each registered (its custody class
+    /// is already).
+    fn hold(&self, roles: &[&str]) {
+        let listed: Vec<String> = roles.iter().map(|role| format!("\"{role}\"")).collect();
+        self.replace(
+            "pyproject.toml",
+            "roles = []",
+            &format!("roles = [{}]", listed.join(", ")),
+        );
+        let others: Vec<&str> = roles.iter().copied().filter(|r| *r != "custody").collect();
+        self.register(&others);
+    }
 }
 
 impl Drop for Scaffolded {
@@ -146,6 +178,340 @@ fn a_freshly_scaffolded_plugin_with_a_test_keeps_every_rule() {
         said.contains("--    role-suite") && said.contains("--verified holds it"),
         "{said}"
     );
+}
+
+// ── template-shape's entry and roles-registered (SDK 0.35, ruling 1015) ──
+
+/// The line of the template's `meridian.run(...)`, where the plugin enters
+/// the SDK.
+fn entry_line(plugin: &Scaffolded) -> usize {
+    let text = plugin.read(&main_py());
+    let at = text.find("meridian.run(").expect("the template's entry");
+    text[..at].matches('\n').count() + 1
+}
+
+fn outcome(report: &Report, rule: &str) -> Outcome {
+    report
+        .outcomes
+        .iter()
+        .find(|(id, _, _)| *id == rule)
+        .map(|(_, _, outcome)| *outcome)
+        .expect("the rule was checked")
+}
+
+/// What roles-registered failed and warned of: each said, its file and line.
+/// Each finding said, its file and line.
+type Found = Vec<(String, String, usize)>;
+
+fn registered(report: &Report) -> (Found, Found) {
+    let of = |found: &[Failure]| {
+        found
+            .iter()
+            .filter(|f| f.rule == "roles-registered")
+            .map(|f| (f.found.clone(), f.file.clone(), f.line))
+            .collect::<Vec<_>>()
+    };
+    (of(&report.failures), of(&report.warnings))
+}
+
+fn not_registered(role: &str) -> String {
+    format!(
+        "[tool.meridian] declares `{role}`, and no `{role}.Role` class is registered in \
+         roles=[...]"
+    )
+}
+
+#[test]
+fn the_entry_is_run_run_async_or_connect_and_a_plugin_calling_none_fails() {
+    for (from, to) in [
+        ("meridian.run(", "meridian.run_async("),
+        ("meridian.run(", "meridian.connect("),
+        ("    meridian.run(", "    run("),
+    ] {
+        let plugin = Scaffolded::tested("entry");
+        plugin.replace(&main_py(), from, to);
+        if to == "    run(" {
+            plugin.add_after(&main_py(), "import meridian", "from meridian import run");
+        }
+        let report = plugin.check();
+        assert_eq!(
+            outcome(&report, "template-shape"),
+            Outcome::Passed,
+            "{to}: {}",
+            text(&report)
+        );
+        assert!(report.passed(), "{to}: {}", text(&report));
+    }
+
+    let plugin = Scaffolded::tested("entry-none");
+    plugin.replace(&main_py(), "meridian.run(", "serve(");
+    let report = plugin.check();
+    assert_eq!(
+        failed_rules(&report),
+        ["template-shape"],
+        "{}",
+        text(&report)
+    );
+    assert_eq!(
+        (
+            report.failures[0].found.as_str(),
+            report.failures[0].file.as_str()
+        ),
+        (
+            "nothing calls meridian.run(), meridian.run_async() or meridian.connect()",
+            main_py().as_str()
+        )
+    );
+    assert!(report.failures[0]
+        .instead
+        .contains("meridian.run(declaration=DECLARATION"));
+    // With no entry, there is no registration to hold the roles to.
+    assert_eq!(outcome(&report, "roles-registered"), Outcome::Passed);
+}
+
+#[test]
+fn each_roles_template_registers_its_roles_class() {
+    // On SDK 0.35 each role is one class: the custody template's own,
+    // traced through its bases across modules (`Custody(Converter)`,
+    // `Converter(custody.Role)`), connectivity's and pricing's the SDK's own
+    // logic (`connectivity.Trader`, `pricing.Pricer`).
+    for role in [
+        "connectivity",
+        "custody",
+        "data",
+        "operations",
+        "pricing",
+        "reporting",
+    ] {
+        let plugin = Scaffolded::of_role(&format!("registered-{role}"), role);
+        let report = plugin.check();
+        assert_eq!(
+            outcome(&report, "roles-registered"),
+            Outcome::Passed,
+            "{role}"
+        );
+        assert_eq!(registered(&report), (vec![], vec![]), "{role}");
+    }
+}
+
+#[test]
+fn a_declared_role_with_no_class_registered_fails_naming_it_at_the_entry() {
+    // The template holding custody and operations, each page naming its
+    // roles, and a class of each registered.
+    let plugin = two_roles("registered-two");
+    let report = plugin.check();
+    assert_eq!(
+        outcome(&report, "roles-registered"),
+        Outcome::Passed,
+        "{}",
+        text(&report)
+    );
+
+    // Its operations class taken out of roles=[...], though still defined.
+    plugin.replace(&main_py(), "roles=[HeldOperations(), ", "roles=[");
+    let report = plugin.check();
+    assert_eq!(
+        failed_rules(&report),
+        ["roles-registered"],
+        "{}",
+        text(&report)
+    );
+    assert_eq!(
+        registered(&report),
+        (
+            vec![(not_registered("operations"), main_py(), entry_line(&plugin))],
+            vec![]
+        )
+    );
+    assert!(report.failures[0].instead.contains("ruling 1015"));
+    let said = text(&report);
+    assert!(said.contains("FAIL  roles-registered"), "{said}");
+
+    // And with nothing registered, each declared role is named.
+    plugin.replace(&main_py(), "roles=[CUSTODY]", "roles=[]");
+    let report = plugin.check();
+    assert_eq!(
+        registered(&report).0,
+        [
+            (not_registered("custody"), main_py(), entry_line(&plugin)),
+            (not_registered("operations"), main_py(), entry_line(&plugin)),
+        ]
+    );
+}
+
+#[test]
+fn a_class_for_a_role_not_declared_is_warned_and_fails_nothing() {
+    // The template registers its custody class and declares no role: the
+    // SDK does not start the class where the instance holds no custody.
+    let plugin = Scaffolded::tested("registered-undeclared");
+    for report in [plugin.check(), plugin.check_verified()] {
+        assert!(report.passed(), "{}", text(&report));
+        assert_eq!(outcome(&report, "roles-registered"), Outcome::Warned);
+        assert_eq!(
+            registered(&report),
+            (
+                vec![],
+                vec![(
+                    "a `custody` class is registered in roles=[...], and [tool.meridian] does \
+                     not declare `custody`"
+                        .to_string(),
+                    main_py(),
+                    entry_line(&plugin)
+                )]
+            )
+        );
+    }
+    let said = text(&plugin.check());
+    assert!(said.contains("warn  roles-registered"), "{said}");
+    assert!(
+        said.contains("Every rule it was checked against holds."),
+        "{said}"
+    );
+    assert_eq!(
+        json(&plugin.check())["warnings"][0]["rule"],
+        "roles-registered"
+    );
+
+    // A failure and a warning together: the rule fails.
+    plugin.replace("pyproject.toml", "roles = []", "roles = [\"operations\"]");
+    let report = plugin.check();
+    assert_eq!(outcome(&report, "roles-registered"), Outcome::Failed);
+    let (failed, warned) = registered(&report);
+    assert_eq!(failed.len(), 1, "{}", text(&report));
+    assert_eq!(warned.len(), 1, "{}", text(&report));
+}
+
+#[test]
+fn a_role_class_is_traced_through_aliases_bases_names_and_modules() {
+    let plugin = Scaffolded::tested("registered-traced");
+    plugin.hold(&["data", "connectivity", "pricing"]);
+    plugin.write(
+        &format!("src/{MODULE}/held.py"),
+        "import meridian\nfrom meridian.roles import data as d\n\
+         from meridian.roles.connectivity import Trader\n\n\n\
+         class Base(d.Role):\n    pass\n\n\nclass Lake(\n    Base,\n    metaclass=type,\n):\n    pass\n\n\n\
+         LAKE: Lake = Lake()\n\
+         ROLES = [\n    LAKE,\n    Trader(lambda: None),\n    meridian.roles.pricing.Pricer([]),\n]\n",
+    );
+    // Registered by a list another module makes, through `run` imported.
+    let text_before = plugin.read(&main_py());
+    let call = text_before
+        .lines()
+        .find(|line| line.contains("meridian.run("))
+        .expect("the template's entry")
+        .to_string();
+    plugin.replace(
+        &main_py(),
+        &call,
+        "    run(declaration=DECLARATION, roles=ROLES, pages=pages, port=PORT)",
+    );
+    plugin.add_after(
+        &main_py(),
+        "from .page import CUSTODY, pages",
+        "from meridian import run\nfrom .held import ROLES",
+    );
+    let report = plugin.check();
+    assert_eq!(registered(&report), (vec![], vec![]), "{}", text(&report));
+    assert_eq!(outcome(&report, "roles-registered"), Outcome::Passed);
+
+    // The pricer gone, pricing is named.
+    plugin.replace(
+        &format!("src/{MODULE}/held.py"),
+        "    meridian.roles.pricing.Pricer([]),\n",
+        "",
+    );
+    let report = plugin.check();
+    assert_eq!(registered(&report).0.len(), 1, "{}", text(&report));
+    assert_eq!(registered(&report).0[0].0, not_registered("pricing"));
+}
+
+#[test]
+fn an_object_the_text_cannot_trace_to_a_role_fails_nothing() {
+    // A factory's result may be any role's class: no declared role is said
+    // to have none.
+    let plugin = Scaffolded::tested("registered-untraced");
+    plugin.hold(&["custody", "operations"]);
+    plugin.replace(&main_py(), "roles=[HeldOperations(), ", "roles=[made(), ");
+    let report = plugin.check();
+    assert_eq!(registered(&report), (vec![], vec![]), "{}", text(&report));
+    // Traced, it is held to it.
+    plugin.replace(&main_py(), "roles=[made(), ", "roles=[");
+    assert_eq!(
+        registered(&plugin.check()).0,
+        [(not_registered("operations"), main_py(), entry_line(&plugin))]
+    );
+}
+
+#[test]
+fn run_async_and_connect_with_roles_are_held_as_run_is() {
+    for entry in ["meridian.run_async(", "meridian.connect("] {
+        let plugin = Scaffolded::tested("registered-entries");
+        plugin.hold(&["custody"]);
+        plugin.replace(&main_py(), "meridian.run(", entry);
+        let report = plugin.check();
+        assert_eq!(
+            registered(&report),
+            (vec![], vec![]),
+            "{entry}: {}",
+            text(&report)
+        );
+        plugin.replace(&main_py(), "roles=[CUSTODY]", "roles=[]");
+        let report = plugin.check();
+        assert_eq!(
+            failed_rules(&report),
+            ["roles-registered"],
+            "{entry}: {}",
+            text(&report)
+        );
+    }
+}
+
+/// The template's `__main__.py` as SDK 0.34 wrote it: the plugin connecting
+/// itself, holding its roles through the plugin `connect` returns.
+const MAIN_0_34: &str = "import asyncio\nimport logging\nimport signal\n\nimport meridian\n\n\
+    from .declaration import DECLARATION, PORT\nfrom .page import pages\n\n\
+    log = logging.getLogger(\"reference_plugin\")\n\n\n\
+    async def run() -> None:\n    stopped = asyncio.Event()\n    \
+    loop = asyncio.get_running_loop()\n    \
+    for stop in (signal.SIGTERM, signal.SIGINT):\n        \
+    loop.add_signal_handler(stop, stopped.set)\n\n    \
+    async with await meridian.connect(declaration=DECLARATION) as plugin:\n        \
+    served = pages.serve(plugin, PORT)\n        \
+    await plugin.report(healthy=True, detail=\"started\")\n        \
+    await stopped.wait()\n        served.shutdown()\n\n\n\
+    def main() -> None:\n    asyncio.run(run())\n\n\nif __name__ == \"__main__\":\n    main()\n";
+
+#[test]
+fn a_plugin_on_sdk_0_34_connecting_itself_keeps_every_rule_as_before() {
+    let plugin = Scaffolded::tested("registered-0-34");
+    plugin.replace(
+        "pyproject.toml",
+        "open-meridian==0.35.0",
+        "open-meridian==0.34.2",
+    );
+    plugin.replace("Dockerfile", "plugin-python:0.35.0", "plugin-python:0.34.2");
+    plugin.replace("pyproject.toml", "roles = []", "roles = [\"custody\"]");
+    plugin.write(&main_py(), MAIN_0_34);
+    let report = plugin.check();
+    assert!(report.passed(), "{}", text(&report));
+    assert_eq!(outcome(&report, "template-shape"), Outcome::Passed);
+    assert_eq!(outcome(&report, "roles-registered"), Outcome::Passed);
+
+    // The same entry on 0.35, where a role is held only through its class.
+    plugin.replace(
+        "pyproject.toml",
+        "open-meridian==0.34.2",
+        "open-meridian==0.35.0",
+    );
+    plugin.replace("Dockerfile", "plugin-python:0.34.2", "plugin-python:0.35.0");
+    let report = plugin.check();
+    assert_eq!(
+        failed_rules(&report),
+        ["roles-registered"],
+        "{}",
+        text(&report)
+    );
+    assert_eq!(registered(&report).0[0].0, not_registered("custody"));
 }
 
 // ── role-suite (contract v11, the data suite from v18, connectivity's from v22)
@@ -736,7 +1102,7 @@ fn a_verified_connectivity_plugin_runs_its_suite_and_names_no_pause_or_stop_not_
     // plugin's, sending nothing new on a pause and cancelling at the venue on
     // a stop among them, so none may be named not presented.
     let plugin = Scaffolded::tested("connectivity-suite");
-    plugin.replace("pyproject.toml", "roles = []", "roles = [\"connectivity\"]");
+    plugin.hold(&["connectivity"]);
     let unverified = plugin.check();
     assert!(
         unverified.passed(),
@@ -877,7 +1243,7 @@ fn only_the_connectivity_suites_marked_cases_may_be_named_not_presented() {
 /// imports and producers every one of them shares.
 fn suite_module(label: &str, module: &str) -> Scaffolded {
     let plugin = Scaffolded::tested(label);
-    plugin.replace("pyproject.toml", "roles = []", "roles = [\"connectivity\"]");
+    plugin.hold(&["connectivity"]);
     plugin.write(
         "tests/test_suite.py",
         &format!(
@@ -1268,7 +1634,7 @@ fn a_page_of_its_own_comes_after_the_roles_in_its_tab_row() {
     let plugin = Scaffolded::of_role("pages-own-first", "data");
     let line = plugin.add_after(
         &page_py(),
-        "return running[0] if running else Converter(request.plugin)",
+        "return running[0] if running else Converter()",
         "\n\n@pages.page(\"/feeds\", \"Feeds\", levels=\"admin\")\nasync def feeds(request):\n    return pages.answer(\"connection.html\", None)\n",
     ) + 2;
     assert_eq!(
@@ -1370,6 +1736,7 @@ fn data_and_connectivity_on_sdk_pages(label: &str, call: &str) -> Scaffolded {
         "roles = [\"data\"]",
         "roles = [\"data\", \"connectivity\"]",
     );
+    plugin.register(&["connectivity"]);
     let text = plugin.read(&page_py());
     let start = text
         .find("\n\n@pages.page(\n    \"/\", \"Connection\"")
@@ -1788,20 +2155,20 @@ fn a_secret_declared_as_a_settings_field_is_kept_too() {
 fn every_act_names_its_check_tool_whatever_roles_the_plugin_holds() {
     // The reference plugin's two acts, their check tools taken away: advised,
     // and failed when verified, with no role's common part asked of it.
-    for roles in ["[]", "[\"signal\"]", "[\"oms\"]"] {
+    for roles in [&[][..], &["signal"], &["oms"]] {
         let plugin = Scaffolded::tested("acts");
         assert!(
             plugin.check_verified().passed(),
-            "{roles}: the template's acts are checked"
+            "{roles:?}: the template's acts are checked"
         );
         plugin.replace(&page_py(), "    checked_by=\"check_link_account\",\n", "");
         plugin.replace(&page_py(), "    checked_by=\"check_open_statement\",\n", "");
-        plugin.replace("pyproject.toml", "roles = []", &format!("roles = {roles}"));
+        plugin.hold(roles);
         let verified = plugin.check_verified();
         assert_eq!(
             failed_rules(&verified),
             ["role-pages"],
-            "{roles}: {}",
+            "{roles:?}: {}",
             text(&verified)
         );
         let found: Vec<(&str, usize)> = verified
@@ -1822,7 +2189,7 @@ fn every_act_names_its_check_tool_whatever_roles_the_plugin_holds() {
                     at("/statement")
                 ),
             ],
-            "{roles}"
+            "{roles:?}"
         );
         assert_eq!(plugin.check().advice.len(), 2);
     }
@@ -1995,7 +2362,7 @@ DASHBOARD = os.environ.get("MERIDIAN_HARNESS_DASHBOARD", "http://dashboard:8080"
 #[test]
 fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
     type Breaking = fn(&Scaffolded) -> (String, usize);
-    let breakages: [(&str, Breaking, &str); 19] = [
+    let breakages: [(&str, Breaking, &str); 20] = [
         (
             "template-shape",
             |p| {
@@ -2007,10 +2374,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.33.3", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.35.0", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.33.3",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.35.0",
         ),
         (
             "tool-meridian",
@@ -2033,6 +2400,17 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
                 ("pyproject.toml".into(), line)
             },
             "`trading` is not one of the deployment's roles",
+        ),
+        (
+            "roles-registered",
+            |p| {
+                p.replace("pyproject.toml", "roles = []", "roles = [\"reference\"]");
+                let text = p.read(&main_py());
+                let at = text.find("meridian.run(").expect("the template's entry");
+                (main_py(), text[..at].matches('\n').count() + 1)
+            },
+            "[tool.meridian] declares `reference`, and no `reference.Role` class is registered \
+             in roles=[...]",
         ),
         (
             "edge-storage",
@@ -2110,11 +2488,7 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "roles-declared",
             |p| {
-                p.replace(
-                    "pyproject.toml",
-                    "roles = []",
-                    "roles = [\"operations\", \"portfolio\"]",
-                );
+                p.hold(&["operations", "portfolio"]);
                 let text = p.read(&page_py());
                 let at = text.find("@pages.page(\"/setup\"").expect("the template's page");
                 (page_py(), text[..at].matches('\n').count() + 1)
@@ -2126,7 +2500,7 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
             |p| {
                 let line = p.add_after(
                     &main_py(),
-                    "log = logging.getLogger(",
+                    "from .page import CUSTODY, pages",
                     "token = os.environ[\"BROKER_TOKEN\"]",
                 );
                 (main_py(), line)
@@ -2138,7 +2512,7 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
             |p| {
                 let line = p.add_after(
                     &main_py(),
-                    "log = logging.getLogger",
+                    "from .page import CUSTODY, pages",
                     "KINDS = [meridian.RecordKind(\"activity\", \"Reported activity\", window_days=2555)]\nWINDOW = meridian.Setting(\"activity_window_days\", int)",
                 );
                 (main_py(), line + 1)
@@ -2151,13 +2525,13 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
             |p| {
                 p.add_after(
                     &main_py(),
-                    "log = logging.getLogger",
+                    "from .page import CUSTODY, pages",
                     "API_KEY = \"broker_api_key\"\nSETTINGS = [\n    meridian.Setting(API_KEY, str, required=True, secret=True),\n]",
                 );
                 let line = p.add_after(
                     &main_py(),
-                    "        served = pages.serve(plugin, PORT)",
-                    "        async for held in plugin.settings():\n            log.info(\n                \"using %s\",\n                held.values[API_KEY],\n            )",
+                    "def main() -> None:",
+                    "    async for held in plugin.settings():\n        log.info(\n            \"using %s\",\n            held.values[API_KEY],\n        )",
                 );
                 (main_py(), line + 3)
             },
@@ -2166,7 +2540,7 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "through-the-sdk",
             |p| {
-                let line = p.add_after(&main_py(), "import signal", "import nats");
+                let line = p.add_after(&main_py(), "import logging", "import nats");
                 (main_py(), line)
             },
             "it imports nats, to reach the deployment directly",
@@ -2194,7 +2568,7 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
                 p.write(&format!("src/{MODULE}/sweep.py"), SWEEP_LINKING);
                 (format!("src/{MODULE}/sweep.py"), 6)
             },
-            "link_account (src/checked_plugin/page.py:218) is an act called through runs_as and \
+            "link_account (src/checked_plugin/page.py:238) is an act called through runs_as and \
              names no check tool, so a service account set to prepare only is refused it",
         ),
         (
@@ -2252,12 +2626,14 @@ fn a_plugin_breaking_every_rule_is_told_each_with_its_place_and_its_fix() {
     );
     plugin.add_after(
         &main_py(),
-        "log = logging.getLogger",
+        "from .page import CUSTODY, pages",
         "import nats\nTOKEN = os.environ.get(\"BROKER_TOKEN\")\nSECRET = meridian.Setting(\"api_key\", str, secret=True)\nprint(settings.values[\"api_key\"])\nKIND = meridian.RecordKind(\"fills\", \"Fills\", window_days=30)\nPAST = meridian.Setting(\"fills_past_window\", str)\nHELD = \"LCL-01JBROKEN\"",
     );
     plugin.replace(&page_py(), "    params=OpenStatement,\n", "");
     plugin.replace(&page_py(), "    checked_by=\"check_link_account\",\n", "");
     plugin.write(&format!("src/{MODULE}/sweep.py"), SWEEP_LINKING);
+    // Custody declared, and its class not registered.
+    plugin.replace(&main_py(), "roles=[CUSTODY]", "roles=[]");
 
     // As a verified plugin is checked, so the rules only --verified holds are
     // among them. A warning rule fails nothing even so: it warns.
@@ -2387,7 +2763,7 @@ fn the_page_port_is_the_plugins_wiring_and_anything_else_is_a_setting() {
 
     let line = plugin.add_after(
         &main_py(),
-        "log = logging.getLogger(",
+        "from .page import CUSTODY, pages",
         "base = os.getenv('BROKER_URL')",
     );
     let report = plugin.check();
@@ -2444,7 +2820,7 @@ DECLARED = (
     // Its name alone, logged, is not its value.
     plugin.add_after(
         &main_py(),
-        "log = logging.getLogger",
+        "from .page import CUSTODY, pages",
         "log.info(\"waiting for %s\", \"broker_client_id\")",
     );
     assert!(plugin.check().passed(), "{}", text(&plugin.check()));
@@ -2456,7 +2832,7 @@ DECLARED = (
     );
     let raised = plugin.add_after(
         &main_py(),
-        "log = logging.getLogger",
+        "from .page import CUSTODY, pages",
         "def refuse(values):\n    raise ValueError(f\"refused with {values[CLIENT_ID]}\")",
     ) + 1;
     let report = plugin.check();
@@ -2490,12 +2866,12 @@ fn the_deployment_named_directly_is_refused_wherever_it_is_named() {
     let plugin = Scaffolded::tested("direct");
     let line = plugin.add_after(
         &main_py(),
-        "log = logging.getLogger",
+        "from .page import CUSTODY, pages",
         "STORE = \"postgres://meridian@meridian-postgres.meridian.svc.cluster.local/street\"",
     );
     plugin.add_after(
         &main_py(),
-        "import signal",
+        "import logging",
         "from meridian.v1 import sidecar_pb2_grpc",
     );
     let report = plugin.check();
@@ -2947,11 +3323,7 @@ fn a_kinds_window_setting_is_the_sdks_by_any_spelling_and_other_names_are_the_pl
 /// its roles hold.
 fn two_roles(label: &str) -> Scaffolded {
     let plugin = Scaffolded::tested(label);
-    plugin.replace(
-        "pyproject.toml",
-        "roles = []",
-        "roles = [\"custody\", \"operations\"]",
-    );
+    plugin.hold(&["custody", "operations"]);
     plugin.write(
         "tests/test_suite.py",
         "from meridian.suites import run\n\n\ndef test_custody():\n    \
@@ -3132,7 +3504,7 @@ fn a_setting_or_tool_naming_a_role_the_plugin_does_not_hold_fails() {
 #[test]
 fn a_plugin_holding_one_role_names_none_and_the_rule_holds() {
     let plugin = Scaffolded::tested("roles-one");
-    plugin.replace("pyproject.toml", "roles = []", "roles = [\"operations\"]");
+    plugin.hold(&["operations"]);
     let report = plugin.check();
     assert!(report.passed(), "{}", text(&report));
 }
@@ -3336,6 +3708,8 @@ fn every_suite_holds_v24s_replacement_and_template_cases_which_every_plugin_pass
 #[test]
 fn an_instrument_id_kept_in_the_code_is_warned_and_fails_nothing_verified_or_not() {
     let plugin = Scaffolded::tested("kept-id");
+    // Holding no role, it registers no role's class.
+    plugin.replace(&main_py(), "roles=[CUSTODY]", "roles=[]");
     let line = plugin.add_after(
         &page_py(),
         "TITLE = ",
@@ -3428,6 +3802,8 @@ fn an_instrument_id_kept_in_the_code_is_warned_and_fails_nothing_verified_or_not
 #[test]
 fn a_plugin_keeping_no_instrument_id_is_warned_of_nothing() {
     let plugin = Scaffolded::tested("no-kept-id");
+    // Holding no role, it registers no role's class.
+    plugin.replace(&main_py(), "roles=[CUSTODY]", "roles=[]");
     let report = plugin.check();
     assert!(report.warnings.is_empty(), "{}", text(&report));
     assert!(report
@@ -3727,10 +4103,10 @@ fn a_plugin_on_an_older_sdk_is_advised_rather_than_failed() {
     let plugin = Scaffolded::tested("docs-older");
     plugin.replace(
         "pyproject.toml",
-        "open-meridian==0.33.3",
+        "open-meridian==0.35.0",
         "open-meridian==0.28.0",
     );
-    plugin.replace("Dockerfile", "plugin-python:0.33.3", "plugin-python:0.28.0");
+    plugin.replace("Dockerfile", "plugin-python:0.35.0", "plugin-python:0.28.0");
     std::fs::remove_dir_all(plugin.path("docs")).unwrap();
     let report = plugin.check();
     assert!(report.passed(), "{}", text(&report));

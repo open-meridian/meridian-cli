@@ -6,7 +6,7 @@ typed routes make, and its documentation, the Markdown in
 `docs/` (`/plugin/docs` in its image), which a deployment admin reads on its
 Documentation tab before launching it.
 
-`connect(declaration=DECLARATION)` registers it, and `meridian plugin upload`
+`meridian.run(declaration=DECLARATION, ...)` registers it, and `meridian plugin upload`
 reads the same one from the built image, with the texts beside it. A version
 registers exactly the declaration it was uploaded with: the port is fixed
 here, never read from the environment, and this module imports every module

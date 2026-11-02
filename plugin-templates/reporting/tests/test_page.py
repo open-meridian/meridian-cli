@@ -18,8 +18,8 @@ from decimal import Decimal
 from typing import Any, cast
 
 import meridian
-from meridian.operations import Operations
 from meridian.plugin.v1 import operations_pb2 as ops
+from meridian.suites import Recorder
 from meridian.testing import PageClient
 
 from reference_plugin.page import pages, use
@@ -48,14 +48,16 @@ class _Named:
         return name
 
 
-class Sidecar(Operations):
+class Sidecar(Recorder):
     """The book holding LCL-1 in ACC-1 and ACC-9, and the lake its close and
-    two daily bars, answered here rather than by a sidecar."""
+    two daily bars, answered here rather than by a sidecar: the SDK's
+    recorder, which the plugin's reporting class is bound to (SDK 0.35)."""
 
     identity = meridian.Identity("reference-1", roles=("reporting",))
     grants = meridian.Grants()
 
     def __init__(self) -> None:
+        super().__init__("reference-1")
         self.read: list[str] = []
 
     def _operations(self) -> Any:
@@ -108,7 +110,7 @@ class Sidecar(Operations):
 def client(sidecar: Sidecar | None = None) -> PageClient:
     """Ada, who may read ACC-1 through the plugin."""
     sidecar = sidecar or Sidecar()
-    use(Report(cast(meridian.Plugin, sidecar)))
+    use(sidecar.bind(Report()))
     return PageClient(pages, sidecar, read={"ACC-1"})
 
 

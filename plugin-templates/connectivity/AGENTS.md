@@ -5,9 +5,32 @@ sidecar in a Meridian deployment and reaches nothing else: what it may publish
 and subscribe to comes from the roles `pyproject.toml` declares under
 `[tool.meridian]`, once a deployment admin approves them.
 
-- `src/reference_plugin/__main__.py` connects to the sidecar and serves the
-  pages; `src/reference_plugin/page.py` declares them, each a view function
-  and a template under `templates/`, built on the plugin UI kit (below).
+- `src/reference_plugin/__main__.py` runs the plugin: `meridian.run(...)`
+  registers its role classes on the sidecar and serves the pages;
+  `src/reference_plugin/page.py` declares them, each a view function and a
+  template under `templates/`, built on the plugin UI kit (below).
+- **Each role is one class** (SDK 0.35). For each role `[tool.meridian]`
+  declares, write one class extending that role's base,
+  `meridian.roles.<role>.Role`: the role's acts are its methods
+  (`await self.record_prices(...)`), and what the role hears is its
+  `on_<row>` methods (`async def on_observations_wanted(self, heard)`). The
+  events the role's suite requires are abstract, and a class missing one is
+  refused naming it; an optional event is heard only where the class
+  overrides it. `on_start()` reads what the class needs before anything is
+  heard, `run()` is its long-running work (restarted after a backoff when it
+  fails), `on_stop()` its last word; `seed = False` where `on_start` reads the
+  store itself, `subjects()` the lake's subjects it hears and
+  `self.hear_again()` when they change. Register every class together:
+  `meridian.run(declaration=DECLARATION, roles=[Lake(state), Trading(state)],
+  pages=pages, port=PORT, on_settings=..., figures=...)`, one class per role,
+  state shared by passing it to each. What is the whole plugin's -- its
+  identity, settings, health, figures, storage, raw records, tickets, views,
+  account scope -- is the connection's, `self.plugin` in a class and
+  `request.plugin` in a page; an act is never made on the connection. A
+  page acts through the role object it is given (a closure or the state it
+  shares). Where the SDK carries a role's whole work, register or subclass
+  its class: `connectivity.Trader`, `pricing.Pricer`, the data feeds. Below,
+  `role.<act>(...)` names an act made on the role class holding it.
 - A save changes what the plugin does, never what it is allowed to do. Roles
   and dependencies take a new version, which a person approves.
 - Who may use it is not the plugin's to say. A person holds `admin`, `read`
@@ -34,10 +57,10 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   the external account its connection reaches, and the sidecar takes it only
   once that external account is linked to one of the deployment's accounts
   (from contract v7; a statement naming none is refused). So the plugin
-  reports what it reaches (`plugin.report_external_accounts`, at start and
+  reports what it reaches (`role.report_external_accounts`, at start and
   when that changes), an admin of the plugin links each on its own Manage
-  page (`plugin.link_external_account(..., acting_for=request.caller.header)`,
-  the accounts offered from `plugin.read_accounts_for_linking`), and which are
+  page (`role.link_external_account(..., acting_for=request.caller.header)`,
+  the accounts offered from `role.read_accounts_for_linking`), and which are
   linked is the plugin's account scope (`plugin.account_scope()`, its
   `links`), read rather than kept. The template does exactly this: Setup
   links `reference-1`, and the Accounts page opens a statement for a linked
@@ -70,8 +93,8 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   [meridian.Figure("Connections", 3, state="warn", why="...")]`, sent on its
   heartbeat). Build no summary page or tiles of your own; report figures
   only where the plugin has work worth counting.
-- **Hear what the plugin's roles hear with `plugin.receive`**, a handler per
-  row (`custodial_position_updated=...`), and keep nothing of it: the SDK
+- **Hear what the plugin's roles hear with each role class's `on_<row>`
+  methods** (`on_custodial_position_updated`), and keep nothing of it: the SDK
   reads the store on every start and after any gap, loss or broken stream,
   handing what it read on as `heard.caught_up`. A handler sees each change
   once, in order, and no store number. Everything heard and read is within
@@ -95,7 +118,7 @@ and subscribe to comes from the roles `pyproject.toml` declares under
 - **A custody plugin reports the custodian's activity, as the custodian
   states it.** Each activity on an account -- a purchase, a sale, a
   reinvested dividend, a split, a fee, a transfer -- goes to the street with
-  `plugin.record_activity(external_account_id=..., source=...,
+  `role.record_activity(external_account_id=..., source=...,
   activity=meridian.CustodialActivity(...))`. It is evidence that explains a
   break, never a source: the street derives no position, lot or figure from
   it, and nothing moves the book until a person confirms. Its `kind` is the
@@ -111,14 +134,14 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   kept once, so a retry or a resync is safe; a custodian restating an
   activity under a new identifier is a new one, reported, never merged. Say
   how far back the custodian's history reaches with
-  `plugin.report_sync_status(..., history_from="YYYY-MM-DD")`, report past
+  `role.report_sync_status(..., history_from="YYYY-MM-DD")`, report past
   activity back to it on first connection (a backfill), then each sync's new
   activity. Report each sync status as it changes, `state` saying what holds
   (`SYNC_STATE_NEEDS_SIGN_IN` when the person must sign in again): the street
   keeps every one, so operations tells "needs sign-in" apart from merely old.
   An activity recorded before its instrument resolved -- a plan's own code
   linked later, a symbol the security master completes later -- is
-  re-resolved, never sent again: `plugin.re_resolve_activity(
+  re-resolved, never sent again: `role.re_resolve_activity(
   external_account_id=..., source=..., external_activity_id=...,
   instrument_id=..., provenance=meridian.Provenance(...),
   resolved_at_ns=...)`, the provenance saying what resolved it (the link and
@@ -178,23 +201,55 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   and report what does not resolve (`report_missing_instrument`,
   `report_missing_venue`); keep the vendor's product map in storage, never a
   vendor's code as a key. Record in batches of at most 500
-  (`plugin.record_prices`, `plugin.record_bars`), each row's `row_key` made
+  (`role.record_prices`, `role.record_bars`), each row's `row_key` made
   from its raw record so a repeat changes nothing and the day still forming is
   restated under the same key, its `business_date` a `datetime.date` in the
   dataset's declared day, its number parsed from the vendor's text as a
   `Decimal` (never through a `float`), and a price in a stablecoin on the
   token's own cash instrument (`Money(amount, instrument_id=...)`), never a
-  fiat code. Hear wants with `plugin.receive(observations_wanted=...,
-  want_withdrawn=...)`, record against each (`want_id=`) or decline it per
-  subject (`plugin.decline_want`). Its pages show its connection and its
+  fiat code. Hear wants with the data class's `on_observations_wanted`
+  and `on_want_withdrawn`, record against each (`want_id=`) or decline it per
+  subject (`role.decline_want`). Its pages show its connection and its
   datasets, never a price: prices are the reading roles'. Hold it to the
   suite: `meridian.suites.run("data", producers)` on synthetic exchanges, each
   case mapped to the plugin's own conversion.
+- **A data plugin says what stands behind its prices.** Declare each
+  dataset's class of source, `DatasetDeclaration(price_source_class=...)`:
+  `traded` for prices of trades done (a venue's last, close or settlement),
+  `firm_quote` for prices someone stands ready to deal at (an executable bid
+  and ask, and the mid between them), `composite` for an aggregate of several
+  contributors' prices, `evaluated` for a pricing service's or a model's
+  evaluation; leave it empty only where the source does not say. A price
+  keeps its real kind -- a composite's is `mid`, an evaluated bond's `bid`,
+  `mid` and `ask` -- never a kind made up for the class. Where the vendor
+  passes on another source's data or serves an aggregate, name it in the
+  terms, `DatasetLicence(underlying_source=...)`, in words: "Pyth's aggregate
+  of its publishers". Where the source states an interval around its price,
+  record it as the source states it, `Price(confidence=...)`, in the price's
+  own unit, never computed, and name `meridian.v1.Price.confidence` among
+  the dataset's `data_types`. A deployment admin sees the class and the
+  underlying source on Data sources; a core earlier than contract 28's
+  amendment of 2026-10-31 refuses a registration setting either.
+- **A data plugin records a publisher's figure as the publisher's.** A
+  figure the source computes itself -- an index's level, a vendor's own
+  implied volatility -- is recorded as a derived series in a dataset of its
+  own (`role.record_derived_series`), each value marked
+  `DerivedSeries(published_by=...)` with whose it is ("Cboe"), its `rule`
+  naming the publisher's definition and its `inputs` empty; never as the
+  plugin's or the platform's own measure. A data plugin's derived series
+  without `published_by` is refused. Map the data suite's
+  `records-a-derived-series` to it, or mark it not presented where the
+  source publishes no figure of its own.
+- **A venue plugin records a market's category in the venue's words.** A
+  binary event contract's terms carry `category`, the venue's primary
+  category for the market as the venue words it (a series' category, an
+  event's primary tag label), 0 to 64 characters, empty where it states
+  none; never mapped to a list of our own.
 - **A data plugin streaming trades and quotes records them as its source states
   them, converted at the edge.** Declare them in a live dataset apart
   (`data_types=["meridian.v1.Trade", "meridian.v1.Quote"]`, `modes=["stream"]`)
-  and record in batches of at most 500 (`plugin.record_trades`,
-  `plugin.record_quotes`), keyed by UTC instants with no `business_date`. A
+  and record in batches of at most 500 (`role.record_trades`,
+  `role.record_quotes`), keyed by UTC instants with no `business_date`. A
   trade carries its `meridian.TradeAttributes` in the platform's words,
   converted from the source's condition codes (a code with no conversion
   kept as reported in `meta.unconverted`, never guessed), and its
@@ -211,7 +266,7 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   (`meridian.roles.data.backfill_restart`: the last trade it recorded of each
   subject, `list_trades(..., latest_recorded=True)`, then the venue's history
   after it), and reads which of its datasets are licensed
-  (`plugin.list_datasets()`, its `licences`).
+  (`role.list_datasets()`, its `licences`).
 - **Use the role's common logic; never copy it from another plugin.** What
   every plugin of a role does the same is the SDK's (0.30.0):
   `meridian.roles.data.Wants` hears what the lake wants, answers it with the
@@ -280,7 +335,7 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   across versions.
 - **Work out a date in core, never by hand.** A settlement date, a spot or
   tenor date, a roll or whether a day is a business day is
-  `plugin.compute_date(...)`, a calendar's days `plugin.read_calendar(...)`:
+  `role.compute_date(...)`, a calendar's days `role.read_calendar(...)`:
   the deployment's calendars and rules, one answer for every plugin, with
   the basis it was worked out on. A date outside a calendar's coverage is
   answered as such, never guessed.
@@ -310,9 +365,8 @@ and slow when the plugin reads everything and filters it.
 - **Never page through a whole chain or list to filter it in the plugin.**
   A wider window, more series or another field is another read.
 - **Keep no copy of platform data in the plugin.** No cache of quotes,
-  chains, listings, book records or engine answers. Read again at the
-  source's cadence. The SDK will keep that copy for you once subscriptions
-  arrive.
+  chains, listings, book records or engine answers. Subscribe instead, and
+  let the SDK keep the copy (below).
 - **Show an "as of" on every figure** (`<om-asof>`): the time the data it
   came from was true.
 - **Draw the page first, then fill in what takes longer.** The first answer
@@ -324,18 +378,18 @@ and slow when the plugin reads everything and filters it.
 One expiration of a chain, as a Chain page draws it:
 
 ```python
-from meridian.roles import chains
+from meridian.helpers import chains
 
-expirations = await chains.read_expirations(plugin, underlying_id)
+expirations = await chains.read_expirations(self, underlying_id)  # self: the role class
 day = expirations[0].expiration_date  # or the one the person picked
 underlying = meridian.SubjectRef(entity_id=underlying_id)
 series = await chains.read_chain(
-    plugin,
+    self,
     underlying_id,
     day,
     paths=["put_or_call", "strike_price", "expiration_date"],
 )
-quotes = await plugin.list_quotes(
+quotes = await self.list_quotes(
     subjects=[underlying],
     all_series=True,
     expiration_from=day,
@@ -350,9 +404,47 @@ quotes = await plugin.list_quotes(
 )
 ```
 
-That is three reads, not one per page of every expiration. The model behind
-this, and what comes next (subscriptions, a hot layer, standing analytics),
-is the design's `spec/one-data-access-model.md`.
+That is three reads, not one per page of every expiration.
+
+### Subscribe to what a page shows
+
+A page that ticks, or that is opened again and again, subscribes to what it
+shows rather than reading it on every request. `plugin.subscribe` takes the
+row and the same narrowing as the read -- `subjects`, `series_keys` or
+`all_series` with a window, and `fields` -- and answers a `LiveView`. The
+SDK reads its snapshot once, keeps it current from the deliveries the
+sidecar matches, and reads again on a loss. A page's second request makes
+no bus call.
+
+- **One view per thing shown.** Identical selectors within the plugin are
+  one subscription, shared by every page showing it.
+- **Close what you open.** `await view.close()` when a request is done with
+  it, or `async with`. The subscription lingers 30 seconds after the last
+  reader, so a reload does not churn it.
+- **Tick with `pages.live`.** It serves the view's snapshot and its event
+  stream to the kit's `<om-live>`, the changes conflated to one per row
+  every 250 ms. The page never polls.
+- **Book records too.** `OrderUpdated`, `PositionChanged` and the other
+  records your roles hear keep a view by entity. A page reads the view, not
+  `list_orders` on every request.
+
+```python
+@pages.live("/rates/live", levels="read")
+async def rates(request):
+    return await plugin.subscribe(
+        "QuotesRecorded",
+        subjects=pairs_shown,
+        fields=["meridian.v1.Quote.bid", "meridian.v1.Quote.ask"],
+    )
+```
+
+```html
+<om-live src="rates/live/events" snapshot="rates/live" for="rates"></om-live>
+<om-grid id="rates"></om-grid>
+```
+
+The model behind this, and what comes next (a hot layer, standing
+analytics), is the design's `spec/one-data-access-model.md`.
 
 ## Checking it: `meridian plugin check`
 
@@ -405,8 +497,8 @@ plugin upload` reads it from the built image, and the deployment holds the
 running plugin to it: a version registering anything its upload did not
 declare is refused, naming the difference. So:
 
-- declare everything in `Declaration(...)` and call
-  `meridian.connect(declaration=DECLARATION)` alone;
+- declare everything in `Declaration(...)` and run it with
+  `meridian.run(declaration=DECLARATION, roles=[...], ...)` alone;
 - keep the interface's port fixed (`PORT`), never read from the
   environment;
 - keep `declaration.py` importing every module that declares a page or a
