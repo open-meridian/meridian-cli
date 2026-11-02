@@ -86,8 +86,8 @@ Each release binary runs, and is checked to run before it is published, on
   kernel. It is checked in containers of Ubuntu 22.04 and 26.04, Debian 13,
   Rocky Linux 9 and Alpine 3.24, on each architecture; containers share
   their host's kernel, so the kernel tested is the one GitHub's Ubuntu 24.04
-  runners run, Linux 6.11 when this was written, and any recent kernel is
-  supported.
+  runners run, Linux 7.0 when this was written, and Linux 6.6 under Rancher
+  Desktop locally; any recent kernel is supported.
 - **Windows** through WSL2, with the Linux binary: install it from a WSL2
   terminal, as on Linux. There is no native Windows binary; one will be built
   if asked for.
