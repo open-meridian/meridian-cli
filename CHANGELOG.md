@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.58
+
+- `plugin check`'s `role-suite` reads contract v29's suites (meridian-schema ce3a6f3, as SDK 0.35.2
+  vendors them): the data suite's `records-a-derived-series` and `records-a-pools-factor` can be named
+  in `not_presented`, where they were refused as "no such case", and so can every read the suites now
+  mark with its `about` (datasets, orders, trading instructions, replacements, templates, event
+  groups and the rest), `reads-its-datasets-licences` among them. `roles.json` moves to the same
+  revision.
+- `roles-registered` judges a file under `e2e/` by the roles it registers itself, as the SDK's
+  migration does: a stand-in reader's classes are neither held to the roles the plugin declares nor
+  warned of, and its entry no longer hides a registration the plugin's own entry lacks.
+- `plugin check --run-tests` (and `plugin migrate --run-tests`) runs the tests in the project's own
+  environment: `uv run --frozen` for a project with a `uv.lock` and `uv` on the PATH, else the Python
+  of its `.venv` or `venv`, else the `python3` on the PATH. A run that cannot import the plugin or the
+  SDK says which module is missing and how to give the tests an environment, not only that they
+  failed.
+- `plugin migrate --to X` accepts a release the registry's JSON does not list yet but its simple
+  index does (publish lag), and runs the steps in that release's own image.
+
 ## 0.1.57
 
 - `meridian plugin migrate` gives the SDK's migration steps the plugin's `Makefile` beside its `.py`

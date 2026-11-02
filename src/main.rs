@@ -221,7 +221,9 @@ neither does advice: a prompted section of docs/ missing (troubleshooting.md,
 terms.md), a file there that is not uploaded, a heading's text past one screen
 of the Documentation tab, or a link it shows as plain text
       --dir <dir>           the plugin's directory (default: .)
-      --run-tests           run its tests too, with pytest
+      --run-tests           run its tests too, with pytest in the project's own
+                            environment: uv run for a uv.lock, else its .venv or
+                            venv, else python3 on the PATH
       --verified            hold it as a verified plugin is: every changing route
                             a tool for agents, none kept from them, each role it
                             holds with a suite (custody, data, connectivity,
@@ -236,7 +238,9 @@ left by hand and every rule holding; 1 when something is left by hand, a rule do
 not hold, or it could not run (then nothing was changed); 2 when asked wrongly or
 refused before changing anything: no pins, pins disagreeing, an older --to, or
 changes git does not hold yet
-      --to <version>        the release to move to (default: the latest). Never older
+      --to <version>        the release to move to (default: the latest). Never older;
+                            one the registry lists on its simple index before its
+                            JSON is accepted
       --dir <dir>           the plugin's directory (default: .)
       --image <ref>         the SDK image the steps run in (default: the latest
                             release's, which carries every step)

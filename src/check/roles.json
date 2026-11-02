@@ -394,12 +394,14 @@
           "RecordLiveness",
           "RecordSeries",
           "RecordStatistics",
+          "RecordDerivedSeries",
           "RecordFilings",
           "RecordReportedFacts",
           "RecordHoldingsReports",
           "RecordHoldings",
           "RecordCorporateActions",
-          "RecordRatingActions"
+          "RecordRatingActions",
+          "RecordFactors"
         ],
         "reads": [
           "ResolveIdentifier",
@@ -511,7 +513,8 @@
           "QueryLake",
           "ListExecutionCosts",
           "ListSeries",
-          "ReadStaleReferenceActionsPermitted"
+          "ReadStaleReferenceActionsPermitted",
+          "ListExpirations"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -524,7 +527,8 @@
           "TradesRecorded",
           "QuotesRecorded",
           "EventGroupChanged",
-          "LivenessRecorded"
+          "LivenessRecorded",
+          "SeriesRecorded"
         ]
       }
     },
@@ -665,7 +669,8 @@
           "ListEventGroups",
           "ReadAgentOrdersDemoOnly",
           "ListExecutionCosts",
-          "ListSeries"
+          "ListSeries",
+          "ListExpirations"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -680,7 +685,8 @@
           "ReportVenueCatalogue",
           "BookingUpdated",
           "AlertChanged",
-          "EventGroupChanged"
+          "EventGroupChanged",
+          "SeriesRecorded"
         ]
       }
     },
@@ -765,7 +771,8 @@
           "ListEventGroups",
           "QueryLake",
           "ListExecutionCosts",
-          "ListLifecycleEvents"
+          "ListLifecycleEvents",
+          "ListFactors"
         ],
         "hears": [
           "StatementRecorded",
@@ -785,7 +792,8 @@
           "AlertChanged",
           "OutcomesRecorded",
           "EventGroupChanged",
-          "LifecycleEventRecorded"
+          "LifecycleEventRecorded",
+          "FactorsRecorded"
         ]
       }
     },
@@ -878,7 +886,9 @@
           "ListReportedFacts",
           "ListHoldings",
           "ListCorporateActions",
-          "ListRatingActions"
+          "ListRatingActions",
+          "ListFactors",
+          "ListExpirations"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -899,7 +909,9 @@
           "RatesRecorded",
           "LivenessRecorded",
           "StatisticsRecorded",
-          "LifecycleEventRecorded"
+          "LifecycleEventRecorded",
+          "FactorsRecorded",
+          "SeriesRecorded"
         ]
       }
     },
@@ -982,7 +994,8 @@
           "ListReportedFacts",
           "ListHoldings",
           "ListCorporateActions",
-          "ListRatingActions"
+          "ListRatingActions",
+          "ListFactors"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -1004,7 +1017,8 @@
           "StatisticsRecorded",
           "LifecycleEventRecorded",
           "FilingsRecorded",
-          "CorporateActionsRecorded"
+          "CorporateActionsRecorded",
+          "FactorsRecorded"
         ]
       }
     },
@@ -1046,12 +1060,14 @@
           "ListTemplates",
           "ReadTemplate",
           "ListEventGroups",
-          "ListLifecycleEvents"
+          "ListLifecycleEvents",
+          "ListFactors"
         ],
         "hears": [
           "ReplaceMergedInstrument",
           "EventGroupChanged",
-          "LifecycleEventRecorded"
+          "LifecycleEventRecorded",
+          "FactorsRecorded"
         ]
       }
     },
@@ -1158,7 +1174,9 @@
           "ListReportedFacts",
           "ListHoldings",
           "ListCorporateActions",
-          "ListRatingActions"
+          "ListRatingActions",
+          "ListFactors",
+          "ListExpirations"
         ],
         "hears": [
           "ReplaceMergedInstrument",
@@ -1173,7 +1191,9 @@
           "LivenessRecorded",
           "StatisticsRecorded",
           "FilingsRecorded",
-          "CorporateActionsRecorded"
+          "CorporateActionsRecorded",
+          "FactorsRecorded",
+          "SeriesRecorded"
         ]
       }
     },
@@ -1687,6 +1707,23 @@
       "stability": "stable"
     },
     {
+      "name": "FactorsRecorded",
+      "step": "W10.5",
+      "title": "Record, sequence and publish each row",
+      "kind": "event",
+      "topic": "platform.lake.{dataset}.event.factors-recorded",
+      "roles": {
+        "hears": [
+          "operations",
+          "portfolio",
+          "reporting",
+          "servicing",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
       "name": "FilingsRecorded",
       "step": "W10.5",
       "title": "Record, sequence and publish each row",
@@ -1987,6 +2024,39 @@
           "operations",
           "portfolio",
           "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ListExpirations",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-expirations",
+      "roles": {
+        "reads": [
+          "ems",
+          "oms",
+          "portfolio",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "ListFactors",
+      "step": "W10.6",
+      "title": "Read prices, bars, trades and quotes, point in time, by source",
+      "kind": "query",
+      "topic": "platform.lake.query.list-factors",
+      "roles": {
+        "reads": [
+          "operations",
+          "portfolio",
+          "reporting",
+          "servicing",
           "signal"
         ]
       },
@@ -2911,6 +2981,7 @@
       "topic": "platform.lake.command.record-derived-series",
       "roles": {
         "publishes": [
+          "data",
           "signal"
         ]
       },
@@ -2928,6 +2999,19 @@
         ]
       },
       "stability": "stable"
+    },
+    {
+      "name": "RecordFactors",
+      "step": "W10.4",
+      "title": "Record prices, bars, trades and quotes in batches",
+      "kind": "command",
+      "topic": "platform.lake.command.record-factors",
+      "roles": {
+        "publishes": [
+          "data"
+        ]
+      },
+      "stability": "preview"
     },
     {
       "name": "RecordFilings",
@@ -3599,6 +3683,22 @@
           "compliance",
           "portfolio",
           "reporting",
+          "signal"
+        ]
+      },
+      "stability": "preview"
+    },
+    {
+      "name": "SeriesRecorded",
+      "step": "W10.5",
+      "title": "Record, sequence and publish each row",
+      "kind": "event",
+      "topic": "platform.lake.{dataset}.event.series-recorded",
+      "roles": {
+        "hears": [
+          "ems",
+          "oms",
+          "portfolio",
           "signal"
         ]
       },
