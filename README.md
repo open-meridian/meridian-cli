@@ -1059,12 +1059,14 @@ asked wrongly, and 3 when there is no session or it has lapsed, saying the
 ## Building
 
 ```
-make ci-local
+make pre-push
 ```
 
 The host needs Docker and nothing else: the toolchain is pinned inside
 `Dockerfile.rust`, exactly as in meridian-core. `make install-hooks` makes
-`git push` run it first.
+`git push` run it first: the fast gate, the advisories and the stages the
+changed paths select, each named with why. CI on the pull request runs every
+gate; `make ci-local` runs them all here, for when CI is down.
 
 ## Releasing
 

@@ -10,13 +10,15 @@ DOCKER := DOCKER_BUILDKIT=1 docker
 unexport GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
          GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
 
-.PHONY: help ci-local ci-local-deep build test lint fmt lock install-hooks e2e-up e2e-migrate \
+.PHONY: help ci-local ci-local-deep ci-stage pre-push pre-push-run build test lint fmt lock install-hooks e2e-up e2e-migrate \
         vendor-template check-vendored-template check-install check-c-deps check-scaffolds \
         check-fresh-sources smoke-linux \
         ci-mirror-check e2e-authority-macos advisories
 
 help:
-	@echo "  make ci-local   run every gate (the pre-push gate, and what CI mirrors)"
+	@echo "  make pre-push   the fast gate the pre-push hook runs: lint, build, tests, the stages the changed paths select"
+	@echo "  make ci-local   every gate, as CI runs it: optional, for when CI is down"
+	@echo "  make ci-stage STAGE=<gate>  one of CI's gates, as CI runs it (ci-local's: $(CI_STAGES))"
 	@echo "  make build      compile the binary"
 	@echo "  make test       the unit tests: every check against a fake machine"
 	@echo "  make lint       rustfmt --check and clippy with warnings denied"
@@ -34,13 +36,83 @@ help:
 	@echo "  make ci-mirror-check  every CI job is reachable from ci-local, or allowlisted with a reason"
 	@echo "  make vendor-template  move the scaffolds \`plugin new\` writes to SDK_REV"
 
-# Local green is the completion signal; CI is confirmation.
+# Every gate. CI on the pull request runs it, and the pull request merges on
+# it (accepted 2026-11-07, superseding ruling 1075's full local gate); here it
+# is the optional full run, for when CI is down.
 ci-local: ci-mirror-check check-vendored-template advisories build test lint smoke-linux \
           check-c-deps check-fresh-sources check-install check-scaffolds
 	@echo
 	@echo "ci-local: GREEN"
 
 ci-local-deep: ci-local
+
+# One of CI's gates, as CI's ci-local job runs it: reproduce a failing one
+# with this before pushing again, rather than rerunning CI until it is green.
+# ci-local's prerequisites, the same list (ci-mirror-check reads that line).
+CI_STAGES := ci-mirror-check check-vendored-template advisories build test lint smoke-linux \
+          check-c-deps check-fresh-sources check-install check-scaffolds
+ci-stage:
+	@case " $(CI_STAGES) " in *" $(STAGE) "*) ;; \
+		*) echo "ci-stage: STAGE is one of CI's gates: $(CI_STAGES)" >&2; exit 2;; esac
+	@$(MAKE) --no-print-directory $(STAGE)
+
+# The fast gate (accepted 2026-11-07; the pre-push hook runs it): CI runs
+# every gate on the pull request, so a push runs only what its changes reach.
+# Every push runs the mirror and RustSec's advisories; the rest only when a
+# path the branch changed against PRE_PUSH_BASE maps to them here
+# (<glob>=<stage>,...; tools/pre_push.py prints which ran and why):
+#
+#   rust         lint (rustfmt --check, clippy), build and the unit tests:
+#                the CLI is one crate, so its tests are the changed crate's
+#   vendored     check-vendored-template: the scaffolds are the SDK's
+#   c-deps       check-c-deps: aws-lc-sys alone compiles C
+#   fresh        check-fresh-sources: the target cache's wrapper
+#   install      check-install: the install script, upgrade and uninstall
+#   scaffolds    check-scaffolds: each scaffold made by the release binary
+#   smoke        smoke-linux: the static binary on each supported system
+PRE_PUSH_BASE ?= origin/main
+PRE_PUSH_ALWAYS := checks
+PRE_PUSH_ORDER := checks rust vendored c-deps fresh install scaffolds smoke
+PRE_PUSH_MAP := \
+	src/*=rust \
+	tests/*=rust \
+	build.rs=rust \
+	Cargo.toml=rust,c-deps \
+	Cargo.lock=rust,c-deps \
+	Dockerfile.rust=rust,c-deps,fresh,install,scaffolds,smoke \
+	plugin-template/*=rust,vendored,scaffolds \
+	plugin-templates/*=rust,vendored,scaffolds \
+	sdk-roles/*=rust,vendored,scaffolds \
+	src/check.rs=scaffolds src/check/*=scaffolds \
+	src/plugin.rs=scaffolds src/plugin/*=scaffolds \
+	tests/scaffolds/*=scaffolds \
+	tools/fresh-sources.sh=fresh \
+	install.sh=install tests/install/*=install \
+	tests/smoke/*=smoke \
+	.github/workflows/release.yaml=smoke \
+	Makefile=vendored,scaffolds,smoke
+
+pre-push:
+	@$(PY) tools/pre_push.py --self-test >/dev/null
+	@mkdir -p target
+	@$(PY) tools/pre_push.py plan --base "$(PRE_PUSH_BASE)" --always "$(PRE_PUSH_ALWAYS)" \
+		--order "$(PRE_PUSH_ORDER)" --map "$(PRE_PUSH_MAP)" --out target/pre-push.plan
+	@began=$$(date +%s); \
+	eval "$(MAKE) --no-print-directory pre-push-run $$(cat target/pre-push.plan)" \
+		|| { echo "pre-push: FAILED after $$(( $$(date +%s) - began ))s" >&2; exit 1; }; \
+	took=$$(( $$(date +%s) - began )); \
+	echo; echo "pre-push: GREEN in $$((took / 60))m$$(printf %02d $$((took % 60)))s; CI runs everything else"
+
+pre-push-run: $(addprefix pre-push-,$(PRE_PUSH_STAGES))
+
+pre-push-checks: ci-mirror-check advisories
+pre-push-rust: lint build test
+pre-push-vendored: check-vendored-template
+pre-push-c-deps: check-c-deps
+pre-push-fresh: check-fresh-sources
+pre-push-install: check-install
+pre-push-scaffolds: check-scaffolds
+pre-push-smoke: smoke-linux
 
 # Every job in .github/workflows is reachable from ci-local, or listed in
 # tools/ci-mirror-allowlist.txt with the reason it cannot be. The tool is
@@ -292,4 +364,4 @@ e2e-authority-macos:
 
 install-hooks:
 	@git config core.hooksPath hooks
-	@echo "hooks installed: git push now runs 'make ci-local' first"
+	@echo "hooks installed: git push now runs 'make pre-push' first"
