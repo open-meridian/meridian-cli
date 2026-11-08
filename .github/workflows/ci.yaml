@@ -1,4 +1,7 @@
-# What `make ci-local` runs, run again on the runner.
+# Every gate, `make ci-local`, on the runner: CI decides, and the pull request
+# merges on it (accepted 2026-11-07, superseding ruling 1075's full local
+# gate). The pre-push hook runs a fast gate (`make pre-push`); a red gate here
+# is reproduced with `make ci-stage STAGE=<gate>` and never rerun until green.
 #
 # One job calling one target, so there is nothing for CI and the local gate to
 # disagree about. The other workflows' jobs -- a release's builds, closing an
