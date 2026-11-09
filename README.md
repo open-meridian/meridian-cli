@@ -6,7 +6,7 @@ works with one that is already running. The whole install, step by step, is
 meridian-core's [INSTALL.md](https://github.com/open-meridian/meridian-core/blob/main/INSTALL.md),
 and every command and flag is in the
 [command line reference](https://open-meridian.dev/api/cli/). This is release
-0.1.58.
+0.1.59.
 
 ```
 meridian doctor              # can this machine and this cluster run a deployment?
@@ -14,6 +14,11 @@ meridian up                  # install the chart, then open the wizard
 meridian up --params f.yaml  # the same, answered from a file
 meridian down                # uninstall it, keeping its namespace unless asked
 meridian upgrade-deployment  # move it to a newer chart, in place, after checking it can
+meridian upgrade-deployment --set resilience.profile=ha  # change a chart value, even at the version it runs
+meridian upgrade-deployment --enable-checksums  # turn on page checksums in the database it brought
+meridian backup              # back up now; restore <file> brings a backup back
+meridian restore --to-time <time>  # restore the running database to a time, from its WAL archive
+meridian status              # the release, each component and plugin, the database, the book's health
 meridian connect [<address>] # sign in to a deployment (default: the local one), and keep the session
 meridian sign-out            # end that session, here and at the deployment
 meridian plugin new <name>   # start a plugin from the SDK's reference plugin; --role connectivity, custody, data, operations, pricing or reporting
@@ -302,6 +307,8 @@ Not to be confused with `meridian uninstall`, which removes this CLI.
 meridian upgrade-deployment
 meridian upgrade-deployment --chart-version 0.1.182 --yes
 meridian upgrade-deployment -f backup.yaml
+meridian upgrade-deployment --set resilience.profile=ha
+meridian upgrade-deployment --enable-checksums
 ```
 
 Moves a running deployment to a newer version of its chart, in place, with
@@ -352,6 +359,15 @@ never a value (`backup.recipient: set`), and the `helm upgrade` with its `-f`
 files, before "Upgrade it?". At the version it is on already, files that
 change something are an upgrade at that version; files that change nothing
 leave nothing to do.
+
+`--set <key>=<value>`, Helm's own, repeatable, changes one value the same way,
+after every `-f`; the plan names its path, and withholds the value of a key
+that names a secret. A database moving under Patroni (`resilience.profile=ha`)
+takes the chart's two upgrades, both run under the one approval; run again,
+it finishes a half-made move. `--enable-checksums` is a step of its own: it
+says the downtime, estimated from the database's size, before it asks, takes a
+backup first, stops everything and the database, runs `pg_checksums` on the
+stopped volume, and starts everything again at the counts it ran at.
 
 `--https` moves a local deployment, reached at a name under `.localhost`, to
 HTTPS in the same approved upgrade: the certificate first, from this machine's
@@ -417,6 +433,7 @@ every component on its template.
 meridian backup key                       # the identity backups are sealed to; prints backup.recipient
 meridian backup --to ~/meridian-backups   # back up now, and copy the file here
 meridian restore meridian-20261011T020000Z.meridian-backup --identity meridian-backup-identity.txt
+meridian restore --to-time 2026-11-09T13:59:27Z   # the running database, from its WAL archive
 ```
 
 `backup` runs the deployment's backup CronJob once, now: its keys and
@@ -460,7 +477,15 @@ The report gives the counts by store (config, book, street, lake, instrument,
 dashboard), each with its tables and rows, and reads each launched plugin's
 pod, for at most two minutes, for an image it could not pull: only those are
 named, with `meridian plugin upload` to run, since the registry's claim can
-outlive a namespace.
+outlive a namespace. Into an HA deployment it loads member 0, then brings the
+standbys back from it before it gives the database's URL.
+
+`restore --to-time <RFC 3339>` restores the running deployment's brought
+database in place from its WAL archive (`backup.walArchive`): everything
+stopped and its CronJobs suspended, the restore run, everything started again
+and each CronJob given back. A time outside the archive fails in the
+restore's own words and leaves everything stopped; run again with a time
+inside it, it takes it from there.
 
 ## connect and plugins
 
@@ -921,7 +946,12 @@ plugin's own), how many of its pods are ready, how often they restarted and
 why the last time (`OOMKilled`), and each pod's memory against the limit each
 pod has, where the cluster serves metrics. Its book health says, per account,
 how many journal entries the book replays since the account's last snapshot,
-and when that was taken. `logs` prints what a component's pods printed: core's
+and when that was taken. It also shows the database's members, its page
+checksums, `full_page_writes`, WAL archiver and internal TLS, each store
+member's mode and lag, and, while a restore or `--enable-checksums` has the
+deployment stopped, which and the command that resumes it; `--json` adds
+these as new keys. `doctor` says where the database has page checksums or
+`full_page_writes` off. `logs` prints what a component's pods printed: core's
 components, a plugin by its instance, and the release's Jobs (`migrate`, `key`,
 `first-run`, `backup`), the newest run of each; `--previous` prints what each
 container printed before its last restart. The components and logs are read
