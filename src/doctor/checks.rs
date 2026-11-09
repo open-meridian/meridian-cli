@@ -685,3 +685,75 @@ pub async fn plugins(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
         _ => stale,
     }
 }
+
+/// The database a deployment in `namespace` reaches, as its conductor's
+/// probe reads it (step 3b; spec section 9): page checksums and
+/// full_page_writes, said plainly when either is off, with the guided step
+/// for a database the deployment brought. Nothing where no deployment runs
+/// there, or where its probe does not say.
+pub async fn database(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
+    use crate::upgrade_deployment::{database_set_of, pods};
+    let Ok(listed) = machine
+        .run(
+            "kubectl",
+            &[
+                "get",
+                "pods",
+                "-n",
+                namespace,
+                "-l",
+                "meridian.dev/component=conductor",
+                "-o",
+                "json",
+            ],
+        )
+        .await
+    else {
+        return Vec::new();
+    };
+    let Some(conductor) = pods(&listed)
+        .into_iter()
+        .find(|pod| pod.phase == "Running" && !pod.terminating && pod.job.is_none() && pod.probes)
+    else {
+        return Vec::new();
+    };
+    let arguments = crate::probe::exec_arguments(namespace, &conductor.name, "conductor");
+    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    let said = match machine.run("kubectl", &arguments).await {
+        Ok(said) => said,
+        Err(Failure::Said(said)) => said,
+        Err(missing) => missing.to_string(),
+    };
+    let Some(path) = crate::probe::first_json(&said)
+        .as_ref()
+        .and_then(|probe| crate::probe::database(probe).cloned())
+        .filter(|path| path["ok"] == true)
+    else {
+        return Vec::new();
+    };
+    // Brought where the deployment runs its own database's StatefulSet.
+    let brought = match machine
+        .run(
+            "kubectl",
+            &["get", "statefulsets", "-n", namespace, "-o", "json"],
+        )
+        .await
+    {
+        Ok(sets) => serde_json::from_str(&sets)
+            .ok()
+            .and_then(|listed| database_set_of(&listed))
+            .is_some_and(|set| set.replicas > 0),
+        Err(_) => false,
+    };
+    let hints = crate::probe::integrity_hints(&path, brought, namespace);
+    if hints.is_empty()
+        && crate::probe::setting(&path, "data_checksums") == Some("on")
+        && crate::probe::setting(&path, "full_page_writes") == Some("on")
+    {
+        return vec![Finding::Fine(format!(
+            "the database the deployment in {namespace} reaches has page checksums and \
+             full_page_writes on"
+        ))];
+    }
+    hints
+}

@@ -133,6 +133,7 @@ fn asked() -> Asked {
         https: false,
         authority: None,
         values: Vec::new(),
+        sets: Vec::new(),
     }
 }
 
@@ -2051,4 +2052,426 @@ fn where_it_is_reached_is_read_and_nothing_else() {
         reached_in(r#"{"ingress":{"enabled":false,"host":"x.localhost"}}"#),
         None
     );
+}
+
+// ── --set (step 3b) ──────────────────────────────────────────────────────
+
+fn with_sets(sets: &[&str]) -> Asked {
+    Asked {
+        sets: sets.iter().map(|set| set.to_string()).collect(),
+        ..asked()
+    }
+}
+
+#[test]
+fn a_set_is_read_as_helm_reads_it() {
+    assert_eq!(
+        set_values("resilience.profile=ha").unwrap(),
+        json!({ "resilience": { "profile": "ha" } })
+    );
+    assert_eq!(
+        set_values("a.on=true,a.n=3,a.zero=0,a.lead=007,a.gone=null,a.text=x\\,y").unwrap(),
+        json!({ "a": { "on": true, "n": 3, "zero": 0, "lead": "007", "gone": null, "text": "x,y" } })
+    );
+    assert_eq!(
+        set_values("zones={a,b},nodeSelector.kubernetes\\.io/os=linux,list[1].name=x").unwrap(),
+        json!({ "zones": ["a", "b"], "nodeSelector": { "kubernetes.io/os": "linux" },
+                "list": [null, { "name": "x" }] })
+    );
+    assert!(set_values("resilience.profile")
+        .unwrap_err()
+        .contains("not key=value"));
+    assert!(set_values("a..b=1").unwrap_err().contains("names no key"));
+    assert_eq!(set_keys("a.b=1,c=d\\,e"), ["a.b", "c"]);
+    for secret in [
+        "deployment.enrolmentCode",
+        "dashboard.oidc.clientSecret",
+        "backup.walArchive.cipherSecret",
+        "key.existingSecret",
+        "database.password",
+        "registry.token",
+    ] {
+        assert!(secret_key(secret), "{secret}");
+    }
+    for plain in [
+        "resilience.profile",
+        "tls.internal.enabled",
+        "backup.walArchive.enabled",
+    ] {
+        assert!(!secret_key(plain), "{plain}");
+    }
+    assert_eq!(
+        shown_set("resilience.profile=ha,deployment.enrolmentCode=ENROL-X"),
+        "resilience.profile=ha,deployment.enrolmentCode=<withheld>"
+    );
+}
+
+#[tokio::test]
+async fn a_set_is_an_upgrade_at_the_version_it_is_at_shown_by_path_and_given_to_helm() {
+    let stand = healthy()
+        .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
+        .json(WORKLOADS, items(vec![]));
+    let asked = with_sets(&["tls.internal.enabled=true"]);
+    let mut said = Vec::new();
+    let Checked::Upgrade(plan) = check(&stand, &asked, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    else {
+        panic!("not an upgrade: {said:?}");
+    };
+    assert_eq!(plan.changes, [Change::Set("tls".into())]);
+    let said = said.join("\n");
+    assert!(
+        said.contains("--set tls.internal.enabled read: 1 change to the deployment's own values"),
+        "{said}"
+    );
+    assert!(said.contains("changes its values"), "{said}");
+    let text = plan_text(&asked, &plan);
+    assert!(
+        text.contains(
+            "Its values, with --set tls.internal.enabled merged over them (values not shown):\n    tls: set"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("--reset-then-reuse-values --timeout 10m --set tls.internal.enabled=true"),
+        "{text}"
+    );
+    assert!(plan.patroni_move.is_none());
+    assert!(!stand.changed_anything());
+
+    // A --set saying what the values say already is nothing to do.
+    let checked = check(
+        &stand,
+        &with_sets(&["deployment.id=DEP-X"]),
+        &mut |_: &str| {},
+    )
+    .await;
+    let Checked::Current(said) = checked else {
+        panic!("not current");
+    };
+    assert!(
+        said.contains("--set deployment.id change nothing in its values"),
+        "{said}"
+    );
+}
+
+#[tokio::test]
+async fn a_set_value_whose_key_names_a_secret_is_never_echoed_and_helm_is_given_it() {
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(WORKLOADS, items(vec![]));
+    let asked = with_sets(&[
+        "deployment.enrolmentCode=ENROL-SET-DO-NOT-PRINT",
+        "dashboard.oidc.clientSecret=OIDC-DO-NOT-PRINT,resilience.profile=tolerant",
+    ]);
+    let mut said = Vec::new();
+    let Checked::Upgrade(plan) = check(&stand, &asked, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    else {
+        panic!("refused: {said:?}");
+    };
+    let text = plan_text(&asked, &plan);
+    let everything = format!("{}\n{text}", said.join("\n"));
+    for secret in [
+        "ENROL-SET-DO-NOT-PRINT",
+        "OIDC-DO-NOT-PRINT",
+        "ENROL-DO-NOT-PRINT",
+    ] {
+        assert!(!everything.contains(secret), "{secret}: {everything}");
+    }
+    assert!(
+        text.contains("--set deployment.enrolmentCode=<withheld>"),
+        "{text}"
+    );
+    assert!(
+        text.contains("--set dashboard.oidc.clientSecret=<withheld>,resilience.profile=tolerant"),
+        "{text}"
+    );
+    assert!(text.contains("deployment.enrolmentCode: changed"), "{text}");
+    let given = helm_arguments(&asked, &plan);
+    assert!(given.contains(&"deployment.enrolmentCode=ENROL-SET-DO-NOT-PRINT".to_string()));
+}
+
+// ── The move under Patroni, in two upgrades (ruling 4) ────────────────────
+
+fn database_set_of_shape(replicas: u64, patroni: bool) -> serde_json::Value {
+    let mut set = database();
+    set["spec"]["replicas"] = json!(replicas);
+    set["status"]["replicas"] = json!(replicas);
+    set["status"]["updatedReplicas"] = json!(replicas);
+    set["status"]["readyReplicas"] = json!(replicas);
+    if patroni {
+        set["spec"]["template"]["metadata"] =
+            json!({ "labels": { "meridian.dev/database-manager": "patroni" } });
+    }
+    set
+}
+
+const TO_HA: &str = "helm upgrade meridian oci://ghcr.io/open-meridian/charts/meridian-runtime --version 0.1.182 --namespace meridian --reset-then-reuse-values --timeout 10m --set resilience.profile=ha";
+
+/// 0.1.180 to 0.1.182 with ha, the database running alone: two upgrades.
+fn moving_to_ha() -> Stand {
+    let new = |component| deployment(component, "9c5d480", 1, 1);
+    healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
+        .json(LIST, listed(9, "deployed", "0.1.182", "9c5d480"))
+        .json(
+            WORKLOADS,
+            items(vec![
+                deployment("conductor", "845bd06", 1, 1),
+                database_set_of_shape(1, false),
+            ]),
+        )
+        .json(
+            WORKLOADS,
+            items(vec![new("conductor"), database_set_of_shape(1, true)]),
+        )
+        .json(PODS, items(vec![]))
+        .json(JOBS, items(vec![]))
+        .answering(TO_HA, Ok("Release \"meridian\" has been upgraded."))
+}
+
+#[tokio::test]
+async fn a_database_moving_under_patroni_is_said_before_asking_and_both_upgrades_run() {
+    let stand = moving_to_ha();
+    let asked = with_sets(&["resilience.profile=ha"]);
+    let mut said = Vec::new();
+    let Checked::Upgrade(plan) = check(&stand, &asked, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    else {
+        panic!("refused: {said:?}");
+    };
+    assert_eq!(
+        plan.patroni_move,
+        Some(PatroniMove {
+            standbys: 2,
+            finishing: false
+        })
+    );
+    let text = plan_text(&asked, &plan);
+    assert!(
+        text.contains("Its database moves under Patroni, which takes two upgrades, and this one approval covers both."),
+        "{text}"
+    );
+    assert!(
+        text.contains("adds its 2 standbys, which clone from it"),
+        "{text}"
+    );
+
+    let mut said = Vec::new();
+    let report = apply(&stand, &asked, &plan, &pace(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    .unwrap_or_else(|failed| panic!("{failed}\n{said:#?}"));
+    let upgrades = stand.asked().iter().filter(|c| c.as_str() == TO_HA).count();
+    assert_eq!(upgrades, 2, "{:#?}", stand.asked());
+    assert_eq!(report.revision, 9);
+    let said = said.join("\n");
+    assert!(
+        said.contains(
+            "The first of two upgrades: the database moves under Patroni, member 0 alone."
+        ),
+        "{said}"
+    );
+    assert!(said.contains("Applied (1 of 2) as revision 8"), "{said}");
+    assert!(
+        said.contains("Member 0 is ready under Patroni (revision 8). The second upgrade"),
+        "{said}"
+    );
+    assert!(said.contains("Applied (2 of 2) as revision 9"), "{said}");
+}
+
+#[tokio::test]
+async fn a_first_upgrade_that_stops_says_which_step_and_runs_no_second() {
+    let stand = moving_to_ha().instead(TO_HA, Err("Error: UPGRADE FAILED: timed out"));
+    let asked = with_sets(&["resilience.profile=ha"]);
+    let plan = match check(&stand, &asked, &mut |_: &str| {}).await {
+        Checked::Upgrade(plan) => *plan,
+        _ => panic!("refused"),
+    };
+    let refusal = apply(&stand, &asked, &plan, &pace(), &mut |_: &str| {})
+        .await
+        .unwrap_err();
+    assert!(
+        refusal.starts_with("the first of the two upgrades stopped: helm refused the upgrade"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("The second, which adds the database's 2 standbys, was not run."),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("`meridian upgrade-deployment -n meridian` with the same values runs it"),
+        "{refusal}"
+    );
+    assert_eq!(
+        stand.asked().iter().filter(|c| c.as_str() == TO_HA).count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn the_second_upgrade_alone_finishes_a_move_and_the_way_back_is_one_upgrade() {
+    // Half moved: under Patroni at one member, ha in its own values, at the
+    // version it is at. Nothing changes in the values, and it is still an
+    // upgrade: the second.
+    let stand = healthy()
+        .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
+        .instead(
+            OWN_VALUES,
+            Ok(
+                &json!({ "deployment": { "enrolmentCode": "ENROL-DO-NOT-PRINT" },
+                        "resilience": { "profile": "ha" } })
+                .to_string(),
+            ),
+        )
+        .json(WORKLOADS, items(vec![database_set_of_shape(1, true)]));
+    let mut said = Vec::new();
+    let Checked::Upgrade(plan) = check(&stand, &asked(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    else {
+        panic!("not an upgrade: {said:?}");
+    };
+    assert_eq!(
+        plan.patroni_move,
+        Some(PatroniMove {
+            standbys: 2,
+            finishing: true
+        })
+    );
+    assert!(said
+        .join("\n")
+        .contains("adds the standbys its database's move under Patroni left to add"));
+    assert!(
+        plan_text(&asked(), &plan).contains("this upgrade is the second, adding its 2 standbys")
+    );
+
+    // Back to tolerant from ha: Patroni keeps it, one upgrade.
+    let stand = healthy()
+        .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
+        .instead(
+            OWN_VALUES,
+            Ok(&json!({ "resilience": { "profile": "ha" } }).to_string()),
+        )
+        .json(WORKLOADS, items(vec![database_set_of_shape(3, true)]));
+    let asked = with_sets(&["resilience.profile=tolerant"]);
+    let Checked::Upgrade(plan) = check(&stand, &asked, &mut |_: &str| {}).await else {
+        panic!("not an upgrade");
+    };
+    assert_eq!(plan.patroni_move, None);
+    assert_eq!(plan.changes, [Change::Changed("resilience.profile".into())]);
+}
+
+#[test]
+fn standbys_are_counted_as_the_chart_counts_them() {
+    assert_eq!(standbys_in(&json!({})), 0);
+    assert_eq!(
+        standbys_in(&json!({ "resilience": { "profile": "ha" } })),
+        2
+    );
+    assert_eq!(
+        standbys_in(&json!({ "resilience": { "profile": "ha" },
+                             "database": { "brought": { "standbys": 0 } } })),
+        0
+    );
+    assert_eq!(
+        standbys_in(&json!({ "resilience": { "profile": "ha" },
+                             "database": { "brought": { "enabled": false } } })),
+        0
+    );
+    assert_eq!(
+        standbys_in(&json!({ "database": { "brought": { "standbys": 2 } } })),
+        2
+    );
+}
+
+// ── Page checksums said among the checks (ruling 1058) ───────────────────
+
+fn conductor_pod(marked: bool) -> serde_json::Value {
+    let mut pod = pod("conductor-new", "conductor", &format!("{REPO}:9c5d480"), 0);
+    pod["status"]["phase"] = json!("Running");
+    if marked {
+        pod["spec"]["containers"][0]["env"] =
+            json!([{ "name": crate::probe::MARKER, "value": "7" }]);
+    }
+    pod
+}
+
+const PROBE: &str =
+    "kubectl exec -n meridian conductor-new -c conductor -- timeout 30 meridian-conductor probe";
+
+#[tokio::test]
+async fn a_database_without_page_checksums_is_said_with_the_guided_step() {
+    let probe = json!({ "component": "conductor", "paths": [
+        { "path": "database", "address": "db:5432", "ok": true,
+          "data_checksums": "off", "full_page_writes": "on" } ] });
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(WORKLOADS, items(vec![database()]))
+        .json(PODS, items(vec![conductor_pod(true)]))
+        // It exits 1 when a path does not answer, and prints its answer.
+        .answering(
+            PROBE,
+            Err(&format!(
+                "{probe}\nERROR conductor: a path it needs did not answer"
+            )),
+        );
+    let mut said = Vec::new();
+    let checked = check(&stand, &asked(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await;
+    assert!(matches!(checked, Checked::Upgrade(_)));
+    let said = said.join("\n");
+    assert!(
+        said.contains("worth    the database this deployment brought has no page checksums"),
+        "{said}"
+    );
+    assert!(
+        said.contains("`meridian upgrade-deployment --enable-checksums -n meridian`"),
+        "{said}"
+    );
+
+    // A runtime older than the probe is never asked it: it would take
+    // `probe` for nothing and start a second conductor.
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(WORKLOADS, items(vec![database()]))
+        .json(PODS, items(vec![conductor_pod(false)]));
+    let _ = check(&stand, &asked(), &mut |_: &str| {}).await;
+    assert!(
+        !stand.asked().iter().any(|c| c.contains("probe")),
+        "{:#?}",
+        stand.asked()
+    );
+}
+
+#[tokio::test]
+async fn with_helm_4_the_charts_counts_are_forced_over_a_scale_another_manager_made() {
+    let stand = healthy()
+        .instead("helm version --short", Ok("v4.2.3+g43e8b7f"))
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(WORKLOADS, items(vec![]));
+    let plan = planned(&stand).await;
+    assert!(plan.force_conflicts);
+    assert!(helm_arguments(&asked(), &plan).contains(&"--force-conflicts".to_string()));
+    // Helm 3 merges on the client and has no such flag.
+    let plan = planned(
+        &healthy()
+            .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+            .json(WORKLOADS, items(vec![])),
+    )
+    .await;
+    assert!(!plan.force_conflicts);
+    assert!(!helm_arguments(&asked(), &plan).contains(&"--force-conflicts".to_string()));
 }

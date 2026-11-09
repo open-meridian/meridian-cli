@@ -470,9 +470,14 @@ async fn status_says_each_component_and_the_books_health() {
     assert_eq!(json["components"][0]["last_restart_reason"], "OOMKilled");
     assert_eq!(json["book_health"][0]["entries_since_snapshot"], 1200);
     assert_eq!(json["book_health"][0]["journal_entries"], 23114);
-    // Read-only: nothing but get, get --raw and helm history.
+    // Read-only: nothing but get, get --raw, helm history, a log, and each
+    // store member's probe, which changes nothing.
     for call in fake.asked.lock().unwrap().iter() {
-        assert!(matches!(call[0].as_str(), "get" | "history"), "{call:?}");
+        let probe = call[0] == "exec" && call.last().map(String::as_str) == Some("probe");
+        assert!(
+            matches!(call[0].as_str(), "get" | "history" | "logs") || probe,
+            "{call:?}"
+        );
     }
 }
 

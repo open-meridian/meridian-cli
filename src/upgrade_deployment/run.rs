@@ -11,10 +11,11 @@ use tokio::time::Instant;
 use super::certificate_host;
 use super::watch::{Step, Watch};
 use super::{
-    archive_in, chart_of, direction, image_in, installed, jobs, left_by_a_restart, leftovers,
-    merged, migration, plugin_floors, pods, progress, reached_in, release_finding, restarted,
-    restarts, running_images, skip_policy, target_image, to_relaunch, values_files, workloads,
-    Asked, CertificateStep, Chart, Direction, Installed, JobState, Plan, Report, HELM_MINIMUM,
+    archive_in, chart_of, database_set, direction, image_in, installed, jobs, left_by_a_restart,
+    leftovers, merged, migration, patroni_move, plugin_floors, pods, progress, reached_in,
+    release_finding, restarted, restarts, running_images, set_values, skip_policy, target_image,
+    to_relaunch, values_files, workloads, Asked, CertificateStep, Chart, Direction, Installed,
+    JobState, Plan, Report, HELM_MINIMUM,
 };
 use crate::doctor::{checks, Failure, Finding, Machine};
 
@@ -28,20 +29,22 @@ pub enum Checked {
     Refused,
 }
 
-async fn helm(machine: &dyn Machine) -> Finding {
+async fn helm(machine: &dyn Machine) -> (Finding, Option<(u32, u32)>) {
     let said = match machine.run("helm", &["version", "--short"]).await {
         Ok(said) => said,
         Err(failed) => {
-            return Finding::Stops {
+            let stops = Finding::Stops {
                 what: match &failed {
                     Failure::Missing(_) => "helm is not installed here".to_string(),
                     Failure::Said(said) => format!("helm does not run here: {said}"),
                 },
                 fix: "Install Helm 3.14 or newer. This drives your own helm.".into(),
-            }
+            };
+            return (stops, None);
         }
     };
-    match checks::version(&said) {
+    let version = checks::version(&said);
+    let finding = match version {
         Some(found) if found >= HELM_MINIMUM => Finding::Fine(format!(
             "helm {}.{} upgrades with --reset-then-reuse-values",
             found.0, found.1
@@ -59,7 +62,8 @@ async fn helm(machine: &dyn Machine) -> Finding {
             what: "helm's version could not be read".into(),
             why: format!("`helm version --short` said {said:?}"),
         },
-    }
+    };
+    (finding, version)
 }
 
 async fn cluster(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
@@ -143,7 +147,10 @@ async fn disk(machine: &dyn Machine) -> Vec<Finding> {
         .collect()
 }
 
-async fn release(machine: &dyn Machine, asked: &Asked) -> Result<Option<Installed>, String> {
+pub(crate) async fn release(
+    machine: &dyn Machine,
+    asked: &Asked,
+) -> Result<Option<Installed>, String> {
     let filter = format!("^{}$", asked.release);
     // Every status an upgrade must refuse as well as the one it proceeds
     // from. Named, because Helm 3 lists only deployed and failed unless told
@@ -204,7 +211,8 @@ pub async fn check(machine: &dyn Machine, asked: &Asked, watch: &mut dyn Watch) 
 }
 
 async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) -> Checked {
-    let mut findings = vec![helm(machine).await];
+    let (helm_found, helm_version) = helm(machine).await;
+    let mut findings = vec![helm_found];
     findings.extend(cluster(machine, &asked.namespace).await);
     let stopped = |findings: &[Finding]| findings.iter().any(Finding::stops);
     let refuse = |findings: &[Finding], say: &mut dyn Watch| {
@@ -282,10 +290,24 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         )
         .await;
 
-    // The person's -f files, read before anything is changed, and what they
-    // change in the deployment's own values: paths only, never values.
+    // The person's -f files and --sets, read before anything is changed, and
+    // what they change in the deployment's own values: paths only, never
+    // values.
     let mut changes = Vec::new();
-    if !asked.values.is_empty() {
+    let mut given: Vec<serde_json::Value> = Vec::new();
+    let own: Option<serde_json::Value> = own_read
+        .as_ref()
+        .ok()
+        .and_then(|said| serde_json::from_str(said.trim()).ok())
+        .map(|own: serde_json::Value| {
+            if own.is_null() {
+                serde_json::Value::Object(Default::default())
+            } else {
+                own
+            }
+        })
+        .filter(serde_json::Value::is_object);
+    if !asked.values.is_empty() || !asked.sets.is_empty() {
         let files = match values_files(&asked.values) {
             Ok(files) => files,
             Err(unread) => {
@@ -296,20 +318,25 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
                 return refuse(&findings, say);
             }
         };
-        let own: Option<serde_json::Value> = own_read
-            .as_ref()
-            .ok()
-            .and_then(|said| serde_json::from_str(said.trim()).ok())
-            .map(|own: serde_json::Value| {
-                if own.is_null() {
-                    serde_json::Value::Object(Default::default())
-                } else {
-                    own
+        given.extend(files);
+        for set in &asked.sets {
+            match set_values(set) {
+                // Helm lays every --set over every file, whatever the order.
+                Ok(read) => given.push(read),
+                Err(unread) => {
+                    findings.push(Finding::Stops {
+                        what: unread,
+                        fix: "--set takes key=value as Helm's does: resilience.profile=ha, \
+                              several split by commas."
+                            .into(),
+                    });
+                    return refuse(&findings, say);
                 }
-            });
-        let Some(own) = own.filter(serde_json::Value::is_object) else {
+            }
+        }
+        let Some(own) = own.as_ref() else {
             findings.push(Finding::Stops {
-                what: "the deployment's own values could not be read, so what the values files \
+                what: "the deployment's own values could not be read, so what the values \
                        change cannot be shown"
                     .into(),
                 fix: "Helm could not read the release's values, which only it holds: check \
@@ -319,13 +346,13 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
             });
             return refuse(&findings, say);
         };
-        let after = files
+        let after = given
             .iter()
             .fold(own.clone(), |held, file| merged(&held, file));
-        changes = super::changes(&own, &after);
+        changes = super::changes(own, &after);
         findings.push(Finding::Fine(format!(
             "{} read: {} the deployment's own values",
-            asked.values.join(", "),
+            super::merged_from(asked),
             match changes.len() {
                 0 => "it changes nothing in".to_string(),
                 1 => "1 change to".to_string(),
@@ -346,14 +373,41 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     };
     let renewing = certificate.as_ref().is_some_and(|step| step.new.is_some());
 
+    // The new chart's defaults: its image, and what the values it is given
+    // come to beneath the deployment's own and the person's.
+    let chart_values = machine
+        .run(
+            "helm",
+            &["show", "values", &asked.chart, "--version", &to.version],
+        )
+        .await
+        .unwrap_or_default();
+    let running_listed = kubectl_json(machine, asked, WORKLOADS)
+        .await
+        .unwrap_or_default();
+    let database = database_set(&running_listed);
+    let defaults: serde_json::Value =
+        serde_yaml::from_str(&super::document(&chart_values)).unwrap_or_default();
+    let upgraded_values = std::iter::once(own.clone().unwrap_or_default())
+        .chain(given)
+        .fold(defaults, |held, over| merged(&held, &over));
+    let patroni_move = patroni_move(database.as_ref(), &upgraded_values);
+
     match direction(&from, &to) {
         Direction::Down(stops) => {
             findings.push(stops);
             return refuse(&findings, say);
         }
         // Already there, and an upgrade at the same version is what moves
-        // the address or renews the certificate: one approved change.
-        Direction::Current if asked.https || renewing || !changes.is_empty() => {
+        // the address, renews the certificate, changes the values or adds
+        // the standbys of a database half moved under Patroni: one
+        // approved change.
+        Direction::Current
+            if asked.https
+                || renewing
+                || !changes.is_empty()
+                || patroni_move.is_some_and(|moving| moving.finishing) =>
+        {
             findings.push(Finding::Fine(format!(
                 "{} is at {} already; this upgrade keeps it there and {}",
                 asked.release,
@@ -362,8 +416,10 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
                     "moves its address to https"
                 } else if renewing {
                     "renews its certificate"
-                } else {
+                } else if !changes.is_empty() {
                     "changes its values"
+                } else {
+                    "adds the standbys its database's move under Patroni left to add"
                 }
             )))
         }
@@ -371,8 +427,16 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
             for finding in &findings {
                 say.say(&format!("{finding}"));
             }
+            let values = if asked.values.is_empty() && asked.sets.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ", and {} change nothing in its values",
+                    super::merged_from(asked)
+                )
+            };
             return Checked::Current(format!(
-                "{} is at {} {} already; nothing to do.",
+                "{} is at {} {} already{values}; nothing to do.",
                 asked.release, to.name, to.version
             ));
         }
@@ -387,28 +451,23 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     // The new chart's image, and the deployment's own where it names one.
     // Only `image` is read out of the deployment's values; the rest of them,
     // its enrolment code among them, is never kept or printed.
-    let mut charts = machine
-        .run(
-            "helm",
-            &["show", "values", &asked.chart, "--version", &to.version],
-        )
-        .await
-        .map(|values| image_in(&values))
-        .unwrap_or_default();
+    let mut charts = image_in(&chart_values);
     // A published chart's tag is its appVersion: the commit both were built at.
     charts.tag = charts.tag.or_else(|| Some(to.app_version.clone()));
-    let own = image_in(&own_values);
-    let (to_image, pinned) = target_image(&charts, &own);
+    let own_image = image_in(&own_values);
+    let (to_image, pinned) = target_image(&charts, &own_image);
     findings.extend(pinned);
 
-    let running = kubectl_json(machine, asked, WORKLOADS)
-        .await
-        .map(|listed| workloads(&listed))
-        .unwrap_or_default();
+    let running = workloads(&running_listed);
     let held_pods = kubectl_json(machine, asked, "pods")
         .await
         .map(|listed| pods(&listed))
         .unwrap_or_default();
+    // Page checksums on a database made before they were on (ruling 1058):
+    // said among the checks, with the guided step that turns them on.
+    if let Some(set) = database.as_ref().filter(|set| set.replicas > 0) {
+        findings.extend(checksums_finding(machine, asked, set, &held_pods).await);
+    }
     for finding in &findings {
         say.say(&format!("{finding}"));
     }
@@ -426,7 +485,54 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         https,
         archive: archive_in(&own_values),
         changes,
+        patroni_move,
+        // Helm 4 applies on the server, where a field another manager set
+        // -- the database's replicas, scaled by first run or a restore --
+        // is a conflict, and an upgrade that changes it is refused. The
+        // chart is what says each count (it reads the database's live
+        // one), as Helm 3's merge let it say: forced, as there.
+        force_conflicts: helm_version.is_some_and(|(major, _)| major >= 4),
     }))
+}
+
+/// Whether the brought database has page checksums, from the conductor's
+/// probe: said only where they are off, with the step that turns them on,
+/// or where it could not be read.
+async fn checksums_finding(
+    machine: &dyn Machine,
+    asked: &Asked,
+    set: &super::DatabaseSet,
+    held_pods: &[super::Pod],
+) -> Vec<Finding> {
+    let Some(pod) = held_pods.iter().find(|pod| {
+        pod.labels.get("meridian.dev/component").map(String::as_str) == Some("conductor")
+            && pod.phase == "Running"
+            && !pod.terminating
+    }) else {
+        return Vec::new();
+    };
+    // An older runtime takes `probe` for nothing and starts a second
+    // conductor: never asked of one, and nothing said of checksums there.
+    if !pod.probes {
+        return Vec::new();
+    }
+    let arguments = crate::probe::exec_arguments(&asked.namespace, &pod.name, "conductor");
+    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    let said = match machine.run("kubectl", &arguments).await {
+        Ok(said) => said,
+        Err(Failure::Said(said)) => said,
+        Err(missing) => missing.to_string(),
+    };
+    let Some(database) = crate::probe::first_json(&said)
+        .as_ref()
+        .and_then(|probe| crate::probe::database(probe).cloned())
+    else {
+        return vec![Finding::Unknown {
+            what: format!("whether {}'s database has page checksums", set.name),
+            why: "the conductor's probe did not say: its runtime may predate step 3b".into(),
+        }];
+    };
+    crate::probe::integrity_hints(&database, true, &asked.namespace)
 }
 
 /// The certificate this upgrade looks after, if any, with what was found
@@ -558,6 +664,130 @@ pub async fn apply(
         };
     }
 
+    let (revision, held_jobs, held_workloads, held_pods) = match plan.patroni_move {
+        // The chart's two upgrades (its NOTES.txt), the second once the
+        // first has rolled out by the same rules and member 0 is ready under
+        // Patroni: one approval, both run here.
+        Some(moving) if !moving.finishing => {
+            watch.say(
+                "The first of two upgrades: the database moves under Patroni, member 0 alone.",
+            );
+            let (first, ..) = upgrade_once(
+                machine,
+                asked,
+                plan,
+                pace,
+                watch,
+                plan.from.revision,
+                " (1 of 2)",
+            )
+            .await
+            .map_err(|failed| {
+                format!(
+                    "the first of the two upgrades stopped: {failed}\nThe second, which \
+                             adds the database's {} standbys, was not run. Once member 0 is \
+                             ready, `meridian upgrade-deployment {}` with the same values runs \
+                             it: it finds the database under Patroni alone and adds them.",
+                    moving.standbys,
+                    crate::status::scope(release, namespace)
+                )
+            })?;
+            watch.say(&format!(
+                "Member 0 is ready under Patroni (revision {first}). The second upgrade, with \
+                 the same chart and values, adds its {} standbys, which clone from it.",
+                moving.standbys
+            ));
+            upgrade_once(machine, asked, plan, pace, watch, first, " (2 of 2)")
+                .await
+                .map_err(|failed| {
+                    format!(
+                        "the second of the two upgrades stopped: {failed}\nThe first stays \
+                         applied: the database runs under Patroni, member 0 alone and serving. \
+                         `meridian upgrade-deployment {}` with the same values adds its \
+                         standbys.",
+                        crate::status::scope(release, namespace)
+                    )
+                })?
+        }
+        _ => upgrade_once(machine, asked, plan, pace, watch, plan.from.revision, "").await?,
+    };
+
+    let mut report = Report {
+        from: format!("{} {}", plan.to.name, plan.from.version),
+        to: format!("{} {}", plan.to.name, plan.to.version),
+        revision,
+        migrated: migration(&held_jobs, revision)
+            .filter(|job| job.state == JobState::Complete)
+            .map(|job| job.name.clone()),
+        components: held_workloads
+            .iter()
+            .map(|workload| {
+                (
+                    workload.component.clone(),
+                    workload
+                        .images
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    workload.ready,
+                    workload.wanted,
+                )
+            })
+            .collect(),
+        restarted: restarted(&before, &held_pods, namespace),
+        // Said, and never done: relaunching a plugin is the person's call.
+        relaunch: to_relaunch(&held_pods, Some(&before_names)),
+        certificate: certified,
+        ..Report::default()
+    };
+
+    // Only finished Jobs of this release's earlier revisions, and only pods
+    // left over from a restart, each found by its label. ReplicaSets are the
+    // chart's revisionHistoryLimit's.
+    watch.begin(Step::Cleanup);
+    let (finished, running) = leftovers(&held_jobs, revision);
+    report.left = running;
+    let dead = left_by_a_restart(&held_workloads, &held_pods);
+    for (kind, names, done) in [
+        ("job", finished, &mut report.cleaned),
+        ("pod", dead, &mut report.removed),
+    ] {
+        if names.is_empty() {
+            continue;
+        }
+        let mut arguments = vec!["delete", kind, "-n", namespace, "--ignore-not-found"];
+        arguments.extend(names.iter().map(String::as_str));
+        match machine.run("kubectl", &arguments).await {
+            Ok(_) => *done = names,
+            Err(failed) => report.not_cleaned.push(format!(
+                "{failed}. The upgrade itself is done. They are left from earlier revisions \
+                 and harm nothing ({}); the next `meridian upgrade-deployment` removes them.",
+                names
+                    .iter()
+                    .map(|name| format!("{kind}/{name}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+    watch.end(Step::Cleanup, report.not_cleaned.is_empty());
+    Ok(report)
+}
+
+/// One `helm upgrade` of the plan, and the wait for its migration and every
+/// workload by the rollout rules: the revision it made, and what was last
+/// read of the release's Jobs, workloads and pods.
+async fn upgrade_once(
+    machine: &dyn Machine,
+    asked: &Asked,
+    plan: &Plan,
+    pace: &Pace,
+    watch: &mut dyn Watch,
+    from_revision: u64,
+    which: &str,
+) -> Result<(u64, Vec<super::Job>, Vec<super::Workload>, Vec<super::Pod>), String> {
+    let (release, namespace) = (asked.release.as_str(), asked.namespace.as_str());
     let arguments = super::helm_arguments(asked, plan);
     let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
     watch.begin(Step::Apply);
@@ -569,7 +799,7 @@ pub async fn apply(
             "helm refused the upgrade: {failed}\n`meridian status {scope}` shows the revision \
              it left; `meridian rollback-deployment {scope} --to-revision {}` returns it to the \
              revision it was at.",
-            plan.from.revision
+            from_revision
         )
     })?;
     let revision = self::release(machine, asked)
@@ -577,10 +807,10 @@ pub async fn apply(
         .ok()
         .flatten()
         .map(|now| now.revision)
-        .unwrap_or(plan.from.revision + 1);
+        .unwrap_or(from_revision + 1);
     watch.say(&format!(
-        "Applied as revision {revision}. Waiting for the migration, then every component on its \
-         new template (up to {}).",
+        "Applied{which} as revision {revision}. Waiting for the migration, then every component \
+         on its new template (up to {}).",
         asked.timeout
     ));
 
@@ -658,66 +888,5 @@ pub async fn apply(
         }
         tokio::time::sleep(pace.poll).await;
     };
-
-    let mut report = Report {
-        from: format!("{} {}", plan.to.name, plan.from.version),
-        to: format!("{} {}", plan.to.name, plan.to.version),
-        revision,
-        migrated: migration(&held_jobs, revision)
-            .filter(|job| job.state == JobState::Complete)
-            .map(|job| job.name.clone()),
-        components: held_workloads
-            .iter()
-            .map(|workload| {
-                (
-                    workload.component.clone(),
-                    workload
-                        .images
-                        .values()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    workload.ready,
-                    workload.wanted,
-                )
-            })
-            .collect(),
-        restarted: restarted(&before, &held_pods, namespace),
-        // Said, and never done: relaunching a plugin is the person's call.
-        relaunch: to_relaunch(&held_pods, Some(&before_names)),
-        certificate: certified,
-        ..Report::default()
-    };
-
-    // Only finished Jobs of this release's earlier revisions, and only pods
-    // left over from a restart, each found by its label. ReplicaSets are the
-    // chart's revisionHistoryLimit's.
-    watch.begin(Step::Cleanup);
-    let (finished, running) = leftovers(&held_jobs, revision);
-    report.left = running;
-    let dead = left_by_a_restart(&held_workloads, &held_pods);
-    for (kind, names, done) in [
-        ("job", finished, &mut report.cleaned),
-        ("pod", dead, &mut report.removed),
-    ] {
-        if names.is_empty() {
-            continue;
-        }
-        let mut arguments = vec!["delete", kind, "-n", namespace, "--ignore-not-found"];
-        arguments.extend(names.iter().map(String::as_str));
-        match machine.run("kubectl", &arguments).await {
-            Ok(_) => *done = names,
-            Err(failed) => report.not_cleaned.push(format!(
-                "{failed}. The upgrade itself is done. They are left from earlier revisions \
-                 and harm nothing ({}); the next `meridian upgrade-deployment` removes them.",
-                names
-                    .iter()
-                    .map(|name| format!("{kind}/{name}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-        }
-    }
-    watch.end(Step::Cleanup, report.not_cleaned.is_empty());
-    Ok(report)
+    Ok((revision, held_jobs, held_workloads, held_pods))
 }

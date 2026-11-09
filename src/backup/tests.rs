@@ -590,6 +590,7 @@ fn only_launched_plugins_whose_image_could_not_be_pulled_are_named() {
 
 fn a_plan(database: DatabasePlan) -> Plan {
     Plan {
+        database_ca: None,
         file: "meridian-20261011T020000Z.meridian-backup".into(),
         release: "meridian".into(),
         deployment_id: "DEP-X".into(),
@@ -607,7 +608,26 @@ fn a_plan(database: DatabasePlan) -> Plan {
         database,
         unchecked: None,
         delete_volume: None,
+        standbys: 0,
     }
+}
+
+#[test]
+fn a_database_with_standbys_is_restored_at_member_0_and_its_standbys_brought_back_after() {
+    let mut plan = a_plan(DatabasePlan::Brought {
+        database: "meridian".into(),
+    });
+    assert!(!plan_text(&plan).contains("standbys"));
+    plan.standbys = 2;
+    let text = plan_text(&plan);
+    assert!(
+        text.contains("at its member 0 alone, make meridian and its roles"),
+        "{text}"
+    );
+    assert!(
+        text.contains("then bring back its 2 standbys, each cloned from member 0, before the components are given its URL"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -938,5 +958,37 @@ fn a_claim_is_filled_by_a_pod_that_may_set_owners_and_modes_and_nothing_more() {
     assert_eq!(
         pod["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"],
         "m-meridian-runtime-storage-a"
+    );
+}
+
+#[test]
+fn a_private_ca_is_named_by_the_values_and_the_loader_is_held_to_it() {
+    let values: serde_yaml::Value =
+        serde_yaml::from_str("database:\n  caSecret: firm-db-ca\n  existingSecret: db\n").unwrap();
+    assert_eq!(database_ca(&values).as_deref(), Some("firm-db-ca"));
+    let none: serde_yaml::Value = serde_yaml::from_str("database:\n  caSecret: \"\"\n").unwrap();
+    assert_eq!(database_ca(&none), None);
+    assert_eq!(loader_custom(None), None);
+    let custom = loader_custom(Some("firm-db-ca")).unwrap();
+    assert_eq!(custom["env"][0]["value"], "verify-full");
+    assert_eq!(
+        custom["env"][1]["value"],
+        "/etc/meridian-database-ca/ca.crt"
+    );
+    assert_eq!(custom["volumeMounts"][0]["name"], "database-ca");
+
+    let mut plan = a_plan(DatabasePlan::Load {
+        place: "db.firm:5432/meridian".into(),
+        database: "meridian".into(),
+        image: "backup:1".into(),
+    });
+    assert!(!plan_text(&plan).contains("verify-full"));
+    plan.database_ca = Some("firm-db-ca".into());
+    let text = plan_text(&plan);
+    assert!(
+        text.contains(
+            "over TLS with the server verified against the CA in firm-db-ca (verify-full)"
+        ),
+        "{text}"
     );
 }

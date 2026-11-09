@@ -814,3 +814,100 @@ async fn a_version_that_cannot_be_read_is_unknown_not_a_pass() {
     ));
     assert_eq!(checks::server_version("not json"), None);
 }
+
+// ── The database's integrity at rest (step 3b, spec section 9) ────────────
+
+const CONDUCTORS: &str = "kubectl get pods -n meridian -l meridian.dev/component=conductor -o json";
+const PROBE: &str =
+    "kubectl exec -n meridian conductor-1 -c conductor -- timeout 30 meridian-conductor probe";
+const SETS: &str = "kubectl get statefulsets -n meridian -o json";
+
+fn conductor(marked: bool) -> String {
+    let env = if marked {
+        serde_json::json!([{ "name": crate::probe::MARKER, "value": "7" }])
+    } else {
+        serde_json::json!([])
+    };
+    serde_json::json!({ "items": [ { "metadata": { "name": "conductor-1",
+        "labels": { "meridian.dev/component": "conductor" } },
+        "spec": { "containers": [ { "name": "conductor", "env": env } ] },
+        "status": { "phase": "Running" } } ] })
+    .to_string()
+}
+
+fn probed(checksums: &str, full_page_writes: &str) -> String {
+    serde_json::json!({ "component": "conductor", "paths": [ { "path": "database",
+        "address": "db:5432", "ok": true, "data_checksums": checksums,
+        "full_page_writes": full_page_writes } ] })
+    .to_string()
+}
+
+fn brought(replicas: u64) -> String {
+    serde_json::json!({ "items": [ { "kind": "StatefulSet",
+        "metadata": { "name": "meridian-meridian-runtime-database" },
+        "spec": { "replicas": replicas,
+                  "selector": { "matchLabels": { "meridian.dev/component": "database" } } } } ] })
+    .to_string()
+}
+
+#[tokio::test]
+async fn a_brought_database_without_checksums_is_pointed_at_the_guided_step() {
+    let machine = Fake::default()
+        .running(CONDUCTORS, Ok(&conductor(true)))
+        .running(PROBE, Ok(&probed("off", "on")))
+        .running(SETS, Ok(&brought(1)));
+    let found = checks::database(&machine, "meridian").await;
+    let said: Vec<String> = found.iter().map(|f| f.to_string()).collect();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0]
+            .starts_with("  worth    the database this deployment brought has no page checksums"),
+        "{said:?}"
+    );
+    assert!(
+        said[0].contains("meridian upgrade-deployment --enable-checksums -n meridian"),
+        "{said:?}"
+    );
+    // Worth knowing, never in an install's way.
+    assert!(!found.iter().any(Finding::stops));
+}
+
+#[tokio::test]
+async fn an_external_database_with_either_setting_off_is_said_plainly() {
+    let machine = Fake::default()
+        .running(CONDUCTORS, Ok(&conductor(true)))
+        .running(PROBE, Ok(&probed("off", "off")))
+        .running(SETS, Ok(r#"{"items": []}"#));
+    let said: Vec<String> = checks::database(&machine, "meridian")
+        .await
+        .iter()
+        .map(|f| f.to_string())
+        .collect();
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(
+        said[0].contains("the database has no page checksums"),
+        "{said:?}"
+    );
+    assert!(!said[0].contains("--enable-checksums"), "{said:?}");
+    assert!(said[1].contains("full_page_writes is off"), "{said:?}");
+
+    // Both on: one line saying so.
+    let machine = Fake::default()
+        .running(CONDUCTORS, Ok(&conductor(true)))
+        .running(PROBE, Ok(&probed("on", "on")))
+        .running(SETS, Ok(r#"{"items": []}"#));
+    let found = checks::database(&machine, "meridian").await;
+    assert!(
+        matches!(found.as_slice(), [Finding::Fine(said)] if said.contains("page checksums and full_page_writes on"))
+    );
+}
+
+#[tokio::test]
+async fn no_deployment_or_one_older_than_the_probe_says_nothing_and_asks_it_nothing() {
+    let machine = Fake::default().running(CONDUCTORS, Ok(r#"{"items": []}"#));
+    assert!(checks::database(&machine, "meridian").await.is_empty());
+    // An older runtime takes `probe` for nothing and would start a second
+    // conductor: not asked, so nothing is scripted for it here.
+    let machine = Fake::default().running(CONDUCTORS, Ok(&conductor(false)));
+    assert!(checks::database(&machine, "meridian").await.is_empty());
+}
