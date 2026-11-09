@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.1.59
+
+- `meridian upgrade-deployment --set key=value`, repeatable, beside `-f`, applied as Helm applies
+  them. A values change is an upgrade even at the chart version already running. The plan names
+  each key that changes, never its value, and withholds any value whose key names a secret. With
+  Helm 4 it passes `--force-conflicts`, so the chart's counts replace the ones a first run or a
+  restore set, as Helm 3 did.
+- Moving a running brought database to `resilience.profile=ha`, standbys under Patroni, takes the
+  chart's two upgrades. `upgrade-deployment` says so before it asks, and runs both under one
+  approval, the second once the first has rolled out. If the first stops, it says which step
+  stopped and what to run; run again, it finishes a half-made move. Back to `tolerant` is one
+  upgrade.
+- `meridian upgrade-deployment --enable-checksums` turns on Postgres's data checksums in the
+  database the deployment brought. Already on: it says so and changes nothing. Otherwise it says
+  the downtime, estimated from the database's size, before it asks; takes a backup first, and
+  changes nothing if that fails; stops every component and the database; makes the change (under
+  Patroni on member 0, the standbys then made again from it); starts everything at the counts it
+  ran at; and reads the setting again.
+- `meridian restore --to-time <time>`, RFC 3339 with its offset, restores the brought database in
+  place from its WAL archive (`backup.walArchive`) to that time: everything stopped, the restore
+  run, everything started again, under Patroni the standbys made again from member 0. Without the
+  archive it is refused, saying how to turn it on. A time outside the archive fails in the
+  restore's own words, leaves everything stopped and the database restorable, and the next run
+  takes it from there. After a time past the archive's end, it says the latest time that can be
+  restored lies before the archive's last commit, gives that commit's time where Postgres's lines
+  include it, and asks for a time before it.
+- `meridian restore <file>` into an ha deployment loads member 0, then brings the standbys back
+  from it before it gives the database's address. Into a deployment whose external database has
+  its own CA (`database.caSecret`), the restore connects with that CA; a backup without the Secret
+  is refused before anything changes.
+- While `restore --to-time` or `--enable-checksums` has the deployment stopped, the release's
+  CronJobs (the replica comparison, the scheduled backup, the scrub) are suspended, and each is
+  given back as it was when everything starts again. Neither starts while a Job of an earlier one
+  still runs. A Job that fails or does not finish shows its cause from its log.
+- `meridian status` shows the database's members (primary or standby, ready, how far behind), a
+  member waiting for its node, which is never force-deleted, whether data checksums and
+  `full_page_writes` are on, the WAL archiver's last segment and whether it is failing, the
+  replica comparison's last run, whether internal TLS is on, and each store's probe. While a
+  restore or `--enable-checksums` has the deployment stopped, it says which, since when, and the
+  command that resumes it. `--json` keeps every key it had and adds these.
+- `meridian doctor` says where a reachable database has data checksums or `full_page_writes` off,
+  and points a brought one to `--enable-checksums`.
+
 ## 0.1.58
 
 - `plugin check`'s `role-suite` reads contract v29's suites (meridian-schema ce3a6f3, as SDK 0.35.2
