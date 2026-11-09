@@ -13,8 +13,8 @@
 //! nothing here reads or prints it.
 
 use super::{
-    clear_stopped, database, members_now, record_stopped, run_act, running_deployments,
-    standbys_to_remake, start, started_components, stop_database, stop_these, Act, Release,
+    act_running, clear_stopped, database, members_now, record_stop, run_act, standbys_to_remake,
+    start, started_components, stop_database, stop_these, suspend_cronjobs, utc, Act, Release,
     Stopped,
 };
 use crate::doctor::{Finding, Machine};
@@ -150,10 +150,14 @@ pub struct Plan {
     pub cronjob: serde_json::Value,
     /// The archiver's last segment, as the probe said it.
     pub last_archived: Option<String>,
-    /// Stopped by an earlier restore that did not finish, and what it
-    /// stopped: run again, nothing is stopped twice and everything is
-    /// started again at the counts it ran at.
+    /// Stopped by an earlier act that did not finish, and what it stopped:
+    /// run again, nothing is stopped twice and everything is started again
+    /// at the counts it ran at, each CronJob as it was.
     pub resume: Option<Stopped>,
+    /// Recorded by an earlier act that did not finish stopping, the
+    /// database still running: its counts and CronJobs stand over what runs
+    /// now, which it stopped or suspended itself.
+    pub earlier: Option<Stopped>,
 }
 
 fn release_of(asked: &Asked) -> Release {
@@ -222,16 +226,26 @@ async fn checks_made(
         return Err(());
     }
     let mut resume = None;
+    let mut earlier = None;
     let set = match database(machine, &release).await {
-        Ok(Some(set)) if set.replicas > 0 => set,
-        // Stopped by a restore that did not finish, which recorded what it
+        Ok(Some(set)) if set.replicas > 0 => {
+            earlier = super::recorded_stopped(machine, &release, &set.name).await;
+            set
+        }
+        // Stopped by an act that did not finish, which recorded what it
         // stopped: this one takes it from there.
         Ok(Some(set)) => match super::recorded_stopped(machine, &release, &set.name).await {
             Some(stopped) => {
                 findings.push(Finding::Fine(format!(
-                    "{} was stopped by a restore that did not finish: this one takes it from \
+                    "{} was stopped by `{}`{}, which did not finish: this one takes it from \
                      there, and starts everything again at the counts it ran at",
-                    asked.release
+                    asked.release,
+                    stopped.command(),
+                    stopped
+                        .since
+                        .as_deref()
+                        .map(|at| format!(" at {at}"))
+                        .unwrap_or_default()
                 )));
                 resume = Some(stopped);
                 set
@@ -243,7 +257,7 @@ async fn checks_made(
                         asked.release, set.name
                     ),
                     fix: "A restore runs on a deployment that is running, or one a restore \
-                          stopped. `meridian status` says what runs."
+                          or --enable-checksums stopped. `meridian status` says what runs."
                         .into(),
                 });
                 refuse(&findings, say);
@@ -295,6 +309,17 @@ async fn checks_made(
         "{} archives its WAL (backup.walArchive)",
         set.name
     )));
+    if let Some(job) = act_running(machine, &release).await {
+        findings.push(Finding::Stops {
+            what: format!("job/{job}, an act on the stopped database's volume, is still running"),
+            fix: format!(
+                "Two acts never share the volume. `meridian logs database-offline {scope}` says \
+                 where it is; once it has ended, run this again."
+            ),
+        });
+        refuse(&findings, say);
+        return Err(());
+    }
     let cronjob = match super::cronjob(machine, &release, &set.name).await {
         Ok(cronjob) => cronjob,
         Err(_) => {
@@ -343,6 +368,7 @@ async fn checks_made(
         cronjob,
         last_archived,
         resume,
+        earlier,
     })
 }
 
@@ -375,9 +401,11 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
          answers until it is done.\n\n",
     );
     out.push_str(if plan.resume.is_some() {
-        "  1. Everything is stopped already, by the restore before.\n"
+        "  1. Everything is stopped already, by the act before; the release's CronJobs stay \
+         suspended.\n"
     } else {
-        "  1. Every component stopped, the newest WAL archived, then the database.\n"
+        "  1. The release's CronJobs suspended (the replica comparison, the backup, the \
+         scrub), every component stopped, the newest WAL archived, then the database.\n"
     });
     out.push_str(&format!(
         "  2. The restore on member 0's volume, in a Job from {}.\n",
@@ -388,7 +416,8 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
     if patroni && standbys > 0 {
         out.push_str(&format!(
             "  3. The standbys' volumes deleted ({}), which Patroni makes again from member 0; \
-             the database started, then every component, each to the count it ran at.\n",
+             the database started, then every component, each to the count it ran at, and \
+             each CronJob as it was.\n",
             (1..members)
                 .map(|n| format!("data-{}-{n}", plan.set.name))
                 .collect::<Vec<_>>()
@@ -396,7 +425,8 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
         ));
     } else {
         out.push_str(
-            "  3. The database started, then every component, each to the count it ran at.\n",
+            "  3. The database started, then every component, each to the count it ran at, and \
+             each CronJob as it was.\n",
         );
     }
     out.push_str(&format!(
@@ -479,18 +509,26 @@ pub async fn apply(
 
     watch.begin(Step::Stop);
     let mut stopped = plan.resume.clone().unwrap_or(Stopped {
-        deployments: Vec::new(),
         database: plan.set.replicas,
+        ..Stopped::default()
     });
     let stopping = async {
         if plan.resume.is_some() {
-            watch.say("  stopped already, by the restore before");
-            return Ok(());
+            watch.say("  stopped already, by the act before");
+            // The record names this act from now on: if it does not finish
+            // either, the volume holds this one's, and this is what resumes.
+            if stopped.act.as_deref() != Some(act.name()) {
+                stopped.act = Some(act.name().to_string());
+                super::record_stopped(machine, &release, &plan.set.name, &stopped).await?;
+            }
+            // Suspended then; again, in case anything gave one back since.
+            return suspend_cronjobs(machine, &release, &stopped, watch).await;
         }
-        stopped.deployments = running_deployments(machine, &release).await?;
-        // Recorded before anything stops, so a restore that does not finish
-        // leaves what to start again where the next one reads it.
-        record_stopped(machine, &release, &plan.set.name, &stopped).await?;
+        // Recorded before anything stops, so an act that does not finish
+        // leaves what to start again, and each CronJob's schedule, where
+        // the next one reads it.
+        stopped = record_stop(machine, &release, &plan.set, &act, plan.earlier.as_ref()).await?;
+        suspend_cronjobs(machine, &release, &stopped, watch).await?;
         stop_these(machine, &release, &stopped.deployments, pace, watch).await?;
         archive_now(machine, &release, &plan.set.name, pace).await;
         // No switch to member 0 first, as checksums need: the restore makes
@@ -501,6 +539,9 @@ pub async fn apply(
     watch.end(Step::Stop, stopping.is_ok());
     if let Err(failed) = stopping {
         let back = start(machine, &release, &plan.set, &stopped, pace, watch).await;
+        if back.is_ok() {
+            clear_stopped(machine, &release, &plan.set.name).await;
+        }
         return Err(format!(
             "stopping everything did not finish: {failed}\nThe database was not restored. {}",
             match back {
@@ -510,19 +551,7 @@ pub async fn apply(
         ));
     }
     // Once nothing writes: every commit before it is archived.
-    let stopped_at = time::OffsetDateTime::from_unix_timestamp(machine.now_s() as i64)
-        .map(|at| {
-            format!(
-                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-                at.year(),
-                u8::from(at.month()),
-                at.day(),
-                at.hour(),
-                at.minute(),
-                at.second()
-            )
-        })
-        .unwrap_or_default();
+    let stopped_at = utc(machine.now_s());
 
     watch.begin(Step::Act);
     let restored = run_act(
@@ -537,11 +566,26 @@ pub async fn apply(
     .await;
     watch.end(Step::Act, restored.is_ok());
     let log = restored.map_err(|failed| {
+        let again = if failed.outside_the_archive() {
+            format!(
+                "Name a time inside the archive, from its oldest base backup to its last archived \
+                 segment: `meridian restore --to-time <time> {scope}`."
+            )
+        } else if !failed.ended {
+            format!(
+                "Once the Job has ended, `meridian restore --to-time <time> {scope}` takes it \
+                 from there; it is refused while the Job runs."
+            )
+        } else {
+            format!(
+                "Once the cause above is dealt with, `meridian restore --to-time <time> {scope}` \
+                 takes it from there."
+            )
+        };
         format!(
-            "{failed}\nEverything stays stopped: the database's volume holds a restore that did \
-             not finish, and stays restorable. Name a time inside the archive, from its oldest \
-             base backup to its last archived segment: `meridian restore --to-time <time> \
-             {scope}`. To return it to where it was when it stopped, name {stopped_at}: every \
+            "{failed}\nEverything stays stopped, and the release's CronJobs suspended: the \
+             database's volume holds a restore that did not finish, and stays restorable. \
+             {again} To return it to where it was when it stopped, name {stopped_at}: every \
              commit before the stop was archived."
         )
     })?;

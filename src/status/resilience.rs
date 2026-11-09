@@ -15,13 +15,17 @@
 //!   unanswered findings, the replica comparison's among them.
 //! - **The replica comparison's last run**, the database-scrub Job's answer.
 //! - **Whether internal TLS is on**: the components mount its CA.
+//! - **A stop an act made**: while `meridian restore --to-time` or
+//!   `upgrade-deployment --enable-checksums` has everything stopped, its
+//!   record on the database's StatefulSet (`meridian.dev/stopped-for-
+//!   restore`): which act, since when, and the command that resumes it.
 
 use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
 use super::{Asked, Cluster};
-use crate::offline::{members, Member};
+use crate::offline::{members, stopped_on, Member, Stopped};
 use crate::upgrade_deployment::{database_set_of, DatabaseSet};
 
 /// One store member's probe.
@@ -57,6 +61,12 @@ pub struct Resilience {
     /// The replica comparison's last answer, where a run of it is kept.
     pub replicas: Option<Value>,
     pub internal_tls: bool,
+    /// What an act stopped, while its record is on the database's
+    /// StatefulSet.
+    pub stopped: Option<Stopped>,
+    /// `-n <namespace>`, and `--release` where it is not the default: for
+    /// the commands said.
+    pub scope: String,
 }
 
 impl Resilience {
@@ -157,9 +167,16 @@ pub async fn read(
     let ns = asked.namespace.as_str();
     let mut found = Resilience {
         internal_tls: internal_tls(workloads),
+        scope: super::scope(&asked.release, &asked.namespace),
         ..Resilience::default()
     };
     if let Some(set) = database_set_of(workloads) {
+        found.stopped = workloads["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|item| item["kind"] == "StatefulSet" && item["metadata"]["name"] == set.name)
+            .and_then(stopped_on);
         let members = members(pods, &set.name);
         let ready_nodes = match cluster.kubectl(&["get", "nodes", "-o", "json"]).await {
             Ok(said) => nodes_ready(&serde_json::from_str(&said).unwrap_or_default()),
@@ -280,6 +297,43 @@ fn when(at_ns: u64, now_ns: u64) -> String {
         crate::registry::moment(at_ns),
         super::ago(now_ns.saturating_sub(at_ns))
     )
+}
+
+/// Said first, while an act has the deployment stopped: which, since when,
+/// and what resumes it. Nothing where none has.
+pub fn stopped_said(resilience: &Resilience) -> String {
+    let Some(stopped) = &resilience.stopped else {
+        return String::new();
+    };
+    let suspended: Vec<&str> = stopped
+        .cronjobs
+        .iter()
+        .filter(|(_, suspended)| !suspended)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let mut out = format!(
+        "\nStopped by `{}`{}:\n  every component and the database stay stopped",
+        stopped.command(),
+        stopped
+            .since
+            .as_deref()
+            .map(|at| format!(" since {at}"))
+            .unwrap_or_default()
+    );
+    if !suspended.is_empty() {
+        out.push_str(&format!(
+            ", and {} CronJob(s) suspended ({})",
+            suspended.len(),
+            suspended.join(", ")
+        ));
+    }
+    out.push_str(&format!(
+        ", until it finishes. While it runs, `meridian logs database-offline {scope}` says where \
+         its act is. If it no longer runs, `{}` takes it from there and starts everything again.\n",
+        stopped.resumed_by(&resilience.scope),
+        scope = resilience.scope
+    ));
+    out
 }
 
 /// The sections `status` prints for all of it.
@@ -416,7 +470,28 @@ pub fn said(resilience: &Resilience, now_ns: u64, namespace: &str) -> String {
         .map(|p| p.pod.len())
         .max()
         .unwrap_or(0);
-    let mut scrubbed = std::collections::BTreeSet::new();
+    // A store's scrub is its record's, the same on every member: said once,
+    // under its writer (in ha, the primary), or the first member that read
+    // it where none is the writer.
+    let mut record_under: BTreeMap<&str, &str> = BTreeMap::new();
+    for probed in &resilience.probes {
+        let read = probed
+            .database
+            .as_ref()
+            .is_some_and(|path| path["integrity"].is_object());
+        if !read {
+            continue;
+        }
+        let writer = probed.member["mode"] == "writer";
+        record_under
+            .entry(probed.component.as_str())
+            .and_modify(|pod| {
+                if writer {
+                    *pod = probed.pod.as_str();
+                }
+            })
+            .or_insert(probed.pod.as_str());
+    }
     for probed in &resilience.probes {
         let mut line = format!("  {:width$}  ", probed.pod);
         if let Some(why) = &probed.unread {
@@ -449,11 +524,9 @@ pub fn said(resilience: &Resilience, now_ns: u64, namespace: &str) -> String {
         line.push_str(&said.join(", "));
         out.push_str(&line);
         out.push('\n');
-        // A store's scrub is its record's, the same on every member: said
-        // once, by the first member that read it.
         let integrity = probed.database.as_ref().map(|path| &path["integrity"]);
         if let Some(integrity) = integrity.filter(|i| i.is_object()) {
-            if !scrubbed.insert(probed.component.clone()) {
+            if record_under.get(probed.component.as_str()) != Some(&probed.pod.as_str()) {
                 continue;
             }
             let findings: Vec<&Value> = integrity["findings"]
@@ -525,6 +598,18 @@ pub fn json_of(resilience: &Resilience) -> Value {
         "wal_archiver": resilience.archive(),
         "replica_comparison": resilience.replicas,
         "internal_tls": resilience.internal_tls,
+        "stopped_by": resilience.stopped.as_ref().map(|stopped| json!({
+            "act": stopped.act_name(),
+            "command": stopped.command(),
+            "since": stopped.since,
+            "resumed_by": stopped.resumed_by(&resilience.scope),
+            "database_members": stopped.database,
+            "components": stopped.deployments,
+            "cronjobs_suspended": stopped.cronjobs.iter()
+                .filter(|(_, suspended)| !suspended)
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+        })),
         "probes": resilience.probes.iter().map(|p| json!({
             "component": p.component,
             "pod": p.pod,
@@ -752,5 +837,134 @@ mod tests {
         assert!(!text.contains("--enable-checksums"), "{text}");
         assert!(text.contains("internal TLS off"), "{text}");
         assert!(!text.contains("replica comparison"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_stop_an_act_recorded_is_said_with_since_when_and_what_resumes_it() {
+        let mut fake = ha();
+        let record = Stopped {
+            deployments: vec![("om-lake".into(), 1)],
+            database: 3,
+            cronjobs: vec![
+                ("om-backup".into(), true),
+                (format!("{SET}-replicas"), false),
+            ],
+            act: Some("restore-to-time".into()),
+            since: Some("2026-11-09T03:39:15Z".into()),
+        };
+        fake.workloads["items"][0]["metadata"]["annotations"] =
+            json!({ crate::offline::STOPPED: record.to_json() });
+        fake.pods = json!({ "items": [] });
+        let read = read(&fake, &asked(), &fake.workloads, &fake.pods).await;
+        let text = stopped_said(&read);
+        assert!(
+            text.contains("Stopped by `meridian restore --to-time` since 2026-11-09T03:39:15Z:"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("1 CronJob(s) suspended ({SET}-replicas)")),
+            "{text}"
+        );
+        assert!(
+            text.contains("`meridian logs database-offline --release om -n om`"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "`meridian restore --to-time <time> --release om -n om` takes it from there"
+            ),
+            "{text}"
+        );
+        let json = json_of(&read);
+        assert_eq!(json["stopped_by"]["act"], "restore-to-time");
+        assert_eq!(json["stopped_by"]["since"], "2026-11-09T03:39:15Z");
+        assert_eq!(
+            json["stopped_by"]["resumed_by"],
+            "meridian restore --to-time <time> --release om -n om"
+        );
+        assert_eq!(
+            json["stopped_by"]["cronjobs_suspended"],
+            json!([format!("{SET}-replicas")])
+        );
+        // Every key it had, kept.
+        for key in [
+            "database",
+            "database_settings",
+            "wal_archiver",
+            "replica_comparison",
+            "internal_tls",
+            "probes",
+        ] {
+            assert!(json.get(key).is_some(), "{key}");
+        }
+
+        // By --enable-checksums: its own command resumes it.
+        let record = Stopped {
+            act: Some("enable-checksums".into()),
+            ..record
+        };
+        fake.workloads["items"][0]["metadata"]["annotations"] =
+            json!({ crate::offline::STOPPED: record.to_json() });
+        let read = super::read(&fake, &asked(), &fake.workloads, &fake.pods).await;
+        let text = stopped_said(&read);
+        assert!(
+            text.contains("Stopped by `meridian upgrade-deployment --enable-checksums` since"),
+            "{text}"
+        );
+        assert!(
+            text.contains("`meridian upgrade-deployment --enable-checksums --release om -n om` takes it from there"),
+            "{text}"
+        );
+
+        // None recorded: nothing said, and the key is null.
+        let fake = ha();
+        let read = super::read(&fake, &asked(), &fake.workloads, &fake.pods).await;
+        assert_eq!(stopped_said(&read), "");
+        assert!(json_of(&read)["stopped_by"].is_null());
+    }
+
+    #[test]
+    fn a_stores_record_is_said_under_its_writer() {
+        let integrity = json!({ "ok": true, "integrity": {
+            "last_scrub_at_ns": 1_794_000_000_000_000_000u64, "checked": 7, "findings": [] } });
+        let probed = |pod: &str, mode: &str| Probed {
+            component: "lake".into(),
+            pod: pod.into(),
+            member: json!({ "mode": mode, "ready": true }),
+            database: Some(integrity.clone()),
+            unread: None,
+        };
+        let resilience = Resilience {
+            probes: vec![
+                probed("om-lake-0", "standby"),
+                probed("om-lake-1", "writer"),
+                probed("om-lake-2", "standby"),
+            ],
+            ..Resilience::default()
+        };
+        let text = said(&resilience, 1_794_003_600_000_000_000, "om");
+        let lines: Vec<&str> = text.lines().collect();
+        let record = lines
+            .iter()
+            .position(|line| line.contains("lake record: last scrub"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(lines[record - 1].contains("om-lake-1  writer"), "{text}");
+        assert_eq!(text.matches("lake record:").count(), 1, "{text}");
+
+        // None the writer: under the first that read it.
+        let resilience = Resilience {
+            probes: vec![
+                probed("om-lake-0", "standby"),
+                probed("om-lake-1", "standby"),
+            ],
+            ..Resilience::default()
+        };
+        let text = said(&resilience, 1_794_003_600_000_000_000, "om");
+        let lines: Vec<&str> = text.lines().collect();
+        let record = lines
+            .iter()
+            .position(|line| line.contains("lake record:"))
+            .unwrap();
+        assert!(lines[record - 1].contains("om-lake-0"), "{text}");
     }
 }
