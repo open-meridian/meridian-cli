@@ -59,6 +59,10 @@ pub struct Asked {
     /// hardening-track, "Backup and restore's gaps", 8), what they change
     /// shown before it asks.
     pub values: Vec<String>,
+    /// `--set key=value`, each as given and in order, over the files as Helm
+    /// lays them: what they change is shown by path, and a value whose key
+    /// names a secret is never echoed.
+    pub sets: Vec<String>,
 }
 
 impl Asked {
@@ -287,6 +291,337 @@ pub fn merged(base: &serde_json::Value, over: &serde_json::Value) -> serde_json:
         }
         _ => over.clone(),
     }
+}
+
+// ── --set ───────────────────────────────────────────────────────────────────
+
+/// One `--set` read as Helm reads it (its strvals): `a.b=v`, several split
+/// by unescaped commas, `\,` and `\.` kept as they are, `name[0]` an item of
+/// a list, `{x,y}` a list, and `true`, `false`, `null` and a whole number
+/// typed. What it gives is a mapping to merge over the values before it;
+/// what it changes is shown by path, and the value itself only goes to Helm.
+pub fn set_values(given: &str) -> Result<serde_json::Value, String> {
+    use serde_json::Value;
+    let mut out = Value::Object(Default::default());
+    for assignment in split_unescaped(given, ',', true) {
+        if assignment.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = split_once_unescaped(&assignment, '=') else {
+            return Err(format!(
+                "--set {} is not key=value: Helm takes a key, an equals sign and its value",
+                set_key(&assignment)
+            ));
+        };
+        let path = key_path(&key).ok_or_else(|| {
+            format!("--set {key}=... names no key Helm reads: a.b, a.list[0] and a\\.b are")
+        })?;
+        let value = if value.starts_with('{') && value.ends_with('}') && value.len() >= 2 {
+            Value::Array(
+                split_unescaped(&value[1..value.len() - 1], ',', false)
+                    .iter()
+                    .filter(|item| !item.is_empty())
+                    .map(|item| typed(&unescaped(item)))
+                    .collect(),
+            )
+        } else {
+            typed(&unescaped(&value))
+        };
+        place(&mut out, &path, value);
+    }
+    Ok(out)
+}
+
+/// The key of a `--set`, without its value: what may be said of it.
+pub fn set_key(given: &str) -> String {
+    split_once_unescaped(given, '=').map_or_else(|| given.to_string(), |(key, _)| key)
+}
+
+/// Every key one `--set` names, in order, without values.
+pub fn set_keys(given: &str) -> Vec<String> {
+    split_unescaped(given, ',', true)
+        .iter()
+        .filter(|assignment| !assignment.is_empty())
+        .map(|assignment| set_key(assignment))
+        .collect()
+}
+
+/// Whether a key names something secret, whose value is never echoed: a
+/// password, a token, a key, a passphrase, an enrolment or first-run code, a
+/// credential, a certificate or a Secret.
+pub fn secret_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    [
+        "secret",
+        "password",
+        "passwd",
+        "passphrase",
+        "token",
+        "credential",
+        "code",
+        "key",
+        "cipher",
+        "private",
+        "cert",
+    ]
+    .iter()
+    .any(|word| key.contains(word))
+}
+
+/// A `--set` as it may be shown: each assignment whose key names a secret
+/// with its value withheld.
+pub fn shown_set(given: &str) -> String {
+    split_unescaped(given, ',', true)
+        .iter()
+        .map(|assignment| {
+            let key = set_key(assignment);
+            if secret_key(&key) {
+                format!("{key}=<withheld>")
+            } else {
+                assignment.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// `said` split at each `at` not escaped by a backslash, the escapes kept;
+/// with `braces`, not inside `{...}` either, as a list's commas are not.
+fn split_unescaped(said: &str, at: char, braces: bool) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let (mut escaped, mut depth) = (false, 0usize);
+    for c in said.chars() {
+        let last = out.last_mut().expect("never empty");
+        if escaped {
+            last.push(c);
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => {
+                last.push(c);
+                escaped = true;
+            }
+            '{' if braces => {
+                depth += 1;
+                last.push(c);
+            }
+            '}' if braces && depth > 0 => {
+                depth -= 1;
+                last.push(c);
+            }
+            c if c == at && depth == 0 => out.push(String::new()),
+            c => last.push(c),
+        }
+    }
+    out
+}
+
+fn split_once_unescaped(said: &str, at: char) -> Option<(String, String)> {
+    let mut parts = split_unescaped(said, at, false);
+    if parts.len() < 2 {
+        return None;
+    }
+    let first = parts.remove(0);
+    Some((first, parts.join(&at.to_string())))
+}
+
+fn unescaped(said: &str) -> String {
+    let mut out = String::new();
+    let mut escaped = false;
+    for c in said.chars() {
+        if escaped {
+            out.push(c);
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Helm's typing of a `--set` value: booleans, null, and whole numbers
+/// without a leading zero; anything else is a string.
+fn typed(value: &str) -> serde_json::Value {
+    use serde_json::Value;
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    match value {
+        "true" => Value::Bool(true),
+        "false" => Value::Bool(false),
+        "null" => Value::Null,
+        "0" => Value::from(0),
+        _ if !digits.is_empty()
+            && !digits.starts_with('0')
+            && digits.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            value
+                .parse::<i64>()
+                .map(Value::from)
+                .unwrap_or_else(|_| Value::String(value.into()))
+        }
+        _ => Value::String(value.into()),
+    }
+}
+
+/// One step of a key: a mapping's key, or a list's item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum KeyStep {
+    Key(String),
+    Item(usize),
+}
+
+fn key_path(key: &str) -> Option<Vec<KeyStep>> {
+    let mut path = Vec::new();
+    for part in split_unescaped(key, '.', false) {
+        let mut rest = part.as_str();
+        let name_end = rest.find('[').unwrap_or(rest.len());
+        let name = unescaped(&rest[..name_end]);
+        if name.is_empty() {
+            return None;
+        }
+        path.push(KeyStep::Key(name));
+        rest = &rest[name_end..];
+        while let Some(after) = rest.strip_prefix('[') {
+            let (index, more) = after.split_once(']')?;
+            path.push(KeyStep::Item(index.parse().ok()?));
+            rest = more;
+        }
+        if !rest.is_empty() {
+            return None;
+        }
+    }
+    (!path.is_empty()).then_some(path)
+}
+
+fn place(into: &mut serde_json::Value, path: &[KeyStep], value: serde_json::Value) {
+    use serde_json::Value;
+    let Some((first, rest)) = path.split_first() else {
+        *into = value;
+        return;
+    };
+    match first {
+        KeyStep::Key(key) => {
+            if !into.is_object() {
+                *into = Value::Object(Default::default());
+            }
+            let map = into.as_object_mut().expect("made a mapping");
+            if rest.is_empty() {
+                map.insert(key.clone(), value);
+            } else {
+                let next = map.entry(key.clone()).or_insert(Value::Null);
+                place(next, rest, value);
+            }
+        }
+        KeyStep::Item(index) => {
+            if !into.is_array() {
+                *into = Value::Array(Vec::new());
+            }
+            let list = into.as_array_mut().expect("made a list");
+            while list.len() <= *index {
+                list.push(Value::Null);
+            }
+            place(&mut list[*index], rest, value);
+        }
+    }
+}
+
+// ── The database under Patroni ──────────────────────────────────────────────
+
+/// The brought database's StatefulSet, as an upgrade, the offline acts and
+/// `status` read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabaseSet {
+    pub name: String,
+    pub replicas: u64,
+    /// Run by Patroni: its template says so (`meridian.dev/database-manager`).
+    pub patroni: bool,
+    /// Archiving its WAL: a container `archive` beside the server.
+    pub archive: bool,
+    /// Served over internal TLS: its server's certificate is mounted.
+    pub tls: bool,
+}
+
+/// The release's brought database, among `kubectl get deployments,
+/// statefulsets -o json`'s items: the StatefulSet whose pods are the
+/// database component.
+pub fn database_set(listed: &str) -> Option<DatabaseSet> {
+    database_set_of(&serde_json::from_str(listed).ok()?)
+}
+
+/// The same, from the listing already read.
+pub fn database_set_of(listed: &serde_json::Value) -> Option<DatabaseSet> {
+    let set = listed["items"].as_array()?.iter().find(|item| {
+        item["kind"] == "StatefulSet"
+            && item["spec"]["selector"]["matchLabels"]["meridian.dev/component"] == "database"
+    })?;
+    let template = &set["spec"]["template"];
+    let containers = template["spec"]["containers"].as_array();
+    Some(DatabaseSet {
+        name: set["metadata"]["name"].as_str()?.to_string(),
+        replicas: set["spec"]["replicas"].as_u64().unwrap_or(0),
+        patroni: template["metadata"]["labels"]["meridian.dev/database-manager"] == "patroni",
+        archive: containers
+            .into_iter()
+            .flatten()
+            .any(|container| container["name"] == "archive"),
+        tls: template["spec"]["volumes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|volume| volume["name"] == "internal-tls-server"),
+    })
+}
+
+/// How many standbys values give the brought database, as the chart counts
+/// them (its databaseStandbys): `database.brought.standbys` where set, else
+/// 2 under `resilience.profile: ha` and 0 otherwise; none where the chart
+/// brings no database.
+pub fn standbys_in(values: &serde_json::Value) -> u64 {
+    let brought = &values["database"]["brought"];
+    if brought["enabled"] == false {
+        return 0;
+    }
+    match &brought["standbys"] {
+        serde_json::Value::Number(n) => n.as_u64().unwrap_or(0),
+        serde_json::Value::String(n) => n.parse().unwrap_or(0),
+        _ if values["resilience"]["profile"] == "ha" => 2,
+        _ => 0,
+    }
+}
+
+/// A database moving under Patroni with standbys, which the chart does in
+/// two upgrades (its NOTES.txt): the first moves member 0 alone, keeping its
+/// data; once it is ready, the second, with the same values and chart, adds
+/// the standbys, which clone from it. `finishing`: the first ran before, and
+/// this upgrade is the second alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PatroniMove {
+    pub standbys: u64,
+    pub finishing: bool,
+}
+
+/// Whether an upgrade to `values` moves the running database under Patroni,
+/// as the chart decides it: running, not yet Patroni's, and standbys wanted;
+/// or already Patroni's at one member with standbys wanted, a move whose
+/// second upgrade has not run.
+pub fn patroni_move(set: Option<&DatabaseSet>, values: &serde_json::Value) -> Option<PatroniMove> {
+    let set = set?;
+    let standbys = standbys_in(values);
+    if set.replicas == 0 || standbys == 0 {
+        return None;
+    }
+    if !set.patroni {
+        return Some(PatroniMove {
+            standbys,
+            finishing: false,
+        });
+    }
+    (set.replicas == 1).then_some(PatroniMove {
+        standbys,
+        finishing: true,
+    })
 }
 
 /// What a value at a path does in an upgrade's values.
@@ -569,6 +904,8 @@ pub struct Pod {
     pub created: Option<String>,
     /// Since when it has been ready, in the same form. None while it is not.
     pub ready_since: Option<String>,
+    /// Whether its runtime answers `probe` (step 3b): see `probe::answers`.
+    pub probes: bool,
 }
 
 fn containers(statuses: &serde_json::Value) -> Vec<Container> {
@@ -630,6 +967,7 @@ pub fn pods(listed: &str) -> Vec<Pod> {
                 .find(|condition| condition["type"] == "Ready" && condition["status"] == "True")
                 .and_then(|condition| condition["lastTransitionTime"].as_str())
                 .map(String::from),
+            probes: crate::probe::answers(item),
         })
         .collect()
 }
@@ -841,8 +1179,15 @@ pub struct Plan {
     /// Where the deployment's own values put edge plugins' archive, which
     /// the upgrade keeps as they keep everything else.
     pub archive: Option<String>,
-    /// What the `-f` files change in the deployment's own values, by path.
+    /// What the `-f` files and `--set`s change in the deployment's own
+    /// values, by path.
     pub changes: Vec<Change>,
+    /// The database moved under Patroni, in two upgrades this one approval
+    /// covers, or the second of them alone.
+    pub patroni_move: Option<PatroniMove>,
+    /// `--force-conflicts`, with Helm 4's server-side apply: the chart's
+    /// counts over a scale another manager made.
+    pub force_conflicts: bool,
 }
 
 /// The same command, as somebody would type it.
@@ -873,6 +1218,17 @@ pub fn helm_arguments(asked: &Asked, plan: &Plan) -> Vec<String> {
             .iter()
             .flat_map(|path| ["-f".to_string(), path.clone()]),
     )
+    .chain(
+        plan.force_conflicts
+            .then(|| "--force-conflicts".to_string()),
+    )
+    // Then each --set, which Helm lays over every file whatever the order.
+    .chain(
+        asked
+            .sets
+            .iter()
+            .flat_map(|set| ["--set".to_string(), set.clone()]),
+    )
     .chain(plan.https.iter().flat_map(|host| {
         // Kept by every later upgrade: --set values are the deployment's own.
         [
@@ -886,6 +1242,40 @@ pub fn helm_arguments(asked: &Asked, plan: &Plan) -> Vec<String> {
         ]
     }))
     .collect()
+}
+
+/// The command as it is shown: each `--set` value whose key names a secret
+/// withheld. What Helm is given is `helm_arguments`.
+pub fn shown_arguments(asked: &Asked, plan: &Plan) -> Vec<String> {
+    let mut shown = helm_arguments(asked, plan);
+    let mut sets = asked.sets.iter();
+    let mut at = 0;
+    while at + 1 < shown.len() {
+        if shown[at] == "--set" {
+            if let Some(given) = sets.next() {
+                if shown[at + 1] == *given {
+                    shown[at + 1] = shown_set(given);
+                }
+            }
+            at += 2;
+        } else {
+            at += 1;
+        }
+    }
+    shown
+}
+
+/// What the values are merged from, as the plan names them: the files, then
+/// each --set by its keys alone.
+fn merged_from(asked: &Asked) -> String {
+    let mut from: Vec<String> = asked.values.clone();
+    from.extend(
+        asked
+            .sets
+            .iter()
+            .map(|set| format!("--set {}", set_keys(set).join(","))),
+    );
+    from.join(", ")
 }
 
 /// `1 pod`, `7 pods`.
@@ -944,13 +1334,16 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
             "\x20 Its archive, {archive}, is kept: the deployment's own values carry it.\n"
         ));
     }
-    if !asked.values.is_empty() {
-        let files = asked.values.join(", ");
+    if !asked.values.is_empty() || !asked.sets.is_empty() {
+        let files = merged_from(asked);
         certificate.push_str(&match plan.changes.as_slice() {
-            [] => format!(
-                "\x20 Its values, with {files} merged over them, are what they were: the files \
-                 change nothing.\n"
-            ),
+            [] => {
+                format!(
+                "\x20 Its values, with {files} merged over them, are what they were: {} change \
+                 nothing.\n",
+                if asked.sets.is_empty() { "the files" } else { "they" }
+            )
+            }
             changes => format!(
                 "\x20 Its values, with {files} merged over them (values not shown):\n{}",
                 changes
@@ -959,6 +1352,9 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
                     .collect::<String>()
             ),
         });
+    }
+    if let Some(moving) = &plan.patroni_move {
+        certificate.push_str(&patroni_move_text(moving));
     }
     if !certificate.is_empty() {
         certificate.push('\n');
@@ -977,7 +1373,26 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
         revision = plan.from.revision,
         to = plan.to.version,
         to_image = plan.to_image,
-        command = helm_arguments(asked, plan).join(" "),
+        command = shown_arguments(asked, plan).join(" "),
+    )
+}
+
+/// The two upgrades a move under Patroni takes, said before it asks.
+fn patroni_move_text(moving: &PatroniMove) -> String {
+    let standbys = counted(moving.standbys as usize, "standby");
+    if moving.finishing {
+        return format!(
+            "\x20 Its database runs under Patroni alone, from the first of the two upgrades that \
+             move it there: this upgrade is the second, adding its {standbys}, which clone \
+             from it.\n"
+        );
+    }
+    format!(
+        "\x20 Its database moves under Patroni, which takes two upgrades, and this one approval \
+         covers both. The first moves its member 0 under Patroni alone, keeping its data; once \
+         that has rolled out and member 0 is ready, the second, with the same chart and values, \
+         adds its {standbys}, which clone from it. Until member 0 is ready the database answers \
+         nobody.\n"
     )
 }
 

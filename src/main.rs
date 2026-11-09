@@ -20,9 +20,11 @@ mod install;
 mod live;
 mod machine;
 mod migrate;
+mod offline;
 mod pack;
 mod plugin;
 mod plugin_release;
+mod probe;
 mod registry;
 mod release;
 mod rollback;
@@ -124,8 +126,12 @@ meridian -- bringing a Meridian deployment up
   meridian status            the release (revision, state, chart; Helm's words where it
                              is not deployed); each component and each plugin: its
                              image, readiness, restarts and why, each pod's memory
-                             (its working set) against its limit; and the book's
-                             health per account
+                             (its working set) against its limit; the database's
+                             members (primary or standby, ready, how far behind),
+                             its page checksums and full_page_writes, the WAL
+                             archiver, the replica comparison and internal TLS; each
+                             store member's mode, lag and last scrub with its
+                             findings; and the book's health per account
   meridian logs <component>  what a component printed: core's, a plugin's by its instance,
                              or a Job's (migrate, key, first-run, backup), its newest run;
                              --since 10m for the last ten minutes, --previous for what
@@ -150,6 +156,9 @@ meridian -- bringing a Meridian deployment up
                              public half, for backup.recipient
   meridian restore <file> --identity <file>
                              restore a backup into a namespace holding no deployment
+  meridian restore --to-time <RFC 3339>
+                             restore the running deployment's database from its WAL
+                             archive to that time, in place; shown, then asked
   meridian uninstall         revoke every delegation this holds, and remove it
   meridian --version         which release this is
 
@@ -351,6 +360,19 @@ what it will do and asks
                             as --reset-then-reuse-values merges them; repeatable,
                             each over the last. What they change is shown, by path
                             and never by value, before it asks
+      --set <key=value>     a chart value to change, as Helm reads one
+                            (resilience.profile=ha); repeatable, over every -f.
+                            An upgrade even at the version it is at. What it changes
+                            is shown by path; a value whose key names a secret is
+                            never echoed. A database moving under Patroni takes two
+                            upgrades, both run here under the one approval
+      --enable-checksums    turn page checksums on in the database the deployment
+                            brought, made before they were on: on its own, no chart
+                            moved. The downtime, from its size, said before it asks;
+                            a backup first, and nothing changed if it fails; every
+                            component and the database stopped, pg_checksums run on
+                            the stopped volume, everything started again and the
+                            setting read again
       --https               move a local deployment, at a name under .localhost, to
                             HTTPS: a certificate from this machine's authority, then
                             the upgrade setting its address to https://<name>. A
@@ -410,9 +432,19 @@ checked, before the chart is installed
       --chart <ref>         the chart to install (default: the published one)
       --chart-version <v>   which version (default: the one the backup was taken on,
                             from whatever --chart names). Never older than that one
-      --timeout <d>         how long to wait for each step (default: 15m)
+      --timeout <d>         how long to wait for each step (default: 15m; 30m with
+                            --to-time)
       --yes                 restore without being asked. For a script that has read
                             what it will do
+      --to-time <time>      in place of a file: the running deployment's database
+                            restored from its WAL archive (backup.walArchive) to a
+                            time, RFC 3339 with its offset (2026-11-08T14:03:07Z).
+                            Every component and the database stopped, the restore
+                            run, everything started again; under Patroni the
+                            standbys made again from it. A time outside the archive
+                            fails in the restore's own words and leaves everything
+                            stopped, the volume restorable: run it again with a time
+                            inside the archive
 
 connect:
   <address> is the dashboard's: https://<host>, or http://127.0.0.1:<port> for a
@@ -507,8 +539,10 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 36] = [
+const TAKES_A_VALUE: [&str; 38] = [
     "--to-revision",
+    "--set",
+    "--to-time",
     "--registry",
     "--tag",
     "--organisation",
@@ -549,8 +583,9 @@ const TAKES_A_VALUE: [&str; 36] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 19] = [
+const SWITCHES: [&str; 20] = [
     "--previous",
+    "--enable-checksums",
     "--details",
     "--hardware",
     "--no-doctor",
@@ -720,7 +755,12 @@ async fn main() {
         "backup" => std::process::exit(backup_command(&arguments, &intended.namespace).await),
         "status" => std::process::exit(status_command(&arguments, &intended.namespace).await),
         "logs" => std::process::exit(logs_command(&arguments, &intended.namespace).await),
-        "restore" => std::process::exit(restore_command(&arguments).await),
+        "restore" => match arguments.value("--to-time", "--to-time") {
+            Some(to) => {
+                std::process::exit(restore_to_time(&arguments, &intended.namespace, to).await)
+            }
+            None => std::process::exit(restore_command(&arguments).await),
+        },
         "--version" | "version" => println!("{}", release::version_line()),
         "-h" | "--help" | "help" | "" => print!("{USAGE}"),
         other => {
@@ -2531,6 +2571,7 @@ async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i
         https: arguments.set("--https"),
         authority: None,
         values: arguments.every("--values", "-f"),
+        sets: arguments.every("--set", "--set"),
     };
     // This machine's authority: made and trusted for --https, the certificate
     // step coming before the upgrade; otherwise only read, to renew a
@@ -2556,6 +2597,9 @@ async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i
             .map(std::sync::Arc::new)
     };
     let asked = asked;
+    if arguments.set("--enable-checksums") {
+        return enable_checksums(arguments, &asked, waited).await;
+    }
     // The steps as they go: a block redrawn in place on a terminal, and
     // lines anywhere else.
     let mut watch = watch::to_stdout(format!(
@@ -2603,6 +2647,178 @@ async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i
         }
         Err(refusal) => {
             eprintln!("\nmeridian upgrade-deployment: {refusal}");
+            1
+        }
+    }
+}
+
+/// `meridian upgrade-deployment --enable-checksums` (ruling 1058): the
+/// guided step that turns page checksums on in a database the chart brought
+/// before they were on. On its own: no chart moves with it.
+async fn enable_checksums(
+    arguments: &Arguments,
+    asked: &upgrade_deployment::Asked,
+    waited: std::time::Duration,
+) -> i32 {
+    use offline::checksums;
+    use upgrade_deployment::{run, watch};
+    if !asked.values.is_empty()
+        || !asked.sets.is_empty()
+        || asked.chart_version.is_some()
+        || asked.https
+    {
+        eprintln!(
+            "meridian upgrade-deployment: --enable-checksums is a step of its own; run an upgrade \
+             with -f, --set, --chart-version or --https separately, before or after it. Nothing \
+             was changed."
+        );
+        return 2;
+    }
+    let mut watch = watch::showing_on_stdout(
+        format!(
+            "Turning on page checksums in {} in {}",
+            asked.release, asked.namespace
+        ),
+        &watch::Step::OFFLINE,
+    );
+    let plan = match checksums::check(&machine::ThisMachine, asked, watch.as_mut()).await {
+        checksums::Checked::Refused => {
+            watch.finish();
+            return 1;
+        }
+        checksums::Checked::Nothing(said) => {
+            watch.finish();
+            println!("\n{said}");
+            return 0;
+        }
+        checksums::Checked::Enable(plan) => plan,
+    };
+    watch.begin(watch::Step::Confirmation);
+    watch.say(&format!("\n{}", checksums::plan_text(asked, &plan)));
+    let yes = arguments.set("--yes") || approved("Turn page checksums on?");
+    watch.end(watch::Step::Confirmation, yes);
+    if !yes {
+        watch.finish();
+        eprintln!("meridian upgrade-deployment: not approved, so nothing was changed. Where there is no terminal to ask at, --yes approves");
+        return 1;
+    }
+    let pace = run::Pace {
+        poll: std::time::Duration::from_secs(2),
+        timeout: waited,
+    };
+    let done = checksums::apply(
+        &machine::ThisMachine,
+        asked,
+        &plan,
+        &pace,
+        seconds_now(),
+        watch.as_mut(),
+    )
+    .await;
+    watch.finish();
+    match done {
+        Ok(report) => {
+            print!("{report}");
+            0
+        }
+        Err(refusal) => {
+            eprintln!("\nmeridian upgrade-deployment --enable-checksums: {refusal}");
+            1
+        }
+    }
+}
+
+/// `meridian restore --to-time <RFC 3339>` (step 3b): the brought database
+/// restored in place from its WAL archive to a point in time.
+async fn restore_to_time(arguments: &Arguments, namespace: &str, to: &str) -> i32 {
+    use offline::to_time;
+    use upgrade_deployment::{run, watch};
+    if !arguments.words.is_empty() || arguments.value("--identity", "--identity").is_some() {
+        eprintln!(
+            "meridian restore: --to-time restores the running deployment from its WAL archive, \
+             and takes no backup file; `meridian restore <file> --identity <file>` restores one \
+             into an empty namespace"
+        );
+        return 2;
+    }
+    let to = match to_time::moment(to) {
+        Ok(to) => to,
+        Err(refusal) => {
+            eprintln!("meridian restore: {refusal}");
+            return 2;
+        }
+    };
+    let timeout = arguments.value("--timeout", "--timeout").unwrap_or("30m");
+    let Some(waited) = upgrade_deployment::duration(timeout) else {
+        eprintln!(
+            "meridian restore: --timeout takes a duration as Helm writes one: 10m, 90s, 1h30m"
+        );
+        return 2;
+    };
+    let asked = upgrade_deployment::Asked {
+        release: arguments
+            .value("--release", "--release")
+            .unwrap_or("meridian")
+            .into(),
+        namespace: namespace.into(),
+        chart: String::new(),
+        chart_version: None,
+        timeout: timeout.into(),
+        https: false,
+        authority: None,
+        values: Vec::new(),
+        sets: Vec::new(),
+    };
+    let mut watch = watch::showing_on_stdout(
+        format!(
+            "Restoring {} in {} to {}",
+            asked.release, asked.namespace, to.said
+        ),
+        &watch::Step::OFFLINE,
+    );
+    let now = seconds_now();
+    let Ok(plan) = to_time::check(
+        &machine::ThisMachine,
+        &asked,
+        &to,
+        now as i64,
+        watch.as_mut(),
+    )
+    .await
+    else {
+        watch.finish();
+        return 1;
+    };
+    watch.begin(watch::Step::Confirmation);
+    watch.say(&format!("\n{}", to_time::plan_text(&asked, &plan)));
+    let yes = arguments.set("--yes") || approved("Restore it to that time?");
+    watch.end(watch::Step::Confirmation, yes);
+    if !yes {
+        watch.finish();
+        eprintln!("meridian restore: not approved, so nothing was changed. Where there is no terminal to ask at, --yes approves");
+        return 1;
+    }
+    let pace = run::Pace {
+        poll: std::time::Duration::from_secs(2),
+        timeout: waited,
+    };
+    let done = to_time::apply(
+        &machine::ThisMachine,
+        &asked,
+        &plan,
+        &pace,
+        seconds_now(),
+        watch.as_mut(),
+    )
+    .await;
+    watch.finish();
+    match done {
+        Ok(report) => {
+            print!("{report}");
+            0
+        }
+        Err(refusal) => {
+            eprintln!("\nmeridian restore --to-time: {refusal}");
             1
         }
     }

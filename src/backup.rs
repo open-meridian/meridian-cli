@@ -32,6 +32,8 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::doctor::Machine;
+
 /// Where `up` installs from, and so where restore does unless told.
 pub const PUBLISHED_CHART: &str = "oci://ghcr.io/open-meridian/charts/meridian-runtime";
 /// What every backup file's name ends with.
@@ -952,21 +954,38 @@ pub struct Take {
     pub timeout: Duration,
 }
 
-/// Run the deployment's backup once, now, and say what it wrote.
-pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
+/// A backup taken in the cluster: what it said, its Job, and the file it
+/// wrote.
+pub struct Taken {
+    pub said: String,
+    pub job: String,
+    pub written: Wrote,
+}
+
+/// `kubectl` through `machine`, its refusal as text.
+async fn asked_of(machine: &dyn Machine, arguments: &[&str]) -> Result<String, String> {
+    machine
+        .run("kubectl", arguments)
+        .await
+        .map_err(|failed| failed.to_string())
+}
+
+/// Run the deployment's backup once, now, in the cluster, through `machine`:
+/// what it said and wrote, or why not. What `meridian backup` takes, and
+/// what `upgrade-deployment --enable-checksums` takes first.
+pub async fn take_in_cluster(
+    machine: &dyn Machine,
+    asked: &Take,
+    unix_seconds: u64,
+) -> Result<Taken, String> {
     let ns = asked.namespace.as_str();
-    if let Some(to) = &asked.to {
-        if !to.is_dir() {
-            return Err(format!("{} is not a directory here", to.display()));
-        }
-    }
     let selector = format!(
         "app.kubernetes.io/instance={},meridian.dev/component=backup",
         asked.release
     );
     let found: serde_json::Value = serde_json::from_str(
-        &text(
-            "kubectl",
+        &asked_of(
+            machine,
             &["get", "cronjob", "-n", ns, "-l", &selector, "-o", "json"],
         )
         .await?,
@@ -987,8 +1006,8 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
     // launcher makes these claims as plugins launch, and the Job holds no
     // right to list them (ruling 828).
     let listed: serde_json::Value = serde_json::from_str(
-        &text(
-            "kubectl",
+        &asked_of(
+            machine,
             &[
                 "get",
                 "pvc",
@@ -1006,16 +1025,18 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
     .map_err(|failed| format!("kubectl's answer could not be read: {failed}"))?;
     let storage = storage_claims(&listed);
     let manifest = job_from(cronjob, &job, asked.to.is_some(), &storage)?;
-    run(
-        "kubectl",
-        &["create", "-n", ns, "-f", "-"],
-        Some(manifest.to_string().as_bytes()),
-    )
-    .await?;
+    machine
+        .run_with_input(
+            "kubectl",
+            &["create", "-n", ns, "-f", "-"],
+            &manifest.to_string(),
+        )
+        .await
+        .map_err(|failed| format!("the backup's Job could not be made: {failed}"))?;
 
     let job_name = job.as_str();
     let log = until("the backup", asked.timeout, move || async move {
-        let log = text("kubectl", &["logs", "-n", ns, &format!("job/{job_name}")])
+        let log = asked_of(machine, &["logs", "-n", ns, &format!("job/{job_name}")])
             .await
             .unwrap_or_default();
         if wrote(&log).is_some() {
@@ -1024,8 +1045,8 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
         // A pod that cannot be placed never says so in its log: a cluster
         // of several nodes where the plugins' claims are held on different
         // ones, say.
-        let pods = text(
-            "kubectl",
+        let pods = asked_of(
+            machine,
             &[
                 "get",
                 "pods",
@@ -1047,8 +1068,8 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
                  must be one node. Delete the Job with `kubectl delete job {job_name} -n {ns}`"
             )));
         }
-        let failed = text(
-            "kubectl",
+        let failed = asked_of(
+            machine,
             &[
                 "get",
                 "job",
@@ -1086,6 +1107,23 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
             }
         ),
     );
+    Ok(Taken { said, job, written })
+}
+
+/// Run the deployment's backup once, now, and say what it wrote; with `to`,
+/// copy the file out to this machine too.
+pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
+    let ns = asked.namespace.as_str();
+    if let Some(to) = &asked.to {
+        if !to.is_dir() {
+            return Err(format!("{} is not a directory here", to.display()));
+        }
+    }
+    let Taken {
+        mut said,
+        job,
+        written,
+    } = take_in_cluster(&crate::machine::ThisMachine, asked, unix_seconds).await?;
 
     if let Some(to) = &asked.to {
         let pod = text(
@@ -1200,6 +1238,39 @@ pub fn place(url: &str) -> Option<String> {
     let after = rest.rsplit_once('@').map_or(rest, |(_, after)| after);
     let place = after.split('?').next().unwrap_or_default();
     (!place.is_empty()).then(|| place.to_string())
+}
+
+/// The Secret an external database's private CA is in, where the backup's
+/// values name one (`database.caSecret`; ruled 2026-11-08).
+pub fn database_ca(values: &serde_yaml::Value) -> Option<String> {
+    values
+        .get("database")
+        .and_then(|database| database.get("caSecret"))
+        .and_then(|name| name.as_str())
+        .filter(|name| !name.is_empty())
+        .map(String::from)
+}
+
+/// Where the chart mounts that CA in the conductor's pod, whose volume the
+/// loading container mounts too.
+pub const DATABASE_CA_DIR: &str = "/etc/meridian-database-ca";
+
+/// The loading container's own settings, as `kubectl debug --custom` takes
+/// them, where the database's CA is a private one: libpq held to TLS, the
+/// server verified against that CA by the name in the URL (verify-full), as
+/// every pod of the chart's is.
+pub fn loader_custom(ca: Option<&str>) -> Option<serde_json::Value> {
+    ca.map(|_| {
+        serde_json::json!({
+            "env": [
+                { "name": "PGSSLMODE", "value": "verify-full" },
+                { "name": "PGSSLROOTCERT", "value": format!("{DATABASE_CA_DIR}/ca.crt") },
+            ],
+            "volumeMounts": [
+                { "name": "database-ca", "mountPath": DATABASE_CA_DIR, "readOnly": true },
+            ],
+        })
+    })
 }
 
 /// What restore does with the deployment's database, decided from the
@@ -1535,6 +1606,9 @@ pub fn unpulled(pods: &[crate::upgrade_deployment::Pod]) -> (bool, Vec<(String, 
 /// What restore will do, shown before it does any of it (gap 2).
 #[derive(Debug, Clone)]
 pub struct Plan {
+    /// The Secret an external database's private CA is in, where the
+    /// values name one: the dump loaded over TLS, verified against it.
+    pub database_ca: Option<String>,
     pub file: String,
     pub release: String,
     pub deployment_id: String,
@@ -1557,6 +1631,9 @@ pub struct Plan {
     /// The backup volume a deleted namespace left, which the release would
     /// make again: deleted once approved, its node directory kept.
     pub delete_volume: Option<String>,
+    /// The brought database's standbys, under Patroni: loaded at member 0
+    /// alone, and brought back once every count is checked.
+    pub standbys: u64,
 }
 
 pub fn plan_text(plan: &Plan) -> String {
@@ -1598,6 +1675,12 @@ pub fn plan_text(plan: &Plan) -> String {
         plan.release,
     ));
     out.push_str(&match &plan.database {
+        DatabasePlan::Brought { database } if plan.standbys > 0 => format!(
+            "then start the database the chart brings at its member 0 alone, make {database} and \
+             its roles, and load the dump, every table's count checked; then bring back its {} \
+             standbys, each cloned from member 0, before the components are given its URL.\n",
+            plan.standbys
+        ),
         DatabasePlan::Brought { database } => format!(
             "then start the database the chart brings, make {database} and its roles, and load the \
              dump, every table's count checked before the components are given its URL.\n"
@@ -1606,9 +1689,16 @@ pub fn plan_text(plan: &Plan) -> String {
             place, database, ..
         } => format!(
             "then load the dump into {place}, a database somebody else runs, which must be \
-             empty, as the migrating role, in backup.image, every table's count checked before \
-             the components are given its URL. The restored deployment writes to {database} \
-             there: stop anything else running against it first.\n"
+             empty, as the migrating role, in backup.image{tls}, every table's count checked \
+             before the components are given its URL. The restored deployment writes to \
+             {database} there: stop anything else running against it first.\n",
+            tls = plan
+                .database_ca
+                .as_ref()
+                .map(|name| format!(
+                    ", over TLS with the server verified against the CA in {name} (verify-full)"
+                ))
+                .unwrap_or_default()
         ),
         DatabasePlan::Reconnect { place } => format!(
             "the database is not in the backup: it is {place}, which somebody else runs, and the \
@@ -1755,6 +1845,24 @@ pub async fn restore(
     }
     let delete_volume = present.volume.clone().ok().flatten();
 
+    // An external database's private CA (database.caSecret): every pod that
+    // reaches the database mounts its Secret, so it must be there when the
+    // chart is installed. A backup made before backups held it does not.
+    let ca = database_ca(&values);
+    if let Some(name) = &ca {
+        let held =
+            manifest.chart_secrets.contains(name) || manifest.operator_secrets.contains(name);
+        if !held && !present.secrets.contains(name) {
+            return Err(format!(
+                "the backup's values name database.caSecret {name}, the Secret holding the \
+                 private CA of the database somebody else runs, and the backup does not hold it. \
+                 Make it in {ns} first, with that CA at its ca.crt (`kubectl create secret \
+                 generic {name} -n {ns} --from-file=ca.crt=<file>`), then restore again: \
+                 nothing was changed"
+            ));
+        }
+    }
+
     // Restore's own rights, where it loads a database somebody else runs:
     // a container of backup.image in the conductor's pod, which reaches the
     // database by the cluster's own path, and kubectl exec into it.
@@ -1822,7 +1930,18 @@ pub async fn restore(
     let mut given = chosen(&values, &defaults);
 
     let namespace_exists = text("kubectl", &["get", "namespace", ns]).await.is_ok();
+    // The brought database's standbys, as the backup's values give them.
+    let standbys = {
+        let to_json = |yaml: &serde_yaml::Value| {
+            serde_json::to_value(yaml).unwrap_or(serde_json::Value::Null)
+        };
+        crate::upgrade_deployment::standbys_in(&crate::upgrade_deployment::merged(
+            &to_json(&defaults),
+            &to_json(&values),
+        ))
+    };
     let plan = Plan {
+        database_ca: ca.clone(),
         file: asked.file.display().to_string(),
         release: release.clone(),
         deployment_id: manifest.deployment_id.clone(),
@@ -1840,6 +1959,7 @@ pub async fn restore(
         database: database.clone(),
         unchecked: present.volume.clone().err(),
         delete_volume,
+        standbys,
     };
     if !approve(&plan_text(&plan)) {
         return Err(
@@ -2035,7 +2155,16 @@ pub async fn restore(
             let migrating = login(&utf8(&db_secret, "migrate-url")?)?;
             let database = serving.database.clone();
 
-            // The database this chart brings: started, as first run starts it.
+            // The database this chart brings: started, as first run starts
+            // it, at one member. With standbys (under Patroni), member 0
+            // alone is loaded, its commits not waiting for a synchronous
+            // standby it does not have yet, and the standbys are brought
+            // back once every count is checked: each clones from it.
+            let local_commits: &[&str] = if standbys > 0 {
+                &["env", "PGOPTIONS=-csynchronous_commit=local"]
+            } else {
+                &[]
+            };
             let workload_name = format!("{full}-database");
             let pod_name = format!("{workload_name}-0");
             let (workload, pod) = (workload_name.as_str(), pod_name.as_str());
@@ -2080,10 +2209,9 @@ pub async fn restore(
                 },
             )
             .await?;
-            let psql = [
-                "exec", "-i", "-n", ns, pod, "--", "psql", "-X", "-q", "-U", "postgres", "-d",
-                "postgres",
-            ];
+            let mut psql = vec!["exec", "-i", "-n", ns, pod, "--"];
+            psql.extend_from_slice(local_commits);
+            psql.extend(["psql", "-X", "-q", "-U", "postgres", "-d", "postgres"]);
             run(
                 "kubectl",
                 &psql,
@@ -2114,29 +2242,22 @@ pub async fn restore(
             ));
 
             let dump = opened.member("database/database.dump")?;
-            run(
-                "kubectl",
-                &[
-                    "exec",
-                    "-i",
-                    "-n",
-                    ns,
-                    pod,
-                    "--",
-                    "pg_restore",
-                    "-U",
-                    "postgres",
-                    "-d",
-                    &database,
-                    "--exit-on-error",
-                    "--single-transaction",
-                ],
-                Some(dump),
-            )
-            .await
-            .map_err(|failed| {
-                format!("the dump did not restore: {failed}. The database's URL is withheld")
-            })?;
+            let mut pg_restore = vec!["exec", "-i", "-n", ns, pod, "--"];
+            pg_restore.extend_from_slice(local_commits);
+            pg_restore.extend([
+                "pg_restore",
+                "-U",
+                "postgres",
+                "-d",
+                &database,
+                "--exit-on-error",
+                "--single-transaction",
+            ]);
+            run("kubectl", &pg_restore, Some(dump))
+                .await
+                .map_err(|failed| {
+                    format!("the dump did not restore: {failed}. The database's URL is withheld")
+                })?;
             let restored = counts(
                 &text(
                     "kubectl",
@@ -2148,6 +2269,50 @@ pub async fn restore(
                 .await?,
             );
             checked(&database, restored, step, &mut report)?;
+            if standbys > 0 {
+                let members = format!("--replicas={}", standbys + 1);
+                text(
+                    "kubectl",
+                    &["scale", "statefulset", workload, "-n", ns, &members],
+                )
+                .await?;
+                let wanted = standbys + 1;
+                until(
+                    "the database's standbys to be ready",
+                    asked.timeout,
+                    move || async move {
+                        let listed = text(
+                            "kubectl",
+                            &[
+                                "get",
+                                "statefulset",
+                                workload,
+                                "-n",
+                                ns,
+                                "-o",
+                                "jsonpath={.status.readyReplicas}",
+                            ],
+                        )
+                        .await
+                        .ok()?;
+                        (listed.trim().parse::<u64>().ok()? >= wanted).then_some(())
+                    },
+                )
+                .await
+                .map_err(|failed| {
+                    format!(
+                        "{failed}. The database is restored and every count checked, on member 0; \
+                         its URL is withheld until its standbys are back, since every commit \
+                         waits for one"
+                    )
+                })?;
+                step(&format!(
+                    "Brought back the database's {standbys} standbys, each cloned from member 0"
+                ));
+                report.push_str(&format!(
+                    "  The database's {standbys} standbys, cloned from it once it was loaded.\n"
+                ));
+            }
         }
         DatabasePlan::Load {
             place,
@@ -2155,7 +2320,8 @@ pub async fn restore(
             image,
         } => {
             let migrating = utf8(&db_secret, "migrate-url").or_else(|_| utf8(&db_secret, "url"))?;
-            let (pod, container) = loader(&release, ns, image, asked.timeout).await?;
+            let (pod, container) =
+                loader(&release, ns, image, asked.timeout, ca.as_deref()).await?;
             step(&format!(
                 "Started {image} beside the conductor, to reach {place} as the conductor does"
             ));
@@ -2466,6 +2632,7 @@ async fn loader(
     ns: &str,
     image: &str,
     timeout: Duration,
+    ca: Option<&str>,
 ) -> Result<(String, String), String> {
     let selector_text =
         format!("app.kubernetes.io/instance={release},meridian.dev/component=conductor");
@@ -2513,22 +2680,40 @@ async fn loader(
     let before = ephemeral(pod.clone()).await;
     // Long enough for the load; the pod it is in is replaced at the end.
     let sleep = (timeout.as_secs() * 4 + 600).to_string();
-    text(
-        "kubectl",
-        &[
-            "debug",
-            &pod,
-            "-n",
-            ns,
-            &format!("--image={image}"),
-            "--profile=baseline",
-            "--",
-            "sleep",
-            &sleep,
-        ],
-    )
-    .await
-    .map_err(|failed| {
+    // Over TLS to a database whose CA is a private one: its settings in a
+    // file of this user's alone, removed once kubectl has read it.
+    let custom = match loader_custom(ca) {
+        Some(spec) => {
+            let path = std::env::temp_dir().join(format!(
+                "meridian-restore-loader-{}.json",
+                std::process::id()
+            ));
+            write_private(&path, spec.to_string().as_bytes())?;
+            Some(path)
+        }
+        None => None,
+    };
+    let image_flag = format!("--image={image}");
+    let custom_flag = custom
+        .as_ref()
+        .map(|path| format!("--custom={}", path.display()));
+    let mut debug = vec![
+        "debug",
+        pod.as_str(),
+        "-n",
+        ns,
+        image_flag.as_str(),
+        "--profile=baseline",
+    ];
+    if let Some(flag) = &custom_flag {
+        debug.push(flag);
+    }
+    debug.extend(["--", "sleep", sleep.as_str()]);
+    let added = text("kubectl", &debug).await;
+    if let Some(path) = &custom {
+        let _ = std::fs::remove_file(path);
+    }
+    added.map_err(|failed| {
         format!("a container of {image} could not be added beside the conductor: {failed}")
     })?;
     let after = ephemeral(pod.clone()).await;
@@ -2559,6 +2744,22 @@ async fn loader(
     })
     .await?;
     Ok((pod, container))
+}
+
+/// A file of this user's alone.
+fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .and_then(|mut file| file.write_all(bytes))
+        .map_err(|failed| format!("{} could not be written: {failed}", path.display()))
 }
 
 /// psql (`query`) or pg_restore in the loading container, against `url`,

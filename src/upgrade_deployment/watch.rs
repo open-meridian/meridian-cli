@@ -18,7 +18,9 @@ use tokio::time::Instant;
 use super::Progress;
 
 /// The steps of an upgrade, in the order they start. The migration and the
-/// components are waited for together.
+/// components are waited for together. The database's offline acts
+/// (`--enable-checksums`, `restore --to-time`) have steps of their own,
+/// shown in place of the upgrade's (`OFFLINE`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     Checks,
@@ -27,16 +29,50 @@ pub enum Step {
     Migration,
     Components,
     Cleanup,
+    Backup,
+    Stop,
+    Act,
+    Start,
+    Verify,
 }
 
+/// How many steps there are, every kind.
+const STEPS: usize = 11;
+
 impl Step {
-    pub const ALL: [Step; 6] = [
+    pub const ALL: [Step; STEPS] = [
         Step::Checks,
         Step::Confirmation,
         Step::Apply,
         Step::Migration,
         Step::Components,
         Step::Cleanup,
+        Step::Backup,
+        Step::Stop,
+        Step::Act,
+        Step::Start,
+        Step::Verify,
+    ];
+
+    /// An upgrade's, as its block shows them.
+    pub const UPGRADE: [Step; 6] = [
+        Step::Checks,
+        Step::Confirmation,
+        Step::Apply,
+        Step::Migration,
+        Step::Components,
+        Step::Cleanup,
+    ];
+
+    /// An act on the stopped database's, as its block shows them.
+    pub const OFFLINE: [Step; 7] = [
+        Step::Checks,
+        Step::Confirmation,
+        Step::Backup,
+        Step::Stop,
+        Step::Act,
+        Step::Start,
+        Step::Verify,
     ];
 
     pub fn name(self) -> &'static str {
@@ -47,6 +83,11 @@ impl Step {
             Step::Migration => "migration",
             Step::Components => "components",
             Step::Cleanup => "cleanup",
+            Step::Backup => "backup",
+            Step::Stop => "stop everything",
+            Step::Act => "the stopped database",
+            Step::Start => "start everything",
+            Step::Verify => "verify",
         }
     }
 }
@@ -136,7 +177,7 @@ pub fn render(board: &Board, frame: usize, colour: bool) -> Vec<String> {
             "  {sign} {name} {:>7}",
             took.map(|took| clock(*took)).unwrap_or_default()
         );
-        if let (Step::Components, Some((ready, of))) = (step, board.ready) {
+        if let (Step::Components | Step::Start, Some((ready, of))) = (step, board.ready) {
             let filled = (ready * BAR).checked_div(of).unwrap_or(0).min(BAR);
             line.push_str(&format!(
                 "  ready {ready} of {of}  {}{}",
@@ -155,21 +196,32 @@ pub fn render(board: &Board, frame: usize, colour: bool) -> Vec<String> {
 /// When each step began and how it ended, against one clock.
 struct Steps {
     started: Instant,
-    began: [Option<Instant>; 6],
-    ended: [Option<(Duration, bool)>; 6],
+    /// The steps the block shows, in order.
+    shown: &'static [Step],
+    began: [Option<Instant>; STEPS],
+    ended: [Option<(Duration, bool)>; STEPS],
     ready: Option<(usize, usize)>,
     now: Option<String>,
 }
 
 impl Steps {
-    fn new() -> Self {
+    fn new(shown: &'static [Step]) -> Self {
         Steps {
             started: Instant::now(),
-            began: [None; 6],
-            ended: [None; 6],
+            shown,
+            began: [None; STEPS],
+            ended: [None; STEPS],
             ready: None,
             now: None,
         }
+    }
+
+    /// Whether anything past the plan began: what a block is kept for.
+    fn changed(&self) -> bool {
+        self.shown
+            .iter()
+            .filter(|step| !matches!(step, Step::Checks | Step::Confirmation))
+            .any(|step| self.began[*step as usize].is_some())
     }
 
     fn running(&self, step: Step) -> bool {
@@ -209,11 +261,13 @@ impl Steps {
             (Some(began), None) => Mark::Running(at - began),
             (None, None) => Mark::Pending,
         };
-        let waiting = self.running(Step::Migration) || self.running(Step::Components);
+        let waiting = self.running(Step::Migration)
+            || self.running(Step::Components)
+            || self.running(Step::Start);
         Board {
             title: title.to_string(),
             elapsed: at - self.started,
-            steps: Step::ALL.iter().map(|&step| (step, mark(step))).collect(),
+            steps: self.shown.iter().map(|&step| (step, mark(step))).collect(),
             ready: self.ready,
             now: self.now.clone().filter(|_| waiting),
         }
@@ -266,11 +320,11 @@ impl Screen {
 }
 
 impl Terminal {
-    pub fn new(title: String, colour: bool) -> Self {
+    pub fn showing(title: String, colour: bool, shown: &'static [Step]) -> Self {
         let screen = Arc::new(Mutex::new(Screen {
             title,
             colour,
-            steps: Steps::new(),
+            steps: Steps::new(shown),
             frame: 0,
             drawn: 0,
         }));
@@ -328,7 +382,7 @@ impl Watch for Terminal {
         let mut screen = self.screen.lock().unwrap_or_else(PoisonError::into_inner);
         let mut out = std::io::stdout().lock();
         screen.steps.stop();
-        if screen.steps.began[Step::Apply as usize].is_some() {
+        if screen.steps.changed() {
             screen.draw(&mut out);
         } else {
             screen.erase(&mut out);
@@ -356,11 +410,16 @@ pub struct Log<F: FnMut(&str)> {
 }
 
 impl<F: FnMut(&str)> Log<F> {
+    #[cfg(test)]
     pub fn new(every: Duration, out: F) -> Self {
+        Log::showing(every, out, &Step::UPGRADE)
+    }
+
+    pub fn showing(every: Duration, out: F, shown: &'static [Step]) -> Self {
         Log {
             out,
             every,
-            steps: Steps::new(),
+            steps: Steps::new(shown),
             said: None,
         }
     }
@@ -427,10 +486,19 @@ pub const EVERY: Duration = Duration::from_secs(20);
 /// What watches an upgrade from this command: the block where stdout is a
 /// terminal that can draw one, and lines anywhere else.
 pub fn to_stdout(title: String) -> Box<dyn Watch> {
+    showing_on_stdout(title, &Step::UPGRADE)
+}
+
+/// The same, showing `shown`: an act on the stopped database's steps.
+pub fn showing_on_stdout(title: String, shown: &'static [Step]) -> Box<dyn Watch> {
     let dumb = std::env::var_os("TERM").is_some_and(|term| term == "dumb");
     if std::io::stdout().is_terminal() && !dumb {
-        Box::new(Terminal::new(title, colour(std::env::var_os("NO_COLOR"))))
+        Box::new(Terminal::showing(
+            title,
+            colour(std::env::var_os("NO_COLOR")),
+            shown,
+        ))
     } else {
-        Box::new(Log::new(EVERY, |line: &str| println!("{line}")))
+        Box::new(Log::showing(EVERY, |line: &str| println!("{line}"), shown))
     }
 }

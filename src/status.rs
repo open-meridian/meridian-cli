@@ -48,6 +48,9 @@
 
 use std::collections::BTreeMap;
 
+pub mod resilience;
+pub use resilience::Resilience;
+
 /// The cluster, as these commands read it.
 #[async_trait::async_trait]
 pub trait Cluster: Send + Sync {
@@ -55,6 +58,12 @@ pub trait Cluster: Send + Sync {
     async fn kubectl(&self, arguments: &[&str]) -> Result<String, String>;
     /// helm, read-only here: what it printed, or why it failed.
     async fn helm(&self, arguments: &[&str]) -> Result<String, String>;
+    /// kubectl, with what it printed on stdout even where it exited
+    /// non-zero: a member's probe prints its answer and exits 1 when a path
+    /// did not answer.
+    async fn kubectl_printed(&self, arguments: &[&str]) -> Result<String, String> {
+        self.kubectl(arguments).await
+    }
 }
 
 pub struct ThisCluster;
@@ -86,6 +95,19 @@ async fn ran(program: &str, arguments: &[&str]) -> Result<String, String> {
 impl Cluster for ThisCluster {
     async fn kubectl(&self, arguments: &[&str]) -> Result<String, String> {
         ran("kubectl", arguments).await
+    }
+    async fn kubectl_printed(&self, arguments: &[&str]) -> Result<String, String> {
+        let output = tokio::process::Command::new("kubectl")
+            .args(arguments)
+            .output()
+            .await
+            .map_err(|failed| format!("kubectl could not be run: {failed}"))?;
+        let printed = String::from_utf8_lossy(&output.stdout).into_owned();
+        if output.status.success() || !printed.trim().is_empty() {
+            Ok(printed)
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
     }
     async fn helm(&self, arguments: &[&str]) -> Result<String, String> {
         ran("helm", arguments).await
@@ -576,6 +598,8 @@ pub struct Status {
     /// the metrics API's figure; None where it is the nodes' own.
     pub memory_note: Option<String>,
     pub accounts: Result<Vec<Account>, String>,
+    /// The database, the members' probes and integrity at rest (step 3b).
+    pub resilience: Resilience,
 }
 
 pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, String> {
@@ -634,12 +658,14 @@ pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, Stri
             .ok_or_else(|| "Helm listed no revision of it".to_string()),
         Err(failed) => Err(failed),
     };
+    let resilience = resilience::read(cluster, asked, &workloads, &pods).await;
     Ok(Status {
         release,
         components,
         plugins,
         memory_read,
         memory_note,
+        resilience,
         // Read from the deployment by the caller (`book_health`), which
         // holds the session; the cluster has no part in it.
         accounts: Err("not read".into()),
@@ -814,6 +840,7 @@ pub fn said(status: &Status, now_ns: u64, namespace: &str) -> String {
     if let Some(why) = &status.memory_note {
         out.push_str(&format!("  ({why})\n"));
     }
+    out.push_str(&resilience::said(&status.resilience, now_ns, namespace));
     out.push_str("\nPlugins:\n");
     if status.plugins.is_empty() {
         out.push_str(
@@ -873,7 +900,7 @@ pub fn said(status: &Status, now_ns: u64, namespace: &str) -> String {
 }
 
 /// A span of nanoseconds, roughly, as a person says it.
-fn ago(ns: u64) -> String {
+pub(crate) fn ago(ns: u64) -> String {
     let seconds = ns / 1_000_000_000;
     match seconds {
         0..=119 => format!("{seconds}s"),
@@ -906,7 +933,7 @@ fn component_json(c: &Component) -> serde_json::Value {
 /// pod's limit; `pods` holds each pod's own; `memory_read` says where it was
 /// read (`cadvisor`, or `metrics-api` where the nodes' was refused).
 pub fn json_of(status: &Status) -> serde_json::Value {
-    serde_json::json!({
+    let mut said = serde_json::json!({
         "release": match &status.release {
             Ok(r) => serde_json::json!({
                 "release": r.name, "revision": r.revision, "status": r.status,
@@ -926,7 +953,16 @@ pub fn json_of(status: &Status) -> serde_json::Value {
             })).collect::<Vec<_>>()),
             Err(why) => serde_json::json!({ "not_read": why }),
         },
-    })
+    });
+    // Step 3b's, beside the rest: additive, so a reader of the older shape
+    // reads what it read.
+    if let (Some(all), serde_json::Value::Object(more)) = (
+        said.as_object_mut(),
+        resilience::json_of(&status.resilience),
+    ) {
+        all.extend(more);
+    }
+    said
 }
 
 /// `10m`, `1h`, `30s`, `2d`: a span kubectl's `--since` takes.

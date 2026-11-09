@@ -126,6 +126,7 @@ pub async fn examine(machine: &dyn Machine, intended: &Intended) -> Vec<Finding>
     findings.extend(checks::disk(machine).await);
     findings.push(checks::image(machine, &intended.image).await);
     findings.extend(checks::plugins(machine, &intended.namespace).await);
+    findings.extend(checks::database(machine, &intended.namespace).await);
     findings.extend(checks::platform(machine, &intended.platform).await);
     findings
 }
