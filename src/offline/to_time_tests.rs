@@ -177,7 +177,24 @@ async fn a_time_outside_the_archive_fails_in_its_own_words_and_everything_stays_
         refusal.contains("meridian restore --to-time <time> -n meridian"),
         "{refusal}"
     );
-    assert!(refusal.contains("name 2026-11-06T21:20:00Z"), "{refusal}");
+    // Past the archive's end, without Postgres's line naming its last commit:
+    // said where to find it, and no time given for it.
+    assert!(
+        refusal.contains(
+            "2026-11-08T10:00:00Z is past the archive's end: the latest time that can be \
+             restored lies before the archive's last commit, which Postgres's lines above give \
+             as \"last completed transaction\" where they include it. To bring meridian back, \
+             name a time inside the archive, before that commit: `meridian restore --to-time \
+             <time> -n meridian`."
+        ),
+        "{refusal}"
+    );
+    // The stop time is after the last commit: never offered as one to name.
+    assert!(!refusal.contains("when it stopped"), "{refusal}");
+    assert!(
+        !refusal.contains("every commit before the stop"),
+        "{refusal}"
+    );
     let now = sim.now();
     assert!(
         now.deployments.values().all(|n| *n == 0),
@@ -185,6 +202,107 @@ async fn a_time_outside_the_archive_fails_in_its_own_words_and_everything_stays_
         now.deployments
     );
     assert_eq!(now.database, 0);
+}
+
+/// The act failed as the chart's script fails it (step 3b part 7, as the r3
+/// rehearsal saw it): Postgres's lines, then FAILED.
+async fn refusal_of(act_log: Option<&str>, why: &str) -> String {
+    let sim = Sim::new(State {
+        archive: true,
+        act_log: act_log.map(String::from),
+        act_fails: Some(why.into()),
+        ..State::default()
+    });
+    let (checked, _) = check_of(&sim).await;
+    let plan = checked.unwrap();
+    let refusal = apply(
+        &sim,
+        &asked(),
+        &plan,
+        &pace(),
+        1_794_000_000,
+        &mut |_: &str| {},
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(sim.now().database, 0);
+    refusal
+}
+
+#[tokio::test]
+async fn past_the_archive_the_last_commit_postgres_names_is_the_time_to_stay_before() {
+    let refusal = refusal_of(
+        Some(
+            "database-offline: Postgres's log, its last lines:\n\
+             database-offline: | 2026-11-09 14:10:02.948 UTC [28] LOG:  restored log file \
+             \"00000009000000000000001A\" from archive\n\
+             database-offline: | 2026-11-09 14:10:02.968 UTC [28] LOG:  last completed \
+             transaction was at log time 2026-11-09 14:09:42.485861+00\n\
+             database-offline: | 2026-11-09 14:10:02.968 UTC [28] FATAL:  recovery ended \
+             before configured recovery target was reached\n",
+        ),
+        "2026-11-08 10:00:00+00 is outside the archive: recovery ended before configured \
+         recovery target was reached",
+    )
+    .await;
+    assert!(
+        refusal.contains(
+            "database-offline: | 2026-11-09 14:10:02.968 UTC [28] LOG:  last completed \
+             transaction was at log time 2026-11-09 14:09:42.485861+00"
+        ),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains(
+            "2026-11-08T10:00:00Z is past the archive's end: the latest time that can be \
+             restored lies before the archive's last commit, which Postgres's lines above give \
+             as \"last completed transaction\" where they include it: \
+             2026-11-09T14:09:42.485861Z. To bring meridian back, name a time inside the \
+             archive, before that commit: `meridian restore --to-time <time> -n meridian`."
+        ),
+        "{refusal}"
+    );
+    assert!(!refusal.contains("when it stopped"), "{refusal}");
+}
+
+#[tokio::test]
+async fn before_the_oldest_base_backup_it_asks_for_a_time_inside_the_archive() {
+    let refusal = refusal_of(
+        None,
+        "2026-11-08 10:00:00+00 is outside the archive: it is before its oldest base backup \
+         ended",
+    )
+    .await;
+    assert!(
+        refusal.contains(
+            "Name a time inside the archive, after its oldest base backup ended and before its \
+             last commit: `meridian restore --to-time <time> -n meridian`."
+        ),
+        "{refusal}"
+    );
+    assert!(!refusal.contains("past the archive's end"), "{refusal}");
+    assert!(!refusal.contains("when it stopped"), "{refusal}");
+}
+
+#[test]
+fn postgres_times_are_said_as_to_time_takes_them() {
+    assert_eq!(
+        said_in_utc("2026-11-09 14:09:42.485861+00"),
+        "2026-11-09T14:09:42.485861Z"
+    );
+    assert_eq!(
+        said_in_utc("2026-11-09 09:09:42.5-05"),
+        "2026-11-09T14:09:42.5Z"
+    );
+    assert_eq!(
+        said_in_utc("2026-11-09 19:39:42+05:30"),
+        "2026-11-09T14:09:42Z"
+    );
+    // A form it does not read is said as Postgres wrote it.
+    assert_eq!(
+        said_in_utc("2026-11-09 14:09:42 UTC"),
+        "2026-11-09 14:09:42 UTC"
+    );
 }
 
 #[tokio::test]
