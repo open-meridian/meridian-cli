@@ -14,8 +14,7 @@
 
 use super::{
     act_running, clear_stopped, database, members_now, record_stop, run_act, standbys_to_remake,
-    start, started_components, stop_database, stop_these, suspend_cronjobs, utc, Act, Release,
-    Stopped,
+    start, started_components, stop_database, stop_these, suspend_cronjobs, Act, Release, Stopped,
 };
 use crate::doctor::{Finding, Machine};
 use crate::upgrade_deployment::run::Pace;
@@ -140,6 +139,21 @@ pub fn moment(given: &str) -> Result<Moment, String> {
         for_the_act: format!("{day_and_time} {hms}+00"),
         said: format!("{day_and_time}T{hms}Z"),
     })
+}
+
+/// A time as Postgres's log writes it (`2026-11-09 14:09:42.485861+00`), as
+/// `--to-time` takes it, in UTC (`2026-11-09T14:09:42.485861Z`); as written
+/// where it is in no form `moment` reads.
+fn said_in_utc(postgres: &str) -> String {
+    let mut given = postgres.trim().to_string();
+    // Postgres writes a whole-hour offset as `+00`; RFC 3339 wants `+00:00`.
+    let zone = given.rfind(['+', '-']).filter(|at| *at >= 19);
+    if let Some(at) = zone {
+        if given.len() - at == 3 {
+            given.push_str(":00");
+        }
+    }
+    moment(&given).map_or_else(|_| postgres.trim().to_string(), |at| at.said)
 }
 
 /// What would be done, once every check has passed.
@@ -355,8 +369,10 @@ async fn checks_made(
             why: "the conductor's probe did not say it".into(),
         }),
     }
+    // Before now is not inside the archive: the latest time it restores to
+    // lies before its last commit, which only the replay finds.
     findings.push(Finding::Fine(format!(
-        "{} is before now: the archive is replayed to it",
+        "{} is before now; whether the archive reaches it, the restore itself says",
         to.said
     )));
     for finding in &findings {
@@ -550,9 +566,6 @@ pub async fn apply(
             }
         ));
     }
-    // Once nothing writes: every commit before it is archived.
-    let stopped_at = utc(machine.now_s());
-
     watch.begin(Step::Act);
     let restored = run_act(
         machine,
@@ -566,10 +579,28 @@ pub async fn apply(
     .await;
     watch.end(Step::Act, restored.is_ok());
     let log = restored.map_err(|failed| {
-        let again = if failed.outside_the_archive() {
+        let again = if failed.past_the_archive() {
+            // The archive replayed to its end: the time named is at or after
+            // its last commit, which a restore to a time never reaches (it
+            // stops before the first commit after the time named), so the
+            // moment the deployment stopped is past it too.
             format!(
-                "Name a time inside the archive, from its oldest base backup to its last archived \
-                 segment: `meridian restore --to-time <time> {scope}`."
+                "{to} is past the archive's end: the latest time that can be restored lies \
+                 before the archive's last commit, which Postgres's lines above give as \
+                 \"last completed transaction\" where they include it{commit}. To bring {release} \
+                 back, name a time inside the archive, before that commit: `meridian restore \
+                 --to-time <time> {scope}`.",
+                to = plan.to.said,
+                commit = failed
+                    .last_completed_transaction()
+                    .map(|at| format!(": {}", said_in_utc(at)))
+                    .unwrap_or_default(),
+                release = asked.release,
+            )
+        } else if failed.outside_the_archive() {
+            format!(
+                "Name a time inside the archive, after its oldest base backup ended and before \
+                 its last commit: `meridian restore --to-time <time> {scope}`."
             )
         } else if !failed.ended {
             format!(
@@ -585,8 +616,7 @@ pub async fn apply(
         format!(
             "{failed}\nEverything stays stopped, and the release's CronJobs suspended: the \
              database's volume holds a restore that did not finish, and stays restorable. \
-             {again} To return it to where it was when it stopped, name {stopped_at}: every \
-             commit before the stop was archived."
+             {again}"
         )
     })?;
 

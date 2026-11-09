@@ -896,6 +896,8 @@ pub struct ActFailed {
     /// What a person reads: which Job, how it ended, and the cause as its
     /// log gives it.
     pub said: String,
+    /// The cause as its log gives it, the lines `said` shows (`cause_lines`).
+    pub cause: Vec<String>,
 }
 
 impl std::fmt::Display for ActFailed {
@@ -905,15 +907,36 @@ impl std::fmt::Display for ActFailed {
 }
 
 impl ActFailed {
-    /// Whether the act said the time named is outside the WAL archive: past
-    /// its last archived segment, or before its oldest base backup. The
+    /// Whether the act said the time named is outside the WAL archive: at or
+    /// past its last commit, or before its oldest base backup ended. The
     /// chart's script says "is outside the archive" from step 3b part 7;
     /// before it, Postgres's own words for those two.
     pub fn outside_the_archive(&self) -> bool {
         self.why.as_deref().is_some_and(|why| {
             why.contains("is outside the archive")
-                || why.contains("recovery ended before configured recovery target was reached")
+                || self.past_the_archive()
                 || why.contains("requested recovery stop point is before consistent recovery point")
+        })
+    }
+
+    /// Whether the archive was replayed to its end without reaching the time
+    /// named: Postgres's words when the time is at or after the archive's
+    /// last commit.
+    pub fn past_the_archive(&self) -> bool {
+        self.why.as_deref().is_some_and(|why| {
+            why.contains("recovery ended before configured recovery target was reached")
+        })
+    }
+
+    /// The archive's last commit, where Postgres's lines shown include it:
+    /// `last completed transaction was at log time <time>`, as Postgres
+    /// wrote the time.
+    pub fn last_completed_transaction(&self) -> Option<&str> {
+        const SAID: &str = "last completed transaction was at log time ";
+        self.cause.iter().rev().find_map(|line| {
+            line.split_once(SAID)
+                .map(|(_, at)| at.trim())
+                .filter(|at| !at.is_empty())
         })
     }
 }
@@ -961,6 +984,7 @@ pub async fn run_act(
         why: None,
         ended: true,
         said: failed,
+        cause: Vec::new(),
     })?;
     machine
         .run_with_input(
@@ -973,13 +997,13 @@ pub async fn run_act(
             why: None,
             ended: true,
             said: format!("the {} Job could not be made: {failed}", act.name()),
+            cause: Vec::new(),
         })?;
     watch.say(&format!("  job/{name}: {}", act.name()));
     let deadline = Instant::now() + pace.timeout;
     let mut said = 0;
     let logs = format!("meridian logs database-offline {}", release.scope());
-    let cause = |log: &str| {
-        let lines = cause_lines(log);
+    let cause = |lines: &[String]| {
         if lines.is_empty() {
             "    (it has printed nothing yet)".to_string()
         } else {
@@ -1028,18 +1052,21 @@ pub async fn run_act(
                         .trim_start_matches("FAILED: ")
                         .to_string()
                 });
+            let lines = cause_lines(&log);
             return Err(ActFailed {
                 said: format!(
                     "the {} Job, job/{name}, failed: {}\nWhat its log says (`{logs}`):\n{}",
                     act.name(),
                     why.as_deref().unwrap_or("it said nothing of why"),
-                    cause(&log)
+                    cause(&lines)
                 ),
                 why,
                 ended: true,
+                cause: lines,
             });
         }
         if Instant::now() >= deadline {
+            let lines = cause_lines(&log);
             return Err(ActFailed {
                 why: None,
                 ended: false,
@@ -1048,8 +1075,9 @@ pub async fn run_act(
                      What its log says last (`{logs}`):\n{}",
                     act.name(),
                     pace.timeout.as_secs(),
-                    cause(&log)
+                    cause(&lines)
                 ),
+                cause: lines,
             });
         }
         tokio::time::sleep(pace.poll).await;
