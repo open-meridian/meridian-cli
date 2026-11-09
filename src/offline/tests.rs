@@ -39,6 +39,16 @@ pub struct State {
     pub restored_to: Option<String>,
     /// What a restore recorded it stopped, on the database's StatefulSet.
     pub stopped_record: Option<String>,
+    /// The release's CronJobs, by name, with whether each is suspended.
+    pub cronjobs: BTreeMap<String, bool>,
+    /// The act's Job runs on and never ends.
+    pub act_hangs: bool,
+    /// Lines the act prints before its FAILED line: Postgres's log.
+    pub act_log: Option<String>,
+    /// CronJob patches refused, by name.
+    pub patch_refused: BTreeSet<String>,
+    /// The chart brings the database; false, somebody else runs it.
+    pub brought: bool,
 }
 
 impl Default for State {
@@ -68,6 +78,15 @@ impl Default for State {
             jobs: BTreeMap::new(),
             restored_to: None,
             stopped_record: None,
+            cronjobs: [
+                ("meridian-meridian-runtime-backup".to_string(), false),
+                (format!("{SET}-offline"), true),
+            ]
+            .into(),
+            act_hangs: false,
+            act_log: None,
+            patch_refused: BTreeSet::new(),
+            brought: true,
         }
     }
 }
@@ -83,6 +102,7 @@ impl State {
             .iter()
             .map(|kind| format!("{SET}-{kind}"))
             .collect();
+        self.cronjobs.insert(format!("{SET}-replicas"), false);
         self
     }
 }
@@ -114,6 +134,8 @@ impl Sim {
         self.asked().iter().any(|c| {
             c.starts_with("kubectl scale")
                 || c.starts_with("kubectl delete")
+                || c.starts_with("kubectl patch")
+                || c.starts_with("kubectl annotate")
                 || c.contains("patronictl")
                 || c.contains("pg_switch_wal")
                 || (c.starts_with("kubectl create") && !c.contains("backup"))
@@ -180,7 +202,7 @@ impl Sim {
                 })
             })
             .collect();
-        if sets {
+        if sets && state.brought {
             let mut containers =
                 vec![json!({ "name": "postgres", "image": "meridian-postgres:1" })];
             if state.archive {
@@ -314,6 +336,47 @@ impl Machine for Sim {
                 json!({ "items": [] }).to_string()
             });
         }
+        if command == format!("kubectl get cronjobs -n {NS} -l {sel} -o json") {
+            let items: Vec<Value> = state
+                .cronjobs
+                .iter()
+                .map(|(name, suspended)| {
+                    let component = if name.ends_with("-offline") {
+                        "database-offline"
+                    } else {
+                        "backup"
+                    };
+                    json!({ "metadata": { "name": name,
+                                          "labels": { "meridian.dev/component": component } },
+                            "spec": { "suspend": suspended } })
+                })
+                .collect();
+            return said(json!({ "items": items }).to_string());
+        }
+        if let Some(rest) = command.strip_prefix("kubectl patch cronjob ") {
+            let name = rest.split_whitespace().next().unwrap().to_string();
+            if state.patch_refused.contains(&name) {
+                return refused("Error from server (Forbidden): cronjobs.batch is forbidden");
+            }
+            let Some(suspended) = state.cronjobs.get_mut(&name) else {
+                return refused("Error from server (NotFound): cronjobs.batch not found");
+            };
+            *suspended = rest.contains("\"suspend\":true");
+            return said("patched".into());
+        }
+        if command == format!("kubectl get jobs -n {NS} -l {sel},meridian.dev/database-act -o json")
+        {
+            let items: Vec<Value> = state
+                .jobs
+                .iter()
+                .filter(|(_, act)| act.is_some())
+                .map(|(name, _)| {
+                    json!({ "metadata": { "name": name },
+                            "status": { "active": if state.act_hangs { 1 } else { 0 } } })
+                })
+                .collect();
+            return said(json!({ "items": items }).to_string());
+        }
         if command.starts_with("kubectl get pvc") {
             return said(json!({ "items": [] }).to_string());
         }
@@ -332,6 +395,12 @@ impl Machine for Sim {
                 ),
                 Some(Some(act)) => {
                     let mut log = format!("database-offline: the act {act}\n");
+                    if let Some(lines) = &state.act_log {
+                        log.push_str(lines);
+                    }
+                    if state.act_hangs {
+                        return said(log);
+                    }
                     match &state.act_fails {
                         Some(why) => log.push_str(&format!("database-offline: FAILED: {why}\n")),
                         None => log.push_str("database-offline: done in 3s\n"),
@@ -353,6 +422,7 @@ impl Machine for Sim {
             .and_then(|rest| rest.strip_suffix(&format!(" -n {NS} -o json")))
         {
             let condition = match state.jobs.get(job).cloned() {
+                Some(Some(_)) if state.act_hangs => "Running",
                 Some(Some(act)) if state.act_fails.is_none() => {
                     if act == "enable-checksums" {
                         state.checksums = true;

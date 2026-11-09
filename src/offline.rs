@@ -330,11 +330,24 @@ pub async fn cronjob(
 }
 
 /// What was running before the stop, to start again as it was: each of the
-/// release's Deployments with its count, and the database's.
+/// release's Deployments with its count, and the database's; each of its
+/// CronJobs with whether it was suspended already; the act it was stopped
+/// for, and since when.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Stopped {
     pub deployments: Vec<(String, u64)>,
     pub database: u64,
+    /// Each of the release's CronJobs but the offline one, by name, with
+    /// its `suspend` before the stop. Those not suspended then are while it
+    /// is stopped, and are given back `suspend: false` when it starts again;
+    /// those suspended already are never touched.
+    pub cronjobs: Vec<(String, bool)>,
+    /// The act, as its Job names it (`restore-to-time`, `enable-checksums`).
+    /// None in a record written before it was kept, which only a restore
+    /// to a time wrote.
+    pub act: Option<String>,
+    /// When it was recorded, just before anything stopped: RFC 3339, UTC.
+    pub since: Option<String>,
 }
 
 /// Wait, by `pace`, until `done` says so, saying `what` if it never does.
@@ -356,20 +369,6 @@ where
         }
         tokio::time::sleep(pace.poll).await;
     }
-}
-
-/// Every component stopped: each of the release's Deployments, launched
-/// plugins among them, scaled to none and its pods gone. The broker and the
-/// registry keep running: neither holds the database.
-pub async fn stop_components(
-    machine: &dyn Machine,
-    release: &Release,
-    pace: &Pace,
-    watch: &mut dyn Watch,
-) -> Result<Vec<(String, u64)>, String> {
-    let running = running_deployments(machine, release).await?;
-    stop_these(machine, release, &running, pace, watch).await?;
-    Ok(running)
 }
 
 /// Each of the release's Deployments running, with its count.
@@ -405,7 +404,9 @@ pub async fn running_deployments(
     Ok(running)
 }
 
-/// Those Deployments scaled to none, and their pods gone.
+/// Those Deployments scaled to none, launched plugins among them, and their
+/// pods gone. The broker and the registry keep running: neither holds the
+/// database.
 pub async fn stop_these(
     machine: &dyn Machine,
     release: &Release,
@@ -448,12 +449,22 @@ pub async fn stop_these(
 pub const STOPPED: &str = "meridian.dev/stopped-for-restore";
 
 impl Stopped {
+    /// The annotation's value. `cronjobs`, `act` and `since` were added to
+    /// `database` and `deployments` (step 3b, rehearsal 2); a reader of the
+    /// older record reads it as it did.
     pub fn to_json(&self) -> String {
-        serde_json::json!({
+        let mut said = serde_json::json!({
             "database": self.database,
             "deployments": self.deployments,
-        })
-        .to_string()
+            "cronjobs": self.cronjobs,
+        });
+        if let Some(act) = &self.act {
+            said["act"] = act.clone().into();
+        }
+        if let Some(since) = &self.since {
+            said["since"] = since.clone().into();
+        }
+        said.to_string()
     }
 
     pub fn from_json(said: &str) -> Option<Stopped> {
@@ -465,8 +476,266 @@ impl Stopped {
                 .iter()
                 .filter_map(|each| Some((each[0].as_str()?.to_string(), each[1].as_u64()?)))
                 .collect(),
+            cronjobs: said["cronjobs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|each| Some((each[0].as_str()?.to_string(), each[1].as_bool()?)))
+                .collect(),
+            act: said["act"].as_str().map(String::from),
+            since: said["since"].as_str().map(String::from),
         })
     }
+
+    /// The act it was stopped for, a record without one being a restore's.
+    pub fn act_name(&self) -> &str {
+        self.act.as_deref().unwrap_or("restore-to-time")
+    }
+
+    /// The command that stopped it, as a person runs it.
+    pub fn command(&self) -> &'static str {
+        match self.act_name() {
+            "enable-checksums" => "meridian upgrade-deployment --enable-checksums",
+            _ => "meridian restore --to-time",
+        }
+    }
+
+    /// The command that takes it from where it stopped, with `scope`
+    /// (`-n <namespace>`, and `--release` where it is not the default).
+    pub fn resumed_by(&self, scope: &str) -> String {
+        match self.act_name() {
+            "enable-checksums" => format!("meridian upgrade-deployment --enable-checksums {scope}"),
+            _ => format!("meridian restore --to-time <time> {scope}"),
+        }
+    }
+}
+
+/// The record on a StatefulSet as `kubectl get -o json` lists it, where it
+/// holds one.
+pub fn stopped_on(set: &serde_json::Value) -> Option<Stopped> {
+    Stopped::from_json(set["metadata"]["annotations"][STOPPED].as_str()?)
+}
+
+/// Seconds since the epoch as RFC 3339, in UTC, to the second.
+pub fn utc(unix_seconds: u64) -> String {
+    time::OffsetDateTime::from_unix_timestamp(unix_seconds as i64)
+        .map(|at| {
+            format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+                at.year(),
+                u8::from(at.month()),
+                at.day(),
+                at.hour(),
+                at.minute(),
+                at.second()
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// The release's CronJobs, the offline one aside (it is suspended always,
+/// and the act is made from it), each with whether it is suspended now: the
+/// replica comparison, the scheduled backup, the scrub, and any other the
+/// chart draws.
+pub async fn cronjobs_now(
+    machine: &dyn Machine,
+    release: &Release,
+    set: &str,
+) -> Result<Vec<(String, bool)>, String> {
+    let offline = format!("{set}-offline");
+    let listed = json(
+        machine,
+        &[
+            "get",
+            "cronjobs",
+            "-n",
+            &release.namespace,
+            "-l",
+            &release.selector(),
+            "-o",
+            "json",
+        ],
+    )
+    .await
+    .map_err(|failed| format!("the release's CronJobs could not be read: {failed}"))?;
+    let mut found: Vec<(String, bool)> = listed["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|cronjob| {
+            cronjob["metadata"]["labels"]["meridian.dev/component"] != "database-offline"
+        })
+        .filter_map(|cronjob| {
+            let name = cronjob["metadata"]["name"].as_str()?;
+            (name != offline).then(|| {
+                (
+                    name.to_string(),
+                    cronjob["spec"]["suspend"].as_bool().unwrap_or(false),
+                )
+            })
+        })
+        .collect();
+    found.sort();
+    Ok(found)
+}
+
+/// One CronJob's `suspend` set.
+async fn suspend(
+    machine: &dyn Machine,
+    release: &Release,
+    name: &str,
+    suspended: bool,
+) -> Result<(), String> {
+    let patch = format!("{{\"spec\":{{\"suspend\":{suspended}}}}}");
+    kubectl(
+        machine,
+        &[
+            "patch",
+            "cronjob",
+            name,
+            "-n",
+            &release.namespace,
+            "--type=merge",
+            "-p",
+            &patch,
+        ],
+    )
+    .await
+    .map(|_| ())
+}
+
+/// The CronJobs not suspended before the stop, suspended while it lasts: a
+/// replica comparison, a backup or a scrub would otherwise fire against a
+/// database that is not there, or, a backup, against one half restored.
+pub async fn suspend_cronjobs(
+    machine: &dyn Machine,
+    release: &Release,
+    stopped: &Stopped,
+    watch: &mut dyn Watch,
+) -> Result<(), String> {
+    let running: Vec<&str> = stopped
+        .cronjobs
+        .iter()
+        .filter(|(_, suspended)| !suspended)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    for name in &running {
+        suspend(machine, release, name, true)
+            .await
+            .map_err(|failed| format!("the CronJob {name} could not be suspended: {failed}"))?;
+    }
+    if !running.is_empty() {
+        watch.say(&format!(
+            "  suspended {} CronJob(s) while it is stopped: {}",
+            running.len(),
+            running.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// Those CronJobs given back `suspend: false`, as they were before the stop;
+/// those suspended already are left as they are. A CronJob no longer there
+/// is passed over.
+///
+/// A helm upgrade between the stop and this is not expected: nothing in the
+/// CLI runs one, and `upgrade-deployment` finds the database stopped. If one
+/// runs, Helm sets `suspend` on a CronJob whose template sets it (the
+/// backup's, from its schedule), so that one may fire while everything is
+/// stopped; and this then gives back what was recorded before the stop,
+/// which can undo a schedule that upgrade changed. Running `meridian
+/// upgrade-deployment` again once everything is started sets the chart's.
+pub async fn resume_cronjobs(
+    machine: &dyn Machine,
+    release: &Release,
+    stopped: &Stopped,
+    watch: &mut dyn Watch,
+) -> Result<(), String> {
+    let mut resumed = Vec::new();
+    for (name, _) in stopped.cronjobs.iter().filter(|(_, suspended)| !suspended) {
+        match suspend(machine, release, name, false).await {
+            Ok(()) => resumed.push(name.as_str()),
+            Err(failed) if failed.contains("NotFound") || failed.contains("not found") => {}
+            Err(failed) => {
+                return Err(format!(
+                    "the CronJob {name} could not be given back its schedule ({failed}): it \
+                     stays suspended"
+                ))
+            }
+        }
+    }
+    if !resumed.is_empty() {
+        watch.say(&format!(
+            "  resumed {} CronJob(s): {}",
+            resumed.len(),
+            resumed.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// What an act stops, recorded before anything is: each running Deployment
+/// with its count, the database's, and each CronJob's `suspend`. Where an
+/// earlier act recorded a stop it did not finish while the database still
+/// ran, its counts and CronJobs stand over what runs now, which it had
+/// stopped or suspended itself; anything running now that it did not record
+/// is added.
+pub async fn record_stop(
+    machine: &dyn Machine,
+    release: &Release,
+    set: &DatabaseSet,
+    act: &Act,
+    earlier: Option<&Stopped>,
+) -> Result<Stopped, String> {
+    let mut deployments = earlier.map(|e| e.deployments.clone()).unwrap_or_default();
+    for (name, count) in running_deployments(machine, release).await? {
+        if !deployments.iter().any(|(had, _)| *had == name) {
+            deployments.push((name, count));
+        }
+    }
+    let mut cronjobs = earlier.map(|e| e.cronjobs.clone()).unwrap_or_default();
+    for (name, suspended) in cronjobs_now(machine, release, &set.name).await? {
+        if !cronjobs.iter().any(|(had, _)| *had == name) {
+            cronjobs.push((name, suspended));
+        }
+    }
+    let stopped = Stopped {
+        deployments,
+        database: earlier
+            .map(|e| e.database)
+            .filter(|n| *n > 0)
+            .unwrap_or(set.replicas),
+        cronjobs,
+        act: Some(act.name().to_string()),
+        since: Some(utc(machine.now_s())),
+    };
+    record_stopped(machine, release, &set.name, &stopped).await?;
+    Ok(stopped)
+}
+
+/// A Job made from the offline CronJob that is still running, by name.
+pub async fn act_running(machine: &dyn Machine, release: &Release) -> Option<String> {
+    let listed = json(
+        machine,
+        &[
+            "get",
+            "jobs",
+            "-n",
+            &release.namespace,
+            "-l",
+            &format!("{},meridian.dev/database-act", release.selector()),
+            "-o",
+            "json",
+        ],
+    )
+    .await
+    .ok()?;
+    listed["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|job| job["status"]["active"].as_u64().unwrap_or(0) > 0)
+        .and_then(|job| job["metadata"]["name"].as_str().map(String::from))
 }
 
 /// What a restore stopped, kept on the database's StatefulSet before
@@ -616,8 +885,64 @@ pub async fn stop_database(
     Ok(())
 }
 
+/// An act that did not end well: the Job failed, with the act's own words,
+/// or had not finished by the time allowed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActFailed {
+    /// The act's FAILED line, where the Job failed with one.
+    pub why: Option<String>,
+    /// Whether the Job ended (failed) or is left running.
+    pub ended: bool,
+    /// What a person reads: which Job, how it ended, and the cause as its
+    /// log gives it.
+    pub said: String,
+}
+
+impl std::fmt::Display for ActFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.said)
+    }
+}
+
+impl ActFailed {
+    /// Whether the act said the time named is outside the WAL archive: past
+    /// its last archived segment, or before its oldest base backup. The
+    /// chart's script says "is outside the archive" from step 3b part 7;
+    /// before it, Postgres's own words for those two.
+    pub fn outside_the_archive(&self) -> bool {
+        self.why.as_deref().is_some_and(|why| {
+            why.contains("is outside the archive")
+                || why.contains("recovery ended before configured recovery target was reached")
+                || why.contains("requested recovery stop point is before consistent recovery point")
+        })
+    }
+}
+
+/// The lines of the act's log that say the cause: Postgres's own log, as the
+/// script prints it before it fails (`database-offline: | `, step 3b part
+/// 7); where it printed none, the log's last lines.
+pub fn cause_lines(log: &str) -> Vec<String> {
+    let postgres: Vec<String> = log
+        .lines()
+        .filter(|line| line.starts_with("database-offline: | "))
+        .map(|line| line.trim_end().to_string())
+        .collect();
+    if !postgres.is_empty() {
+        return postgres;
+    }
+    let lines: Vec<&str> = log
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.contains("FAILED"))
+        .collect();
+    lines[lines.len().saturating_sub(10)..]
+        .iter()
+        .map(|line| line.trim_end().to_string())
+        .collect()
+}
+
 /// The act, in a Job made from the CronJob, run to its end: its lines said
-/// as they come, and its log, or why it failed with the act's own words.
+/// as they come, and its log, or why it failed with the act's own words and
+/// the cause its log gives.
 pub async fn run_act(
     machine: &dyn Machine,
     release: &Release,
@@ -626,13 +951,17 @@ pub async fn run_act(
     unix_seconds: u64,
     pace: &Pace,
     watch: &mut dyn Watch,
-) -> Result<String, String> {
+) -> Result<String, ActFailed> {
     let ns = release.namespace.as_str();
     let name = format!(
         "{}-{unix_seconds}",
         cronjob["metadata"]["name"].as_str().unwrap_or_default()
     );
-    let job = offline_job(cronjob, &name, act)?;
+    let job = offline_job(cronjob, &name, act).map_err(|failed| ActFailed {
+        why: None,
+        ended: true,
+        said: failed,
+    })?;
     machine
         .run_with_input(
             "kubectl",
@@ -640,10 +969,27 @@ pub async fn run_act(
             &job.to_string(),
         )
         .await
-        .map_err(|failed| format!("the {} Job could not be made: {failed}", act.name()))?;
+        .map_err(|failed| ActFailed {
+            why: None,
+            ended: true,
+            said: format!("the {} Job could not be made: {failed}", act.name()),
+        })?;
     watch.say(&format!("  job/{name}: {}", act.name()));
     let deadline = Instant::now() + pace.timeout;
     let mut said = 0;
+    let logs = format!("meridian logs database-offline {}", release.scope());
+    let cause = |log: &str| {
+        let lines = cause_lines(log);
+        if lines.is_empty() {
+            "    (it has printed nothing yet)".to_string()
+        } else {
+            lines
+                .iter()
+                .map(|line| format!("    {line}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    };
     loop {
         let log = kubectl(
             machine,
@@ -677,18 +1023,34 @@ pub async fn run_act(
                 .lines()
                 .rev()
                 .find(|line| line.contains("FAILED"))
-                .map(|line| line.trim_start_matches("database-offline: ").to_string())
-                .unwrap_or_else(|| "it said nothing of why".to_string());
-            return Err(format!("the {} Job, job/{name}, failed: {why}", act.name()));
+                .map(|line| {
+                    line.trim_start_matches("database-offline: ")
+                        .trim_start_matches("FAILED: ")
+                        .to_string()
+                });
+            return Err(ActFailed {
+                said: format!(
+                    "the {} Job, job/{name}, failed: {}\nWhat its log says (`{logs}`):\n{}",
+                    act.name(),
+                    why.as_deref().unwrap_or("it said nothing of why"),
+                    cause(&log)
+                ),
+                why,
+                ended: true,
+            });
         }
         if Instant::now() >= deadline {
-            return Err(format!(
-                "the {} Job, job/{name}, had not finished after {}s; it is left running, and \
-                 `meridian logs database-offline {}` says where it is",
-                act.name(),
-                pace.timeout.as_secs(),
-                release.scope()
-            ));
+            return Err(ActFailed {
+                why: None,
+                ended: false,
+                said: format!(
+                    "the {} Job, job/{name}, did not finish within {}s, and is left running. \
+                     What its log says last (`{logs}`):\n{}",
+                    act.name(),
+                    pace.timeout.as_secs(),
+                    cause(&log)
+                ),
+            });
         }
         tokio::time::sleep(pace.poll).await;
     }
@@ -839,7 +1201,8 @@ pub async fn start(
     }
 }
 
-/// Each component given back the count it ran at.
+/// Each component given back the count it ran at, and each CronJob the stop
+/// suspended its schedule.
 pub async fn started_components(
     machine: &dyn Machine,
     release: &Release,
@@ -873,7 +1236,7 @@ pub async fn started_components(
             stopped.deployments.len()
         ));
     }
-    Ok(())
+    resume_cronjobs(machine, release, stopped, watch).await
 }
 
 /// The conductor's probe, read once it runs: what the database says of

@@ -8,8 +8,9 @@
 //! started again, and the setting read again.
 
 use super::{
-    data_bytes, database, downtime, minutes, probed_database, run_act, standbys_to_remake, start,
-    started_components, stop_components, stop_database, Act, Release, Stopped,
+    act_running, clear_stopped, data_bytes, database, downtime, minutes, probed_database,
+    record_stop, run_act, standbys_to_remake, start, started_components, stop_database, stop_these,
+    suspend_cronjobs, Act, Release, Stopped,
 };
 use crate::doctor::{Finding, Machine};
 use crate::upgrade_deployment::run::Pace;
@@ -23,6 +24,24 @@ pub struct Plan {
     pub cronjob: serde_json::Value,
     /// The data directory's size on member 0, where it was read.
     pub bytes: Option<u64>,
+    /// Stopped by an --enable-checksums that did not finish, and what it
+    /// stopped: run again, the backup it took first stands, nothing is
+    /// stopped twice, the act is run again (it changes nothing where
+    /// checksums are on already), and everything is started again at the
+    /// counts it ran at, each CronJob as it was.
+    pub resume: Option<Stopped>,
+    /// Recorded by an act that did not finish stopping, the database still
+    /// running: its counts and CronJobs stand over what runs now.
+    pub earlier: Option<Stopped>,
+}
+
+impl Plan {
+    /// The database's members when it runs.
+    fn members(&self) -> u64 {
+        self.resume
+            .as_ref()
+            .map_or(self.set.replicas, |stopped| stopped.database)
+    }
 }
 
 /// What the checks found.
@@ -75,9 +94,28 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         return refuse(&findings, say);
     }
 
+    let scope = crate::status::scope(&asked.release, &asked.namespace);
     let set = match database(machine, &release).await {
         Ok(Some(set)) if set.replicas > 0 => set,
-        Ok(_) => {
+        // Stopped by an act that did not finish: this one takes it from
+        // there if it was this act, and says what does if not.
+        Ok(Some(set)) => match super::recorded_stopped(machine, &release, &set.name).await {
+            Some(stopped) => return resumed(machine, asked, set, stopped, findings, say).await,
+            None => {
+                findings.push(Finding::Stops {
+                    what: format!(
+                        "{}'s database, {}, is stopped, and no act recorded stopping it",
+                        asked.release, set.name
+                    ),
+                    fix: format!(
+                        "Page checksums are turned on in a database that is running: `meridian \
+                         status {scope}` says what runs."
+                    ),
+                });
+                return refuse(&findings, say);
+            }
+        },
+        Ok(None) => {
             findings.push(Finding::Stops {
                 what: format!(
                     "{} runs no database it brought, so there is no volume here to turn page \
@@ -205,6 +243,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
                 .into(),
         });
     }
+    let earlier = super::recorded_stopped(machine, &release, &set.name).await;
     for finding in &findings {
         say.say(&format!("{finding}"));
     }
@@ -212,12 +251,92 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         set,
         cronjob,
         bytes,
+        resume: None,
+        earlier,
+    }))
+}
+
+/// The checks for a database an act stopped and recorded: this act's is
+/// taken from there; a restore's is left to the restore.
+async fn resumed(
+    machine: &dyn Machine,
+    asked: &Asked,
+    set: crate::upgrade_deployment::DatabaseSet,
+    stopped: Stopped,
+    mut findings: Vec<Finding>,
+    say: &mut dyn Watch,
+) -> Checked {
+    let release = release_of(asked);
+    let scope = crate::status::scope(&asked.release, &asked.namespace);
+    let since = stopped
+        .since
+        .as_deref()
+        .map(|at| format!(" at {at}"))
+        .unwrap_or_default();
+    let refuse = |findings: &[Finding], say: &mut dyn Watch| {
+        for finding in findings {
+            say.say(&format!("{finding}"));
+        }
+        say.say("\nNothing was changed. Each check that stopped it says what to do above.");
+        Checked::Refused
+    };
+    if stopped.act_name() != Act::EnableChecksums.name() {
+        findings.push(Finding::Stops {
+            what: format!(
+                "{} was stopped by `{}`{since}, which did not finish: its volume holds a restore \
+                 that did not finish",
+                asked.release,
+                stopped.command()
+            ),
+            fix: format!(
+                "`{}` takes it from there; once everything runs again, run this.",
+                stopped.resumed_by(&scope)
+            ),
+        });
+        return refuse(&findings, say);
+    }
+    if let Some(job) = act_running(machine, &release).await {
+        findings.push(Finding::Stops {
+            what: format!("job/{job}, an act on the stopped database's volume, is still running"),
+            fix: format!(
+                "Two acts never share the volume. `meridian logs database-offline {scope}` says \
+                 where it is; once it has ended, run this again."
+            ),
+        });
+        return refuse(&findings, say);
+    }
+    let cronjob = match super::cronjob(machine, &release, &set.name).await {
+        Ok(cronjob) => cronjob,
+        Err(failed) => {
+            findings.push(Finding::Stops {
+                what: format!("{}-offline could not be read: {failed}", set.name),
+                fix: format!("`meridian status {scope}` says what the release holds."),
+            });
+            return refuse(&findings, say);
+        }
+    };
+    findings.push(Finding::Fine(format!(
+        "{} was stopped by `{}`{since}, which did not finish: this one takes it from there, and \
+         starts everything again at the counts it ran at",
+        asked.release,
+        stopped.command()
+    )));
+    for finding in &findings {
+        say.say(&format!("{finding}"));
+    }
+    Checked::Enable(Box::new(Plan {
+        set,
+        cronjob,
+        bytes: None,
+        resume: Some(stopped),
+        earlier: None,
     }))
 }
 
 /// What it will do, said before it asks.
 pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
-    let standbys = plan.set.replicas.saturating_sub(1);
+    let members = plan.members();
+    let standbys = members.saturating_sub(1);
     let size = plan
         .bytes
         .map(crate::status::said_bytes)
@@ -236,7 +355,7 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
         set = plan.set.name,
         release = asked.release,
         namespace = asked.namespace,
-        members = match plan.set.replicas {
+        members = match members {
             1 => "1 member".to_string(),
             n => format!("{n} members"),
         },
@@ -248,32 +367,47 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
             String::new()
         },
     );
-    out.push_str(
-        "  1. A backup, now, as `meridian backup` takes one. If it fails, nothing is changed.\n",
-    );
-    out.push_str(&format!(
-        "  2. Every component stopped{}, then the database.\n",
-        if patroni && standbys > 0 {
-            "; member 0 made the primary"
-        } else {
-            ""
-        }
-    ));
+    if plan.resume.is_some() {
+        out.push_str(
+            "  1. The backup the run before took first stands: the database is stopped, and \
+             none is taken now.\n",
+        );
+        out.push_str(
+            "  2. Everything is stopped already, by the run before; the release's CronJobs stay \
+             suspended.\n",
+        );
+    } else {
+        out.push_str(
+            "  1. A backup, now, as `meridian backup` takes one. If it fails, nothing is \
+             changed.\n",
+        );
+        out.push_str(&format!(
+            "  2. The release's CronJobs suspended (the replica comparison, the backup, the \
+             scrub), every component stopped{}, then the database.\n",
+            if patroni && standbys > 0 {
+                "; member 0 made the primary"
+            } else {
+                ""
+            }
+        ));
+    }
     out.push_str(&format!(
         "  3. pg_checksums --enable on member 0's volume, in a Job from {cronjob}.\n"
     ));
     if patroni && standbys > 0 {
         out.push_str(&format!(
             "  4. The standbys' volumes deleted ({}), which Patroni makes again from member 0; \
-             the database started, then every component, each to the count it ran at.\n",
-            (1..plan.set.replicas)
+             the database started, then every component, each to the count it ran at, and each \
+             CronJob as it was.\n",
+            (1..members)
                 .map(|n| format!("data-{}-{n}", plan.set.name))
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
     } else {
         out.push_str(
-            "  4. The database started, then every component, each to the count it ran at.\n",
+            "  4. The database started, then every component, each to the count it ran at, and \
+             each CronJob as it was.\n",
         );
     }
     out.push_str("  5. data_checksums read again, to say it is on.\n");
@@ -307,31 +441,59 @@ pub async fn apply(
 ) -> Result<String, String> {
     let release = release_of(asked);
     let scope = crate::status::scope(&asked.release, &asked.namespace);
+    let members = plan.members();
 
-    watch.begin(Step::Backup);
-    let taken = crate::backup::take_in_cluster(
-        machine,
-        &crate::backup::Take {
-            release: asked.release.clone(),
-            namespace: asked.namespace.clone(),
-            to: None,
-            timeout: pace.timeout,
-        },
-        unix_seconds,
-    )
-    .await;
-    watch.end(Step::Backup, taken.is_ok());
-    let taken =
-        taken.map_err(|failed| format!("the backup failed, so nothing was changed: {failed}"))?;
-    watch.say(&format!("  backed up to {}", taken.written.name));
+    // The backup's file, and what to say of it.
+    let (backup_name, backup_said) = match &plan.resume {
+        Some(_) => (
+            "the one the run before took first".to_string(),
+            "  The backup the run before took first stands.\n".to_string(),
+        ),
+        None => {
+            watch.begin(Step::Backup);
+            let taken = crate::backup::take_in_cluster(
+                machine,
+                &crate::backup::Take {
+                    release: asked.release.clone(),
+                    namespace: asked.namespace.clone(),
+                    to: None,
+                    timeout: pace.timeout,
+                },
+                unix_seconds,
+            )
+            .await;
+            watch.end(Step::Backup, taken.is_ok());
+            let taken = taken
+                .map_err(|failed| format!("the backup failed, so nothing was changed: {failed}"))?;
+            watch.say(&format!("  backed up to {}", taken.written.name));
+            (taken.written.name.clone(), taken.said.clone())
+        }
+    };
 
     watch.begin(Step::Stop);
-    let mut stopped = Stopped {
-        deployments: Vec::new(),
+    let mut stopped = plan.resume.clone().unwrap_or(Stopped {
         database: plan.set.replicas,
-    };
+        ..Stopped::default()
+    });
     let stopping = async {
-        stopped.deployments = stop_components(machine, &release, pace, watch).await?;
+        if plan.resume.is_some() {
+            watch.say("  stopped already, by the run before");
+            // Suspended then; again, in case anything gave one back since.
+            return suspend_cronjobs(machine, &release, &stopped, watch).await;
+        }
+        // Recorded before anything stops, so a run that does not finish
+        // leaves what to start again, and each CronJob's schedule, where
+        // the next one and `meridian status` read it.
+        stopped = record_stop(
+            machine,
+            &release,
+            &plan.set,
+            &Act::EnableChecksums,
+            plan.earlier.as_ref(),
+        )
+        .await?;
+        suspend_cronjobs(machine, &release, &stopped, watch).await?;
+        stop_these(machine, &release, &stopped.deployments, pace, watch).await?;
         if plan.set.patroni && plan.set.replicas > 1 {
             super::primary_to_member_0(machine, &release, &plan.set.name, pace, watch).await?;
         }
@@ -341,8 +503,11 @@ pub async fn apply(
     watch.end(Step::Stop, stopping.is_ok());
     if let Err(failed) = stopping {
         // Before the act: the database is as it was, and everything is
-        // given back its count.
+        // given back its count and its CronJobs their schedules.
         let back = start(machine, &release, &plan.set, &stopped, pace, watch).await;
+        if back.is_ok() {
+            clear_stopped(machine, &release, &plan.set.name).await;
+        }
         return Err(format!(
             "stopping everything did not finish: {failed}\nThe database was not changed. {}",
             match back {
@@ -366,30 +531,41 @@ pub async fn apply(
     watch.end(Step::Act, act.is_ok());
     let log = match act {
         Ok(log) => log,
+        // Still running: the volume is the Job's until it ends, so nothing
+        // is started on it, and the record stays for the run that resumes.
+        Err(failed) if !failed.ended => {
+            return Err(format!(
+                "{failed}\nEverything stays stopped, and the release's CronJobs suspended, while \
+                 the Job has the database's volume. Once it has ended, `meridian \
+                 upgrade-deployment --enable-checksums {scope}` takes it from there: it runs the \
+                 act again, which changes nothing if checksums are on, and starts everything. \
+                 The backup taken first is {backup_name}."
+            ));
+        }
         Err(failed) => {
             // pg_checksums changes the control file last, so a run that did
             // not finish leaves the database as it was: started again.
             let back = start(machine, &release, &plan.set, &stopped, pace, watch).await;
+            clear_stopped(machine, &release, &plan.set.name).await;
             return Err(format!(
                 "{failed}\npg_checksums marks the database last, so it is as it was, without \
-                 checksums. {} The backup taken first is {}.",
+                 checksums. {} The backup taken first is {backup_name}.",
                 match back {
                     Ok(()) => "Everything was started again.".to_string(),
                     Err(why) => format!("Starting it again: {why}"),
                 },
-                taken.written.name
             ));
         }
     };
 
     watch.begin(Step::Start);
     let starting = async {
-        if plan.set.patroni && plan.set.replicas > 1 {
+        if plan.set.patroni && members > 1 {
             standbys_to_remake(
                 machine,
                 &release,
                 &plan.set,
-                plan.set.replicas,
+                members,
                 &Act::EnableChecksums,
                 watch,
             )
@@ -399,6 +575,7 @@ pub async fn apply(
     }
     .await;
     watch.end(Step::Start, starting.is_ok());
+    clear_stopped(machine, &release, &plan.set.name).await;
     if let Err(failed) = starting {
         // Never left stopped by this: the components were given their
         // counts in start, or are given them here.
@@ -417,11 +594,11 @@ pub async fn apply(
         .map(String::from);
     watch.end(Step::Verify, on.as_deref() == Some("on"));
     match on.as_deref() {
-        Some("on") => Ok(done_text(asked, plan, &taken.said, &log)),
+        Some("on") => Ok(done_text(asked, plan, &backup_said, &log)),
         Some(other) => Err(format!(
             "the act said it turned page checksums on, and the database says data_checksums is \
-             {other}. `meridian status {scope}` reads it again; the backup taken first is {}.",
-            taken.written.name
+             {other}. `meridian status {scope}` reads it again; the backup taken first is \
+             {backup_name}."
         )),
         None => Err(format!(
             "page checksums were turned on and everything started again, and the conductor's \

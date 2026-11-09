@@ -819,6 +819,7 @@ fn release_said(release: &Result<Release, String>, namespace: &str) -> String {
 /// The status, for a person to read.
 pub fn said(status: &Status, now_ns: u64, namespace: &str) -> String {
     let mut out = release_said(&status.release, namespace);
+    out.push_str(&resilience::stopped_said(&status.resilience));
     let width = status
         .components
         .iter()
