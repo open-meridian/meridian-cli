@@ -354,6 +354,12 @@ metrics API, which some container runtimes give with the file cache in, and said
       --since <span>        logs: only what was printed in the last 30s, 10m, 2h or 1d
       --previous            logs: what each container printed before its last restart
       --json                status: one JSON object on stdout
+      --profile             status: the resilience profile alone, as the deployment
+                            computes it from its configuration as it is (never a
+                            preset's name): its level, what the next lacks, each
+                            failure class and tier met, met by restart or not met with
+                            the change that would meet it, and never blind; through
+                            the session meridian connect keeps, a deployment admin's
 
 plugin gc: through kubectl, as backup is; checks first and changes nothing if one fails
       --release <name>      the Helm release (default: meridian)
@@ -611,8 +617,9 @@ const TAKES_A_VALUE: [&str; 42] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 22] = [
+const SWITCHES: [&str; 23] = [
     "--previous",
+    "--profile",
     "--to-archive-end",
     "--standby",
     "--enable-checksums",
@@ -2551,6 +2558,27 @@ async fn status_command(arguments: &Arguments, namespace: &str) -> i32 {
             .into(),
         namespace: namespace.into(),
     };
+    // The resilience profile alone (step 3c): the deployment's own answer.
+    if arguments.set("--profile") {
+        let read = match held_session(arguments) {
+            Ok(session) => status::profile::read(session.address(), &session).await,
+            Err(refusal) => Err(refusal),
+        };
+        return match read {
+            Ok(profile) if arguments.set("--json") => {
+                println!("{profile}");
+                0
+            }
+            Ok(profile) => {
+                print!("{}", status::profile::said(&profile));
+                0
+            }
+            Err(failed) => {
+                eprintln!("meridian status --profile: {failed}");
+                1
+            }
+        };
+    }
     match status::status(&status::ThisCluster, &asked).await {
         Ok(mut held) => {
             held.accounts = match held_session(arguments) {

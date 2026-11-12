@@ -26,6 +26,12 @@
   standby.
 - `meridian status` names each store member's zone and the partitions it owns or follows, beside
   its mode, readiness and lag, a long list cut on its line and whole in `--json`.
+- `meridian status --profile` prints the resilience profile as the deployment computes it from its
+  configuration as it is, never a preset's name: its level and what the next level lacks, each
+  failure class and tier met, met by restart or not met with its reason and the change that would
+  meet it and its cost, and never blind per live data type. `--json` gives the deployment's answer.
+  It reads core's terminal read of the profile (from contract v30) on the session `meridian
+  connect` keeps, a deployment admin's; an older core is said to be older.
 
 ## 0.1.59
 
