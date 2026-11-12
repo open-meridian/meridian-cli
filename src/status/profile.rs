@@ -89,14 +89,24 @@ fn lines(out: &mut String, title: &str, held: &Value) {
     }
 }
 
+/// When it was computed: core says nanoseconds since the epoch as a string.
+fn computed(at: &Value) -> String {
+    match at
+        .as_str()
+        .and_then(|ns| ns.parse::<u64>().ok())
+        .or_else(|| at.as_u64())
+    {
+        Some(ns) if ns > 0 => crate::registry::moment(ns),
+        _ => at.as_str().unwrap_or("at an unstated time").to_string(),
+    }
+}
+
 /// The profile, as `status --profile` prints it.
 pub fn said(profile: &Value) -> String {
     let mut out = format!(
         "Resilience profile, as the deployment computes it from its configuration as it is \
          (computed {}):\n  level: {}\n",
-        profile["computed_at_ns"]
-            .as_str()
-            .unwrap_or("at an unstated time"),
+        computed(&profile["computed_at_ns"]),
         spoken(profile["level"].as_str().unwrap_or("not stated")),
     );
     match profile["next_level"].as_str() {
@@ -153,10 +163,11 @@ mod tests {
             "tiers": [{"subject": "component", "state": "met", "reason": "", "changes": []}],
             "never_blind": [{"data_type": "fx quotes", "second_source": true, "standby_pods": false,
                              "age_and_source": true}],
-            "computed_at_ns": "2026-11-12T12:00:00Z",
+            "computed_at_ns": "1794487905488194860",
         });
         let text = said(&profile);
-        assert!(text.contains("(computed 2026-11-12T12:00:00Z)"), "{text}");
+        let at = crate::registry::moment(1_794_487_905_488_194_860);
+        assert!(text.contains(&format!("(computed {at})")), "{text}");
         assert!(text.contains("  level: Single node\n"), "{text}");
         assert!(text.contains("  the next, Multi-node, lacks:\n    change: resilience.profile=ha (costs 9 pods, 3 GiB)\n"), "{text}");
         assert!(
