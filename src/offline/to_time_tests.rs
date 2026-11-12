@@ -1,4 +1,4 @@
-use super::super::tests::{asked, pace, Sim, State, NS, SET};
+use super::super::tests::{asked, pace, Sim, State, NS, OLD_SCRIPT, SET};
 use super::*;
 
 const NOW: i64 = 1_794_182_400;
@@ -35,9 +35,13 @@ fn to() -> Moment {
 
 async fn check_of(sim: &Sim) -> (Result<Plan, ()>, String) {
     let mut said = Vec::new();
-    let checked = check(sim, &asked(), &to(), NOW, &mut |line: &str| {
-        said.push(line.to_string())
-    })
+    let checked = check(
+        sim,
+        &asked(),
+        &Target::Time(to()),
+        NOW,
+        &mut |line: &str| said.push(line.to_string()),
+    )
     .await;
     (checked, said.join("\n"))
 }
@@ -69,9 +73,13 @@ async fn a_time_after_now_is_refused_before_the_cluster_is_asked() {
     });
     let mut said = Vec::new();
     let later = moment("2027-01-01T00:00:00Z").unwrap();
-    let checked = check(&sim, &asked(), &later, NOW, &mut |line: &str| {
-        said.push(line.to_string())
-    })
+    let checked = check(
+        &sim,
+        &asked(),
+        &Target::Time(later),
+        NOW,
+        &mut |line: &str| said.push(line.to_string()),
+    )
     .await;
     assert!(checked.is_err());
     assert!(said
@@ -123,6 +131,11 @@ async fn a_restore_stops_everything_runs_the_act_with_the_time_and_starts_again(
     .unwrap_or_else(|failed| panic!("{failed}\n{said:#?}"));
     assert!(
         report.contains("Restored meridian's database to 2026-11-08T10:00:00Z"),
+        "{report}"
+    );
+    // The timeline the act chose, said back (step 3c).
+    assert!(
+        report.contains("It recovered along timeline 1, the one that held 2026-11-08T10:00:00Z."),
         "{report}"
     );
     let now = sim.now();
@@ -678,4 +691,200 @@ async fn an_act_that_stopped_part_way_with_the_database_running_is_taken_from_it
     let now = sim.now();
     assert_eq!(now.deployments, State::default().deployments);
     assert!(!now.cronjobs["meridian-meridian-runtime-backup"]);
+}
+
+// ── Step 3c: the timeline chosen, and the archive's end ─────────────────────
+
+#[test]
+fn the_timeline_recovered_along_is_read_from_the_acts_line() {
+    assert_eq!(
+        recovered_along(
+            "database-offline: the archive holds a to b\n\
+             database-offline: promoted at 2026-11-12 11:00:48+00 on timeline 4, recovered along \
+             timeline 2: recovery stopping before commit\n"
+        ),
+        Some(2)
+    );
+    assert_eq!(
+        recovered_along("database-offline: promoted at x on timeline 2: y"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_time_outside_the_archive_is_answered_with_its_first_and_last_times() {
+    let refusal = refusal_of(
+        Some("database-offline: nothing was restored: the database's volume is as it was\n"),
+        "2026-11-08 10:00:00+00 is outside the archive, which holds 2026-11-08 09:00:00+00 to \
+         2026-11-08 09:30:00.5+00: a restore to a time stops before the first commit after it",
+    )
+    .await;
+    assert!(
+        refusal.contains(
+            "The archive holds 2026-11-08T09:00:00Z to 2026-11-08T09:30:00.5Z. Name a time \
+             inside it, after the first and before the last: `meridian restore --to-time <time> \
+             -n meridian`; the archive's end, the last commit itself, is `meridian restore \
+             --to-archive-end -n meridian`."
+        ),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains(
+            "Everything stays stopped, and the release's CronJobs suspended: the restore changed \
+             nothing, and the database's volume is as it was."
+        ),
+        "{refusal}"
+    );
+    assert!(!refusal.contains("past the archive's end"), "{refusal}");
+    // Before its oldest base backup, the same.
+    let refusal = refusal_of(
+        None,
+        "2026-11-08 10:00:00+00 is outside the archive, which holds 2026-11-08 11:00:00+00 to \
+         2026-11-08 12:00:00+00: it is before its oldest base backup ended",
+    )
+    .await;
+    assert!(
+        refusal.contains("The archive holds 2026-11-08T11:00:00Z to 2026-11-08T12:00:00Z."),
+        "{refusal}"
+    );
+}
+
+async fn check_to_the_end(sim: &Sim) -> (Result<Plan, ()>, String) {
+    let mut said = Vec::new();
+    let checked = check(
+        sim,
+        &asked(),
+        &Target::ArchiveEnd,
+        NOW,
+        &mut |line: &str| said.push(line.to_string()),
+    )
+    .await;
+    (checked, said.join("\n"))
+}
+
+#[tokio::test]
+async fn to_the_archives_end_runs_its_own_act_with_no_time_and_says_the_timeline() {
+    let sim = Sim::new(State {
+        archive: true,
+        ..State::default()
+    });
+    let (checked, said) = check_to_the_end(&sim).await;
+    let plan = checked.unwrap_or_else(|()| panic!("{said}"));
+    assert!(
+        said.contains("to the archive's end: the last commit it holds"),
+        "{said}"
+    );
+    let text = plan_text(&asked(), &plan);
+    assert!(text.contains("to the archive's end:"), "{text}");
+    assert!(
+        text.contains("the newest base backup on its newest timeline, the WAL replayed to the last commit it holds"),
+        "{text}"
+    );
+    assert!(!sim.changed_anything());
+    let report = apply(
+        &sim,
+        &asked(),
+        &plan,
+        &pace(),
+        1_794_000_000,
+        &mut |_: &str| {},
+    )
+    .await
+    .unwrap();
+    assert!(
+        report.contains("Restored meridian's database to the archive's end"),
+        "{report}"
+    );
+    assert!(
+        report.contains("It recovered along timeline 1, the archive's newest."),
+        "{report}"
+    );
+    let now = sim.now();
+    assert_eq!(now.restored_to, None, "no time named");
+    assert!(now
+        .jobs
+        .values()
+        .any(|act| act.as_deref() == Some("restore-to-archive-end")));
+    assert_eq!(now.deployments, State::default().deployments);
+    let record = sim
+        .asked()
+        .into_iter()
+        .find(|c| c.contains("--overwrite meridian.dev/stopped-for-restore="))
+        .unwrap();
+    assert!(
+        record.contains("\"act\":\"restore-to-archive-end\""),
+        "{record}"
+    );
+}
+
+#[tokio::test]
+async fn to_the_archives_end_is_refused_without_an_archive_as_a_time_is() {
+    let sim = Sim::new(State::default());
+    let (checked, said) = check_to_the_end(&sim).await;
+    assert!(checked.is_err());
+    assert!(
+        said.contains(
+            "meridian upgrade-deployment -n meridian --set backup.walArchive.enabled=true"
+        ),
+        "{said}"
+    );
+    assert!(!sim.changed_anything());
+}
+
+#[tokio::test]
+async fn a_chart_from_before_3c_is_said_before_anything_stops() {
+    // To the end: refused, nothing changed.
+    let sim = Sim::new(State {
+        archive: true,
+        script: OLD_SCRIPT.into(),
+        ..State::default()
+    });
+    let (checked, said) = check_to_the_end(&sim).await;
+    assert!(checked.is_err());
+    assert!(said.contains("chart predates --to-archive-end"), "{said}");
+    assert!(
+        said.contains("`meridian upgrade-deployment -n meridian`"),
+        "{said}"
+    );
+    assert!(!sim.changed_anything());
+    // To a time: it runs, and says it follows the newest timeline.
+    let (checked, said) = check_of(&sim).await;
+    assert!(checked.is_ok(), "{said}");
+    assert!(
+        said.contains("chart restores along the archive's newest timeline"),
+        "{said}"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_restore_to_the_end_is_taken_from_there_by_its_own_command() {
+    let sim = Sim::new(State {
+        archive: true,
+        act_fails: Some("the restore did not finish: ERROR: [045]".into()),
+        ..State::default()
+    });
+    let (checked, _) = check_to_the_end(&sim).await;
+    let refusal = apply(
+        &sim,
+        &asked(),
+        &checked.unwrap(),
+        &pace(),
+        1_794_000_000,
+        &mut |_: &str| {},
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        refusal.contains(
+            "Once the cause above is dealt with, `meridian restore --to-archive-end -n meridian` \
+             takes it from there."
+        ),
+        "{refusal}"
+    );
+    let stopped = Stopped::from_json(sim.now().stopped_record.as_deref().unwrap()).unwrap();
+    assert_eq!(stopped.command(), "meridian restore --to-archive-end");
+    assert_eq!(
+        stopped.resumed_by("-n meridian"),
+        "meridian restore --to-archive-end -n meridian"
+    );
 }

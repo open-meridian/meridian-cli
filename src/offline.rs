@@ -1,8 +1,9 @@
 //! An act on the brought database's stopped volume (step 3b; spec/a-
 //! deployment-scales-out-and-fails-over-by-configuration sections 4 and 9,
 //! ruling 1058): page checksums turned on (`meridian upgrade-deployment
-//! --enable-checksums`) and a restore to a point in time from the WAL archive
-//! (`meridian restore --to-time`).
+//! --enable-checksums`) and a restore from the WAL archive to a point in time
+//! (`meridian restore --to-time`) or to its end (`meridian restore
+//! --to-archive-end`, step 3c), each along the timeline the act chooses.
 //!
 //! The chart holds the act itself, in a suspended CronJob that never runs on
 //! its own (`<release>-meridian-runtime-database-offline`, meridian-core's
@@ -48,6 +49,8 @@ pub enum Act {
     EnableChecksums,
     /// To a time, as the script takes it: `YYYY-MM-DD HH:MM:SS[.ffffff]+00`.
     RestoreToTime(String),
+    /// To the last commit the archive holds (step 3c).
+    RestoreToArchiveEnd,
 }
 
 impl Act {
@@ -55,7 +58,13 @@ impl Act {
         match self {
             Act::EnableChecksums => "enable-checksums",
             Act::RestoreToTime(_) => "restore-to-time",
+            Act::RestoreToArchiveEnd => "restore-to-archive-end",
         }
+    }
+
+    /// A restore, of either kind.
+    pub fn restores(&self) -> bool {
+        matches!(self, Act::RestoreToTime(_) | Act::RestoreToArchiveEnd)
     }
 }
 
@@ -152,7 +161,7 @@ pub fn offline_job(
             "MERIDIAN_RESTORE_TO_TIME",
             match act {
                 Act::RestoreToTime(to) => to.clone(),
-                Act::EnableChecksums => String::new(),
+                Act::EnableChecksums | Act::RestoreToArchiveEnd => String::new(),
             },
         ),
     ]
@@ -329,6 +338,39 @@ pub async fn cronjob(
     .await
 }
 
+/// The offline act's script as the chart holds it, in the CronJob's
+/// ConfigMap: what it knows (step 3c's `restore-to-archive-end`, and the
+/// timeline it chooses, came together).
+pub async fn offline_script(
+    machine: &dyn Machine,
+    release: &Release,
+    set: &str,
+) -> Result<String, String> {
+    let held = json(
+        machine,
+        &[
+            "get",
+            "configmap",
+            &format!("{set}-offline"),
+            "-n",
+            &release.namespace,
+            "-o",
+            "json",
+        ],
+    )
+    .await?;
+    held["data"]["database-offline.sh"]
+        .as_str()
+        .map(String::from)
+        .ok_or_else(|| format!("{set}-offline holds no database-offline.sh"))
+}
+
+/// Whether the chart's offline act chooses the timeline and restores to the
+/// archive's end (step 3c).
+pub fn knows_timelines(script: &str) -> bool {
+    script.contains("restore-to-archive-end")
+}
+
 /// What was running before the stop, to start again as it was: each of the
 /// release's Deployments with its count, and the database's; each of its
 /// CronJobs with whether it was suspended already; the act it was stopped
@@ -342,7 +384,8 @@ pub struct Stopped {
     /// is stopped, and are given back `suspend: false` when it starts again;
     /// those suspended already are never touched.
     pub cronjobs: Vec<(String, bool)>,
-    /// The act, as its Job names it (`restore-to-time`, `enable-checksums`).
+    /// The act, as its Job names it (`restore-to-time`,
+    /// `restore-to-archive-end`, `enable-checksums`).
     /// None in a record written before it was kept, which only a restore
     /// to a time wrote.
     pub act: Option<String>,
@@ -496,6 +539,7 @@ impl Stopped {
     pub fn command(&self) -> &'static str {
         match self.act_name() {
             "enable-checksums" => "meridian upgrade-deployment --enable-checksums",
+            "restore-to-archive-end" => "meridian restore --to-archive-end",
             _ => "meridian restore --to-time",
         }
     }
@@ -505,6 +549,7 @@ impl Stopped {
     pub fn resumed_by(&self, scope: &str) -> String {
         match self.act_name() {
             "enable-checksums" => format!("meridian upgrade-deployment --enable-checksums {scope}"),
+            "restore-to-archive-end" => format!("meridian restore --to-archive-end {scope}"),
             _ => format!("meridian restore --to-time <time> {scope}"),
         }
     }
@@ -928,6 +973,26 @@ impl ActFailed {
         })
     }
 
+    /// Whether the act refused before it restored anything, as step 3c's
+    /// says ("the database's volume is as it was").
+    pub fn untouched(&self) -> bool {
+        self.cause
+            .iter()
+            .any(|line| line.contains("the database's volume is as it was"))
+    }
+
+    /// The archive's first and last times, as the act names them when it
+    /// refuses a time outside it (step 3c: "which holds <first> to
+    /// <last>"), each as Postgres writes a time.
+    pub fn holds(&self) -> Option<(&str, &str)> {
+        let why = self.why.as_deref()?;
+        let (_, rest) = why.split_once("which holds ")?;
+        let (first, rest) = rest.split_once(" to ")?;
+        // A time holds colons, never a colon and a space.
+        let last = rest.split_once(": ").map_or(rest, |(last, _)| last);
+        (!first.is_empty() && !last.is_empty()).then_some((first.trim(), last.trim()))
+    }
+
     /// The archive's last commit, where Postgres's lines shown include it:
     /// `last completed transaction was at log time <time>`, as Postgres
     /// wrote the time.
@@ -1112,7 +1177,7 @@ pub async fn standbys_to_remake(
             set.name
         ));
     }
-    if set.patroni && matches!(act, Act::RestoreToTime(_)) {
+    if set.patroni && act.restores() {
         // Patroni's record of the old primary: its position, which member
         // 0's restored one is behind and would be refused leadership for,
         // and its synchronous standby, which member 0 may not have been.

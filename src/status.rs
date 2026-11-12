@@ -48,6 +48,7 @@
 
 use std::collections::BTreeMap;
 
+pub mod profile;
 pub mod resilience;
 pub use resilience::Resilience;
 

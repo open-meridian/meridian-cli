@@ -16,6 +16,11 @@ use crate::upgrade_deployment::Asked;
 pub const NS: &str = "meridian";
 pub const SET: &str = "meridian-meridian-runtime-database";
 
+/// The offline act's script from step 3c's chart, as far as the CLI reads it.
+pub const NEW_SCRIPT: &str = "case \"$act\" in\nrestore-to-time | restore-to-archive-end)\n";
+/// And from 3b's.
+pub const OLD_SCRIPT: &str = "case \"$act\" in\nrestore-to-time)\n";
+
 #[derive(Debug, Clone)]
 pub struct State {
     pub deployments: BTreeMap<String, u64>,
@@ -49,6 +54,8 @@ pub struct State {
     pub patch_refused: BTreeSet<String>,
     /// The chart brings the database; false, somebody else runs it.
     pub brought: bool,
+    /// The offline act's script, as the chart's ConfigMap holds it.
+    pub script: String,
 }
 
 impl Default for State {
@@ -87,6 +94,7 @@ impl Default for State {
             act_log: None,
             patch_refused: BTreeSet::new(),
             brought: true,
+            script: NEW_SCRIPT.into(),
         }
     }
 }
@@ -314,6 +322,9 @@ impl Machine for Sim {
         if command.contains("pg_switch_wal") || command.contains("last_archived_wal") {
             return said("000000010000000000000007\n".into());
         }
+        if command == format!("kubectl get configmap {SET}-offline -n {NS} -o json") {
+            return said(json!({ "data": { "database-offline.sh": state.script } }).to_string());
+        }
         if command == format!("kubectl get cronjob {SET}-offline -n {NS} -o json") {
             return if state.cron {
                 said(Sim::cronjob(&format!("{SET}-offline")).to_string())
@@ -403,7 +414,16 @@ impl Machine for Sim {
                     }
                     match &state.act_fails {
                         Some(why) => log.push_str(&format!("database-offline: FAILED: {why}\n")),
-                        None => log.push_str("database-offline: done in 3s\n"),
+                        None => {
+                            if act.starts_with("restore") && state.script == NEW_SCRIPT {
+                                log.push_str(
+                                    "database-offline: promoted at 2026-11-08 10:00:00+00 on \
+                                     timeline 3, recovered along timeline 1: last completed \
+                                     transaction was at log time 2026-11-08 09:59:58+00\n",
+                                );
+                            }
+                            log.push_str("database-offline: done in 3s\n")
+                        }
                     }
                     said(log)
                 }

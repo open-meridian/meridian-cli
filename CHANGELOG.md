@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.1.60
+
+- `meridian restore --to-time` follows the timeline that held the time. Each restore starts a
+  timeline of its own, so a second restore to a time before the first one's lies on an earlier
+  timeline; the chart's restore (meridian-core's chart from step 3c) reads the archive's timeline
+  history, recovers along the one that held the time, from the newest base backup on its history,
+  and the CLI says which (`It recovered along timeline 1, the one that held ...`). There is no
+  option to choose it. A time outside the archive is refused before the database's volume is
+  touched, naming the archive's first and last times, and the hint names them back with
+  `--to-archive-end` for the end itself. On a chart from before, it says before anything stops that
+  the restore follows the newest timeline.
+- `meridian restore --to-archive-end`: the same guards and steps as `--to-time` -- refused without
+  `backup.walArchive`, saying how to turn it on; everything stopped, the restore run, everything
+  started again, under Patroni the standbys made again -- to the last commit the archive holds,
+  along its newest timeline. A chart from before step 3c is refused before anything stops. A stop
+  it leaves is resumed by `meridian restore --to-archive-end`, as `status` says.
+- `meridian plugin launch` takes `--in-flight`, `--requests-per-second` and `--answer-mib`, the
+  instance's own limits at its sidecar over the deployment's `sidecar.limits`, and `--shards` and
+  `--standby`, which core keeps on the launch (it still runs one pod; the pods come with step 3d).
+  Each is shown with the roles before it asks, a wrong value is refused naming the field as core
+  names it (`limits.answer_mib`, `shards`), and core's own refusals come through as it words them.
+  After the launch it reads back what the deployment kept; a core from before contract v30 keeps
+  none of them, and that is said. `meridian plugin list` shows each launch's limits, shards and
+  standby.
+- `meridian status` names each store member's zone and the partitions it owns or follows, beside
+  its mode, readiness and lag, a long list cut on its line and whole in `--json`.
+- `meridian status --profile` prints the resilience profile as the deployment computes it from its
+  configuration as it is, never a preset's name: its level and what the next level lacks, each
+  failure class and tier met, met by restart or not met with its reason and the change that would
+  meet it and its cost, and never blind per live data type. `--json` gives the deployment's answer.
+  It reads core's terminal read of the profile (from contract v30) on the session `meridian
+  connect` keeps, a deployment admin's; an older core is said to be older.
+
 ## 0.1.59
 
 - `meridian upgrade-deployment --set key=value`, repeatable, beside `-f`, applied as Helm applies
