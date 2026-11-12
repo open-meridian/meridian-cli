@@ -59,7 +59,9 @@ meridian -- bringing a Meridian deployment up
                              its documentation (docs/) with it
   meridian plugin list       the catalogue: versions uploaded, and what is launched
   meridian plugin launch <name> <version> --instance <id>
-                             run a version, once you approve the roles it asks for
+                             run a version, once you approve the roles it asks for;
+                             its limits at its sidecar, shards and a standby pod, if
+                             asked
   meridian plugin stop <id>  stop a launched instance
   meridian plugin dev --instance <id>
                              run the plugin here live on a development deployment,
@@ -158,7 +160,10 @@ meridian -- bringing a Meridian deployment up
                              restore a backup into a namespace holding no deployment
   meridian restore --to-time <RFC 3339>
                              restore the running deployment's database from its WAL
-                             archive to that time, in place; shown, then asked
+                             archive to that time, in place, along the timeline that
+                             held it; shown, then asked
+  meridian restore --to-archive-end
+                             the same, to the last commit the archive holds
   meridian uninstall         revoke every delegation this holds, and remove it
   meridian --version         which release this is
 
@@ -267,6 +272,20 @@ asked wrongly, and 3 when there is no session or it has lapsed
                             which its page is found by
       --yes                 launch, dev: approve what it asks for without being asked.
                             For a script that has already read it
+      --in-flight <n>       launch: the most requests it has in flight at its sidecar
+                            at once (limits.in_flight); left out, the deployment's
+                            sidecar.limits.inFlight
+      --requests-per-second <n>
+                            launch: the most requests a second, with a second's burst
+                            (limits.requests_per_second); left out, the deployment's
+      --answer-mib <n>      launch: MiB of answers held or paged in flight for it
+                            (limits.answer_mib); left out, the deployment's
+      --shards <n>          launch: the pods of the instance sharing its subjects
+                            (shards), at most the version's most_shards. Kept on the
+                            launch; this release still runs one pod
+      --standby             launch: a standby pod that takes over within 10 s
+                            (standby). Kept on the launch; this release still runs
+                            one pod
       --json                dev, logs, events, open: JSON on stdout, one object, or one
                             per line for dev and --follow; progress goes to stderr
       --release             dev: upload the plugin as it is now as a version, and run
@@ -433,7 +452,7 @@ checked, before the chart is installed
       --chart-version <v>   which version (default: the one the backup was taken on,
                             from whatever --chart names). Never older than that one
       --timeout <d>         how long to wait for each step (default: 15m; 30m with
-                            --to-time)
+                            --to-time or --to-archive-end)
       --yes                 restore without being asked. For a script that has read
                             what it will do
       --to-time <time>      in place of a file: the running deployment's database
@@ -441,10 +460,15 @@ checked, before the chart is installed
                             time, RFC 3339 with its offset (2026-11-08T14:03:07Z).
                             Every component and the database stopped, the restore
                             run, everything started again; under Patroni the
-                            standbys made again from it. A time outside the archive
-                            fails in the restore's own words and leaves everything
-                            stopped, the volume restorable: run it again with a time
-                            inside the archive
+                            standbys made again from it. The restore reads the
+                            archive's timeline history and recovers along the
+                            timeline that held the time, and says which. A time
+                            outside the archive is refused in the restore's own
+                            words, naming the archive's first and last times, and
+                            leaves everything stopped, the volume restorable: run it
+                            again with a time inside the archive
+      --to-archive-end      in place of a file or a time: the same, to the last
+                            commit the archive holds, along its newest timeline
 
 connect:
   <address> is the dashboard's: https://<host>, or http://127.0.0.1:<port> for a
@@ -539,7 +563,7 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 38] = [
+const TAKES_A_VALUE: [&str; 42] = [
     "--to-revision",
     "--set",
     "--to-time",
@@ -578,13 +602,19 @@ const TAKES_A_VALUE: [&str; 38] = [
     "--pack",
     "--with",
     "--without",
+    "--in-flight",
+    "--requests-per-second",
+    "--answer-mib",
+    "--shards",
 ];
 
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 20] = [
+const SWITCHES: [&str; 22] = [
     "--previous",
+    "--to-archive-end",
+    "--standby",
     "--enable-checksums",
     "--details",
     "--hardware",
@@ -755,11 +785,24 @@ async fn main() {
         "backup" => std::process::exit(backup_command(&arguments, &intended.namespace).await),
         "status" => std::process::exit(status_command(&arguments, &intended.namespace).await),
         "logs" => std::process::exit(logs_command(&arguments, &intended.namespace).await),
-        "restore" => match arguments.value("--to-time", "--to-time") {
-            Some(to) => {
-                std::process::exit(restore_to_time(&arguments, &intended.namespace, to).await)
+        "restore" => match (
+            arguments.value("--to-time", "--to-time"),
+            arguments.set("--to-archive-end"),
+        ) {
+            (Some(_), true) => {
+                eprintln!(
+                    "meridian restore: --to-time names a time and --to-archive-end the archive's \
+                     end; name one"
+                );
+                std::process::exit(2)
             }
-            None => std::process::exit(restore_command(&arguments).await),
+            (Some(to), false) => std::process::exit(
+                restore_in_place(&arguments, &intended.namespace, Some(to)).await,
+            ),
+            (None, true) => {
+                std::process::exit(restore_in_place(&arguments, &intended.namespace, None).await)
+            }
+            (None, false) => std::process::exit(restore_command(&arguments).await),
         },
         "--version" | "version" => println!("{}", release::version_line()),
         "-h" | "--help" | "help" | "" => print!("{USAGE}"),
@@ -1076,7 +1119,17 @@ async fn catalogue_command(arguments: &Arguments, words: &[&str]) -> i32 {
                 eprintln!("meridian plugin launch: `{instance}` is not an instance's name: lowercase letters, digits and single hyphens");
                 return 2;
             }
-            launched(arguments, address, session, name, version, instance, false).await
+            let shape = match launch_shape(arguments) {
+                Ok(shape) => shape,
+                Err(refusal) => {
+                    eprintln!("meridian plugin launch: {refusal}");
+                    return 2;
+                }
+            };
+            launched(
+                arguments, address, session, name, version, instance, false, shape,
+            )
+            .await
         }
         ["stop", instance] => catalogue::stop(address, session, instance)
             .await
@@ -1391,7 +1444,53 @@ async fn pack_command(arguments: &Arguments, words: &[&str]) -> i32 {
     }
 }
 
+/// `plugin launch`'s limits, shards and standby (contract v30, W8.3), each
+/// refused here naming its flag and the field as core names it.
+fn launch_shape(arguments: &Arguments) -> Result<catalogue::Shape, String> {
+    let limit = |flag: &str, field: &str| -> Result<u32, String> {
+        match arguments.value(flag, flag) {
+            None => Ok(0),
+            Some(given) => given
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or_else(|| {
+                    format!(
+                        "{flag} is `{given}`: a whole number above 0, or left out for the \
+                     deployment's ({field})"
+                    )
+                }),
+        }
+    };
+    let shards = match arguments.value("--shards", "--shards") {
+        None => 0,
+        Some(given) => given
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|n| *n <= SHARDS_MOST)
+            .ok_or_else(|| {
+                format!(
+                    "--shards is `{given}`: the pods of one instance, 0 to {SHARDS_MOST}, and at \
+                     most the version's most_shards (shards)"
+                )
+            })?,
+    };
+    Ok(catalogue::Shape {
+        in_flight: limit("--in-flight", "limits.in_flight")?,
+        requests_per_second: limit("--requests-per-second", "limits.requests_per_second")?,
+        answer_mib: limit("--answer-mib", "limits.answer_mib")?,
+        shards,
+        standby: arguments.set("--standby"),
+    })
+}
+
+/// The most shards a launch may ask (`LaunchPluginRequest.shards`' bound).
+const SHARDS_MOST: u32 = 64;
+
 /// W8.3: what the version asks for, shown, and approved by the person.
+#[allow(clippy::too_many_arguments)]
 async fn approval(
     arguments: &Arguments,
     address: &str,
@@ -1400,6 +1499,7 @@ async fn approval(
     version: &str,
     instance: &str,
     live: bool,
+    shape: catalogue::Shape,
 ) -> Result<Vec<String>, live::Failed> {
     let held = catalogue::catalogue(address, session).await?;
     let roles = catalogue::declared(&held, name, version).ok_or(format!(
@@ -1414,6 +1514,11 @@ async fn approval(
     };
     eprintln!("{name} {version} asks for");
     eprintln!("  roles: {}", listed(&roles));
+    // The approval is the request (W8.3): what the launch asks of its
+    // sidecar and its pods is shown with its roles.
+    for said in shape.said().split("; ").filter(|s| !s.is_empty()) {
+        eprintln!("  {said}");
+    }
     let how = if live { "live " } else { "" };
     if !arguments.set("--yes") && !approved(&format!("Launch it {how}as {instance}, with these?")) {
         return Err(live::Failed::Refused(
@@ -1424,6 +1529,7 @@ async fn approval(
     Ok(roles)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn launched(
     arguments: &Arguments,
     address: &str,
@@ -1432,23 +1538,74 @@ async fn launched(
     version: &str,
     instance: &str,
     live: bool,
+    shape: catalogue::Shape,
 ) -> Result<String, live::Failed> {
-    let roles = approval(arguments, address, session, name, version, instance, live).await?;
+    let roles = approval(
+        arguments, address, session, name, version, instance, live, shape,
+    )
+    .await?;
     let asked = catalogue::Launch {
         name,
         version,
         instance,
         roles: &roles,
         live,
+        shape,
     };
     catalogue::launch(address, session, &asked).await?;
     // A deployment admin opens any plugin's page; anybody else, one they
     // hold access on (spec/deployment-dashboard-and-access, ruling 19).
-    Ok(format!(
+    let mut said = format!(
         "Launched {instance}: {name} {version}.\nIts page, if it serves one: {address}/plugins/{instance}\n\
          Its documentation: {}\n",
         catalogue::instance_documentation(address, instance)
-    ))
+    );
+    if shape != catalogue::Shape::default() {
+        said.push_str(&kept_as_asked(address, session, instance, shape).await);
+    }
+    Ok(said)
+}
+
+/// What the deployment kept of a launch's limits, shards and standby, read
+/// back from its catalogue: a core from before contract v30 drops them.
+async fn kept_as_asked(
+    address: &str,
+    session: &credential::Credential,
+    instance: &str,
+    asked: catalogue::Shape,
+) -> String {
+    let held = match catalogue::catalogue(address, session).await {
+        Ok(held) => held,
+        Err(failed) => {
+            return format!(
+                "What it keeps of its limits, shards and standby could not be read back: {}\n",
+                failed.said()
+            )
+        }
+    };
+    let launch = held["launches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|launch| launch["instance_id"] == instance);
+    match launch.and_then(catalogue::Shape::listed) {
+        Some(kept) if kept == asked => {
+            format!("Kept on its launch, as asked: {}.\n", kept.said())
+        }
+        Some(kept) => format!(
+            "Kept on its launch: {}; asked: {}. `meridian plugin list` says it.\n",
+            match kept.said() {
+                said if said.is_empty() => "the deployment's limits, one pod".to_string(),
+                said => said,
+            },
+            asked.said()
+        ),
+        None => format!(
+            "{address} does not list a launch's limits, shards or standby: its core is older than \
+             contract v30 and kept none of them. `meridian upgrade-deployment` first, then stop \
+             and launch it again.\n"
+        ),
+    }
 }
 
 // ── The live loop (spec/live-plugin-development, requirements 10 to 14) ──
@@ -1584,7 +1741,17 @@ async fn develop(
             } else {
                 catalogue::upload(address, session, &dir).await?;
             }
-            let said = launched(arguments, address, session, name, version, instance, true).await?;
+            let said = launched(
+                arguments,
+                address,
+                session,
+                name,
+                version,
+                instance,
+                true,
+                catalogue::Shape::default(),
+            )
+            .await?;
             eprint!("{said}");
         }
     }
@@ -1695,7 +1862,17 @@ async fn release(
             other => other,
         })?
         .digest;
-    let roles = approval(arguments, address, session, name, version, instance, false).await?;
+    let roles = approval(
+        arguments,
+        address,
+        session,
+        name,
+        version,
+        instance,
+        false,
+        catalogue::Shape::default(),
+    )
+    .await?;
     let held = catalogue::catalogue(address, session).await?;
     let running = held["launches"]
         .as_array()
@@ -1711,6 +1888,7 @@ async fn release(
         instance,
         roles: &roles,
         live: false,
+        shape: catalogue::Shape::default(),
     };
     catalogue::launch(address, session, &asked).await?;
     if json {
@@ -2728,22 +2906,29 @@ async fn enable_checksums(
     }
 }
 
-/// `meridian restore --to-time <RFC 3339>` (step 3b): the brought database
-/// restored in place from its WAL archive to a point in time.
-async fn restore_to_time(arguments: &Arguments, namespace: &str, to: &str) -> i32 {
-    use offline::to_time;
+/// `meridian restore --to-time <RFC 3339>` (step 3b) and `meridian restore
+/// --to-archive-end` (step 3c): the brought database restored in place from
+/// its WAL archive, to a point in time or to the archive's end.
+async fn restore_in_place(arguments: &Arguments, namespace: &str, to: Option<&str>) -> i32 {
+    use offline::to_time::{self, Target};
     use upgrade_deployment::{run, watch};
+    let flag = if to.is_some() {
+        "--to-time"
+    } else {
+        "--to-archive-end"
+    };
     if !arguments.words.is_empty() || arguments.value("--identity", "--identity").is_some() {
         eprintln!(
-            "meridian restore: --to-time restores the running deployment from its WAL archive, \
+            "meridian restore: {flag} restores the running deployment from its WAL archive, \
              and takes no backup file; `meridian restore <file> --identity <file>` restores one \
              into an empty namespace"
         );
         return 2;
     }
-    let to = match to_time::moment(to) {
-        Ok(to) => to,
-        Err(refusal) => {
+    let target = match to.map(to_time::moment) {
+        None => Target::ArchiveEnd,
+        Some(Ok(to)) => Target::Time(to),
+        Some(Err(refusal)) => {
             eprintln!("meridian restore: {refusal}");
             return 2;
         }
@@ -2772,7 +2957,9 @@ async fn restore_to_time(arguments: &Arguments, namespace: &str, to: &str) -> i3
     let mut watch = watch::showing_on_stdout(
         format!(
             "Restoring {} in {} to {}",
-            asked.release, asked.namespace, to.said
+            asked.release,
+            asked.namespace,
+            target.said()
         ),
         &watch::Step::OFFLINE,
     );
@@ -2780,7 +2967,7 @@ async fn restore_to_time(arguments: &Arguments, namespace: &str, to: &str) -> i3
     let Ok(plan) = to_time::check(
         &machine::ThisMachine,
         &asked,
-        &to,
+        &target,
         now as i64,
         watch.as_mut(),
     )
@@ -2791,7 +2978,11 @@ async fn restore_to_time(arguments: &Arguments, namespace: &str, to: &str) -> i3
     };
     watch.begin(watch::Step::Confirmation);
     watch.say(&format!("\n{}", to_time::plan_text(&asked, &plan)));
-    let yes = arguments.set("--yes") || approved("Restore it to that time?");
+    let yes = arguments.set("--yes")
+        || approved(match target {
+            Target::Time(_) => "Restore it to that time?",
+            Target::ArchiveEnd => "Restore it to the archive's end?",
+        });
     watch.end(watch::Step::Confirmation, yes);
     if !yes {
         watch.finish();
@@ -2818,7 +3009,7 @@ async fn restore_to_time(arguments: &Arguments, namespace: &str, to: &str) -> i3
             0
         }
         Err(refusal) => {
-            eprintln!("\nmeridian restore --to-time: {refusal}");
+            eprintln!("\nmeridian restore {flag}: {refusal}");
             1
         }
     }
@@ -3468,7 +3659,7 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{connect_address, help_for, parse};
+    use super::{catalogue, connect_address, help_for, launch_shape, parse};
 
     #[test]
     fn a_commands_help_is_its_own_flags() {
@@ -3736,6 +3927,41 @@ mod tests {
         );
         assert!(launch.set("--yes"));
         assert!(parse(said("plugin upload --dir")).is_err());
+    }
+
+    /// Contract v30 (W8.3): a launch's limits, shards and standby, each
+    /// refused naming its flag and the field as core names it.
+    #[test]
+    fn a_launch_takes_its_limits_shards_and_standby() {
+        let shape = |line: &str| launch_shape(&parse(said(line)).unwrap());
+        assert_eq!(
+            shape(
+                "plugin launch p 1.0.0 --instance p --in-flight 4 --requests-per-second 20 \
+                 --answer-mib 64 --shards 2 --standby"
+            ),
+            Ok(catalogue::Shape {
+                in_flight: 4,
+                requests_per_second: 20,
+                answer_mib: 64,
+                shards: 2,
+                standby: true,
+            })
+        );
+        assert_eq!(
+            shape("plugin launch p 1.0.0 --instance p"),
+            Ok(catalogue::Shape::default())
+        );
+        let refused = shape("plugin launch p 1.0.0 --instance p --answer-mib 0").unwrap_err();
+        assert!(refused.contains("--answer-mib is `0`"), "{refused}");
+        assert!(refused.contains("(limits.answer_mib)"), "{refused}");
+        let refused = shape("plugin launch p 1.0.0 --instance p --in-flight x").unwrap_err();
+        assert!(refused.contains("(limits.in_flight)"), "{refused}");
+        let refused = shape("plugin launch p 1.0.0 --instance p --shards 65").unwrap_err();
+        assert!(
+            refused.contains("0 to 64") && refused.ends_with("(shards)"),
+            "{refused}"
+        );
+        assert!(parse(said("plugin launch p 1.0.0 --instance p --shards")).is_err());
     }
 
     #[test]

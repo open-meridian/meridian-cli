@@ -517,6 +517,7 @@ async fn every_catalogue_call_says_a_lapsed_session_as_the_session() {
         instance: "reference-plugin",
         roles: &[],
         live: false,
+        shape: Shape::default(),
     };
     let failed = launch(
         &address,
@@ -695,4 +696,63 @@ fn a_plugin_names_itself_in_meridian_apart_from_its_python_project() {
         refused.contains("[tool.meridian] name is not text"),
         "{refused}"
     );
+}
+
+/// Contract v30 (W8.3): what a launch asks of its sidecar and its pods is
+/// sent only where asked, and read back from the catalogue's listing.
+#[test]
+fn a_launchs_limits_shards_and_standby_are_sent_as_asked_and_listed() {
+    let mut body = serde_json::json!({"name": "p"});
+    Shape::default().into_request(&mut body);
+    assert_eq!(
+        body,
+        serde_json::json!({"name": "p"}),
+        "a launch asking none is unchanged"
+    );
+    let shape = Shape {
+        in_flight: 4,
+        answer_mib: 64,
+        shards: 2,
+        standby: true,
+        ..Shape::default()
+    };
+    shape.into_request(&mut body);
+    assert_eq!(
+        body,
+        serde_json::json!({"name": "p", "limits": {"in_flight": 4, "answer_mib": 64},
+                           "shards": 2, "standby": true})
+    );
+    let listed = serde_json::json!({
+        "versions": [],
+        "launches": [{"instance_id": "p-1", "name": "p", "version": "1.0.0", "state": "launched",
+                      "limits": {"in_flight": 4, "requests_per_second": 0, "answer_mib": 64},
+                      "shards": 2, "standby": true},
+                     {"instance_id": "q-1", "name": "q", "version": "1.0.0", "state": "launched",
+                      "limits": null, "shards": 0, "standby": false},
+                     {"instance_id": "r-1", "name": "r", "version": "1.0.0", "state": "launched"}],
+    });
+    assert_eq!(Shape::listed(&listed["launches"][0]), Some(shape));
+    assert_eq!(
+        Shape::listed(&listed["launches"][1]),
+        Some(Shape::default())
+    );
+    assert_eq!(
+        Shape::listed(&listed["launches"][2]),
+        None,
+        "a core from before v30"
+    );
+    let text = listed_text(&listed);
+    assert!(
+        text.contains(
+            "  p-1  p 1.0.0  launched\n    limits: 4 requests at once (limits.in_flight), the \
+             deployment's a second (limits.requests_per_second), 64 MiB of answers in flight \
+             (limits.answer_mib); shards: 2; standby: a standby pod\n"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("  q-1  q 1.0.0  launched\n  r-1"), "{text}");
+}
+
+fn listed_text(catalogue: &serde_json::Value) -> String {
+    listed(catalogue, "http://127.0.0.1:8443")
 }

@@ -1,13 +1,21 @@
-//! `meridian restore --to-time <RFC 3339>` (step 3b; spec section 4): the
-//! brought database restored from its WAL archive to a point in time, in
-//! place. Refused where the deployment keeps no archive (`backup.walArchive`),
-//! saying how to turn it on. Every component and the database stopped, the
-//! act run on member 0's volume (the archive's newest base backup before the
-//! time restored and the WAL replayed to it, the database promoted there on
-//! a timeline of its own), and everything started again; under Patroni the
-//! standbys are made again from it. A time outside the archive fails with
-//! the act's own words, the volume left restorable and everything left
-//! stopped, with what to run.
+//! `meridian restore --to-time <RFC 3339>` (step 3b; spec section 4) and
+//! `meridian restore --to-archive-end` (step 3c; section 9): the brought
+//! database restored from its WAL archive in place, to a point in time or
+//! to the last commit the archive holds. Refused where the deployment keeps
+//! no archive (`backup.walArchive`), saying how to turn it on. Every
+//! component and the database stopped, the act run on member 0's volume, and
+//! everything started again; under Patroni the standbys are made again from
+//! it.
+//!
+//! The timeline is chosen, never asked (step 3c): the act reads the
+//! archive's timeline history and recovers along the timeline that held the
+//! time -- or, to the end, its newest -- from the newest base backup on that
+//! timeline's history, and says which; this says it back. A time outside the
+//! archive is refused by the act before it touches the volume, naming the
+//! archive's first and last times, which the hint here names; everything
+//! is left stopped, with what to run. A chart from before 3c restores along
+//! the newest timeline and knows no archive's end: said before anything
+//! stops.
 //!
 //! The archive's passphrase is the chart's, read by the act in its own pod;
 //! nothing here reads or prints it.
@@ -156,10 +164,52 @@ fn said_in_utc(postgres: &str) -> String {
     moment(&given).map_or_else(|_| postgres.trim().to_string(), |at| at.said)
 }
 
+/// Where a restore goes: to a time, or to the archive's end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    Time(Moment),
+    ArchiveEnd,
+}
+
+impl Target {
+    /// As it is said back: the time in UTC, or the archive's end.
+    pub fn said(&self) -> String {
+        match self {
+            Target::Time(to) => to.said.clone(),
+            Target::ArchiveEnd => "the archive's end".to_string(),
+        }
+    }
+
+    fn act(&self) -> Act {
+        match self {
+            Target::Time(to) => Act::RestoreToTime(to.for_the_act.clone()),
+            Target::ArchiveEnd => Act::RestoreToArchiveEnd,
+        }
+    }
+
+    /// The command that runs it again, with `scope`.
+    fn again(&self, scope: &str) -> String {
+        match self {
+            Target::Time(_) => format!("meridian restore --to-time <time> {scope}"),
+            Target::ArchiveEnd => format!("meridian restore --to-archive-end {scope}"),
+        }
+    }
+}
+
+/// The timeline the act recovered along, as it says it ("recovered along
+/// timeline 3").
+pub fn recovered_along(log: &str) -> Option<u64> {
+    log.lines().find_map(|line| {
+        let (_, after) = line.split_once("recovered along timeline ")?;
+        let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    })
+}
+
 /// What would be done, once every check has passed.
 #[derive(Debug, Clone)]
 pub struct Plan {
-    pub to: Moment,
+    pub target: Target,
     pub set: DatabaseSet,
     pub cronjob: serde_json::Value,
     /// The archiver's last segment, as the probe said it.
@@ -186,12 +236,12 @@ fn release_of(asked: &Asked) -> Release {
 pub async fn check(
     machine: &dyn Machine,
     asked: &Asked,
-    to: &Moment,
+    target: &Target,
     now: i64,
     watch: &mut dyn Watch,
 ) -> Result<Plan, ()> {
     watch.begin(Step::Checks);
-    let checked = checks_made(machine, asked, to, now, watch).await;
+    let checked = checks_made(machine, asked, target, now, watch).await;
     watch.end(Step::Checks, checked.is_ok());
     checked
 }
@@ -199,7 +249,7 @@ pub async fn check(
 async fn checks_made(
     machine: &dyn Machine,
     asked: &Asked,
-    to: &Moment,
+    target: &Target,
     now: i64,
     say: &mut dyn Watch,
 ) -> Result<Plan, ()> {
@@ -212,7 +262,10 @@ async fn checks_made(
         }
         say.say("\nNothing was changed. Each check that stopped it says what to do above.");
     };
-    if to.unix_seconds > now {
+    if let Some(to) = match target {
+        Target::Time(to) if to.unix_seconds > now => Some(to),
+        _ => None,
+    } {
         findings.push(Finding::Stops {
             what: format!("{} is after now", to.said),
             fix: "A restore goes back to a time the archive has passed; name one before now."
@@ -350,6 +403,41 @@ async fn checks_made(
             return Err(());
         }
     };
+    // What the chart's act knows: the timeline it chooses and the archive's
+    // end came with step 3c's chart.
+    match super::offline_script(machine, &release, &set.name).await {
+        Ok(script) if super::knows_timelines(&script) => {}
+        Ok(_) if *target == Target::ArchiveEnd => {
+            findings.push(Finding::Stops {
+                what: format!(
+                    "{}'s chart predates --to-archive-end: its offline act restores only to a \
+                     time",
+                    asked.release
+                ),
+                fix: format!(
+                    "`meridian upgrade-deployment {scope}` brings the chart that does, then run \
+                     this again."
+                ),
+            });
+            refuse(&findings, say);
+            return Err(());
+        }
+        Ok(_) => findings.push(Finding::Worth {
+            what: format!(
+                "{}'s chart restores along the archive's newest timeline",
+                asked.release
+            ),
+            why: format!(
+                "A time before an earlier restore's lies on an earlier timeline, which it does \
+                 not reach; `meridian upgrade-deployment {scope}` brings the chart that chooses \
+                 the timeline that held the time."
+            ),
+        }),
+        Err(why) => findings.push(Finding::Unknown {
+            what: "what the chart's offline act knows".into(),
+            why: format!("its ConfigMap could not be read: {why}"),
+        }),
+    }
     let probed = super::probed_database(machine, &release).await;
     let archive = probed.as_ref().map(|database| &database["archive"]);
     let last_archived = archive
@@ -369,17 +457,22 @@ async fn checks_made(
             why: "the conductor's probe did not say it".into(),
         }),
     }
-    // Before now is not inside the archive: the latest time it restores to
-    // lies before its last commit, which only the replay finds.
-    findings.push(Finding::Fine(format!(
-        "{} is before now; whether the archive reaches it, the restore itself says",
-        to.said
-    )));
+    findings.push(Finding::Fine(match target {
+        // Before now is not inside the archive: the act reads the archive's
+        // first and last times before it touches the volume.
+        Target::Time(to) => format!(
+            "{} is before now; whether the archive holds it, the restore reads first",
+            to.said
+        ),
+        Target::ArchiveEnd => {
+            "to the archive's end: the last commit it holds, along its newest timeline".into()
+        }
+    }));
     for finding in &findings {
         say.say(&format!("{finding}"));
     }
     Ok(Plan {
-        to: to.clone(),
+        target: target.clone(),
         set,
         cronjob,
         last_archived,
@@ -397,15 +490,25 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
     let standbys = members.saturating_sub(1);
     let patroni = plan.set.patroni;
     let mut out = format!(
-        "Restoring {release}'s database, {set}, in {namespace}, to {to}:\n\
-         \x20 from      its WAL archive: the newest base backup before {to}, the WAL replayed \
-         to it, and the database promoted there on a timeline of its own. What came after \
-         {to} is kept in the archive, on the old timeline, and is not in the database.\n",
+        "Restoring {release}'s database, {set}, in {namespace}, to {to}:\n",
         release = asked.release,
         set = plan.set.name,
         namespace = asked.namespace,
-        to = plan.to.said,
+        to = plan.target.said(),
     );
+    out.push_str(&match &plan.target {
+        Target::Time(to) => format!(
+            "\x20 from      its WAL archive: the newest base backup before {to} on the timeline \
+             that held it, the WAL replayed along that timeline to it, and the database \
+             promoted there on a timeline of its own. What came after {to} is kept in the \
+             archive and is not in the database.\n",
+            to = to.said
+        ),
+        Target::ArchiveEnd => "\x20 from      its WAL archive: the newest base backup on its \
+             newest timeline, the WAL replayed to the last commit it holds, and the database \
+             promoted there on a timeline of its own.\n"
+            .to_string(),
+    });
     if let Some(at) = &plan.last_archived {
         out.push_str(&format!(
             "\x20 archived  its last segment at {at}; the newest WAL is archived before it \
@@ -445,11 +548,17 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
              each CronJob as it was.\n",
         );
     }
-    out.push_str(&format!(
-        "  If {} is outside the archive, the restore fails with its own words, the volume \
-         stays restorable, and everything stays stopped until a time inside it is named.\n",
-        plan.to.said
-    ));
+    out.push_str(&match &plan.target {
+        Target::Time(to) => format!(
+            "  If {} is outside the archive, the restore refuses it in its own words, naming \
+             the archive's first and last times, the volume stays restorable, and everything \
+             stays stopped until a time inside it is named.\n",
+            to.said
+        ),
+        Target::ArchiveEnd => "  If the restore fails, it says why in its own words, the \
+             volume stays restorable, and everything stays stopped until it is run again.\n"
+            .to_string(),
+    });
     out
 }
 
@@ -521,7 +630,8 @@ pub async fn apply(
 ) -> Result<String, String> {
     let release = release_of(asked);
     let scope = crate::status::scope(&asked.release, &asked.namespace);
-    let act = Act::RestoreToTime(plan.to.for_the_act.clone());
+    let act = plan.target.act();
+    let again = plan.target.again(&scope);
 
     watch.begin(Step::Stop);
     let mut stopped = plan.resume.clone().unwrap_or(Stopped {
@@ -579,7 +689,17 @@ pub async fn apply(
     .await;
     watch.end(Step::Act, restored.is_ok());
     let log = restored.map_err(|failed| {
-        let again = if failed.past_the_archive() {
+        let next = if let (Some((first, last)), Target::Time(_)) = (failed.holds(), &plan.target) {
+            // Step 3c's act: refused before the volume was touched, naming
+            // the archive's first and last times.
+            format!(
+                "The archive holds {first} to {last}. Name a time inside it, after the first \
+                 and before the last: `{again}`; the archive's end, the last commit itself, is \
+                 `meridian restore --to-archive-end {scope}`.",
+                first = said_in_utc(first),
+                last = said_in_utc(last),
+            )
+        } else if failed.past_the_archive() {
             // The archive replayed to its end: the time named is at or after
             // its last commit, which a restore to a time never reaches (it
             // stops before the first commit after the time named), so the
@@ -590,7 +710,7 @@ pub async fn apply(
                  \"last completed transaction\" where they include it{commit}. To bring {release} \
                  back, name a time inside the archive, before that commit: `meridian restore \
                  --to-time <time> {scope}`.",
-                to = plan.to.said,
+                to = plan.target.said(),
                 commit = failed
                     .last_completed_transaction()
                     .map(|at| format!(": {}", said_in_utc(at)))
@@ -604,19 +724,16 @@ pub async fn apply(
             )
         } else if !failed.ended {
             format!(
-                "Once the Job has ended, `meridian restore --to-time <time> {scope}` takes it \
-                 from there; it is refused while the Job runs."
+                "Once the Job has ended, `{again}` takes it from there; it is refused while the \
+                 Job runs."
             )
         } else {
-            format!(
-                "Once the cause above is dealt with, `meridian restore --to-time <time> {scope}` \
-                 takes it from there."
-            )
+            format!("Once the cause above is dealt with, `{again}` takes it from there.")
         };
         format!(
             "{failed}\nEverything stays stopped, and the release's CronJobs suspended: the \
              database's volume holds a restore that did not finish, and stays restorable. \
-             {again}"
+             {next}"
         )
     })?;
 
@@ -635,13 +752,27 @@ pub async fn apply(
         return Err(format!(
             "the database was restored to {}, and starting everything again did not finish: \
              {failed}\n`meridian status {scope}` says where each part is.",
-            plan.to.said
+            plan.target.said()
         ));
     }
     let mut out = format!(
         "\nRestored {}'s database to {}, and started everything again.\n",
-        asked.release, plan.to.said
+        asked.release,
+        plan.target.said()
     );
+    // The timeline the act chose, as it said it (a chart from before step
+    // 3c says none: it followed the newest).
+    if let Some(along) = recovered_along(&log) {
+        out.push_str(&match &plan.target {
+            Target::Time(to) => format!(
+                "  It recovered along timeline {along}, the one that held {}.\n",
+                to.said
+            ),
+            Target::ArchiveEnd => {
+                format!("  It recovered along timeline {along}, the archive's newest.\n")
+            }
+        });
+    }
     for line in log
         .lines()
         .filter(|line| line.starts_with("database-offline: "))

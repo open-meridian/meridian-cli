@@ -939,6 +939,13 @@ pub fn listed(catalogue: &serde_json::Value, address: &str) -> String {
                 format!(": {failure}")
             },
         ));
+        // What its launch asked of its sidecar and its pods (contract v30).
+        if let Some(said) = Shape::listed(l)
+            .map(|shape| shape.said())
+            .filter(|s| !s.is_empty())
+        {
+            out.push_str(&format!("    {said}\n"));
+        }
     }
     out
 }
@@ -990,6 +997,96 @@ pub struct Launch<'a> {
     pub instance: &'a str,
     pub roles: &'a [String],
     pub live: bool,
+    pub shape: Shape,
+}
+
+/// A launch's own share at its sidecar and its pods (contract v30, W8.3):
+/// `limits` over the chart's `sidecar.limits`, each 0 taking the
+/// deployment's (approved 2026-11-11), and its `shards` and `standby`
+/// (approved by 1057), which core keeps on the launch from 3c and runs from
+/// 3d. The lake write share has no flag.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Shape {
+    pub in_flight: u32,
+    pub requests_per_second: u32,
+    pub answer_mib: u32,
+    pub shards: u32,
+    pub standby: bool,
+}
+
+impl Shape {
+    fn limited(&self) -> bool {
+        self.in_flight > 0 || self.requests_per_second > 0 || self.answer_mib > 0
+    }
+
+    /// What the request carries of it: only what was asked, so a launch
+    /// asking none is the request it always was.
+    pub fn into_request(self, body: &mut serde_json::Value) {
+        if self.limited() {
+            let mut limits = serde_json::Map::new();
+            for (name, value) in [
+                ("in_flight", self.in_flight),
+                ("requests_per_second", self.requests_per_second),
+                ("answer_mib", self.answer_mib),
+            ] {
+                if value > 0 {
+                    limits.insert(name.into(), value.into());
+                }
+            }
+            body["limits"] = limits.into();
+        }
+        if self.shards > 0 {
+            body["shards"] = self.shards.into();
+        }
+        if self.standby {
+            body["standby"] = true.into();
+        }
+    }
+
+    /// As a launch's listing gives it back (core's catalogue from 3c): None
+    /// where the listing says none of it, as a core from before 3c lists.
+    pub fn listed(launch: &serde_json::Value) -> Option<Shape> {
+        let has = launch.get("limits").is_some() || launch.get("shards").is_some();
+        has.then(|| {
+            let limit = |name: &str| launch["limits"][name].as_u64().unwrap_or(0) as u32;
+            Shape {
+                in_flight: limit("in_flight"),
+                requests_per_second: limit("requests_per_second"),
+                answer_mib: limit("answer_mib"),
+                shards: launch["shards"].as_u64().unwrap_or(0) as u32,
+                standby: launch["standby"].as_bool().unwrap_or(false),
+            }
+        })
+    }
+
+    /// As a person reads it: each limit asked, the deployment's otherwise,
+    /// and its pods. Empty where it asks for nothing.
+    pub fn said(&self) -> String {
+        let mut said = Vec::new();
+        if self.limited() {
+            let each = |value: u32, unit: &str| {
+                if value == 0 {
+                    "the deployment's".to_string()
+                } else {
+                    format!("{value}{unit}")
+                }
+            };
+            said.push(format!(
+                "limits: {} requests at once (limits.in_flight), {} a second \
+                 (limits.requests_per_second), {} of answers in flight (limits.answer_mib)",
+                each(self.in_flight, ""),
+                each(self.requests_per_second, ""),
+                each(self.answer_mib, " MiB"),
+            ));
+        }
+        if self.shards > 0 {
+            said.push(format!("shards: {}", self.shards));
+        }
+        if self.standby {
+            said.push("standby: a standby pod".into());
+        }
+        said.join("; ")
+    }
 }
 
 pub async fn launch(
@@ -997,15 +1094,11 @@ pub async fn launch(
     session: &Credential,
     asked: &Launch<'_>,
 ) -> Result<serde_json::Value, Failed> {
-    post(
-        address,
-        session,
-        "/terminal/plugins/launch",
-        serde_json::json!({ "name": asked.name, "version": asked.version,
-                            "instance_id": asked.instance, "approved_roles": asked.roles,
-                            "live": asked.live }),
-    )
-    .await
+    let mut body = serde_json::json!({ "name": asked.name, "version": asked.version,
+                                       "instance_id": asked.instance, "approved_roles": asked.roles,
+                                       "live": asked.live });
+    asked.shape.into_request(&mut body);
+    post(address, session, "/terminal/plugins/launch", body).await
 }
 
 pub async fn stop(
