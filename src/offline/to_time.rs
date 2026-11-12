@@ -730,9 +730,14 @@ pub async fn apply(
         } else {
             format!("Once the cause above is dealt with, `{again}` takes it from there.")
         };
+        let volume = if failed.untouched() {
+            // Step 3c's act refuses before it restores anything.
+            "the restore changed nothing, and the database's volume is as it was"
+        } else {
+            "the database's volume holds a restore that did not finish, and stays restorable"
+        };
         format!(
-            "{failed}\nEverything stays stopped, and the release's CronJobs suspended: the \
-             database's volume holds a restore that did not finish, and stays restorable. \
+            "{failed}\nEverything stays stopped, and the release's CronJobs suspended: {volume}. \
              {next}"
         )
     })?;

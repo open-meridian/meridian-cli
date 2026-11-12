@@ -973,6 +973,14 @@ impl ActFailed {
         })
     }
 
+    /// Whether the act refused before it restored anything, as step 3c's
+    /// says ("the database's volume is as it was").
+    pub fn untouched(&self) -> bool {
+        self.cause
+            .iter()
+            .any(|line| line.contains("the database's volume is as it was"))
+    }
+
     /// The archive's first and last times, as the act names them when it
     /// refuses a time outside it (step 3c: "which holds <first> to
     /// <last>"), each as Postgres writes a time.

@@ -714,7 +714,7 @@ fn the_timeline_recovered_along_is_read_from_the_acts_line() {
 #[tokio::test]
 async fn a_time_outside_the_archive_is_answered_with_its_first_and_last_times() {
     let refusal = refusal_of(
-        None,
+        Some("database-offline: nothing was restored: the database's volume is as it was\n"),
         "2026-11-08 10:00:00+00 is outside the archive, which holds 2026-11-08 09:00:00+00 to \
          2026-11-08 09:30:00.5+00: a restore to a time stops before the first commit after it",
     )
@@ -728,7 +728,13 @@ async fn a_time_outside_the_archive_is_answered_with_its_first_and_last_times() 
         ),
         "{refusal}"
     );
-    assert!(refusal.contains("Everything stays stopped"), "{refusal}");
+    assert!(
+        refusal.contains(
+            "Everything stays stopped, and the release's CronJobs suspended: the restore changed \
+             nothing, and the database's volume is as it was."
+        ),
+        "{refusal}"
+    );
     assert!(!refusal.contains("past the archive's end"), "{refusal}");
     // Before its oldest base backup, the same.
     let refusal = refusal_of(
