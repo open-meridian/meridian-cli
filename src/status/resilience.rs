@@ -9,7 +9,8 @@
 //!   is, from Patroni's own record on its pod. A member on a node that is
 //!   not ready waits for its node and is never force-deleted; that is said.
 //! - **Each store member's probe** (`meridian-<component> probe`, run in its
-//!   pod): its mode, lag and readiness, and its database path's
+//!   pod): its mode, lag and readiness, its zone and the partitions it owns
+//!   or follows (step 3c), and its database path's
 //!   `data_checksums` and `full_page_writes`, the WAL archiver's last
 //!   segment and whether it is failing, and the store's last scrub with its
 //!   unanswered findings, the replica comparison's among them.
@@ -513,6 +514,31 @@ pub fn said(resilience: &Resilience, now_ns: u64, namespace: &str) -> String {
         if let Some(lag) = member["lag_ms"].as_u64() {
             said.push(format!("lag {lag} ms"));
         }
+        // Where it runs, and the partitions it owns as a writer or follows
+        // (step 3c; the spec's section 11): a long list is cut, one line
+        // a member.
+        if let Some(zone) = member["zone"].as_str().filter(|z| !z.is_empty()) {
+            said.push(format!("zone {zone}"));
+        }
+        let partitions: Vec<&str> = member["partitions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        if !partitions.is_empty() {
+            let shown = partitions.len().min(PARTITIONS_SHOWN);
+            let more = partitions.len() - shown;
+            said.push(format!(
+                "partitions {}{}",
+                partitions[..shown].join(" "),
+                if more > 0 {
+                    format!(" and {more} more (--json lists them)")
+                } else {
+                    String::new()
+                }
+            ));
+        }
         if let Some(path) = &probed.database {
             if path["ok"] != true {
                 said.push(format!(
@@ -564,6 +590,9 @@ pub fn said(resilience: &Resilience, now_ns: u64, namespace: &str) -> String {
     }
     out
 }
+
+/// The partitions a member's line names before it says how many more.
+const PARTITIONS_SHOWN: usize = 6;
 
 fn bytes_said(bytes: u64) -> String {
     if bytes < 1024 * 1024 {
@@ -717,7 +746,9 @@ mod tests {
                 { "metadata": { "name": "node-a" }, "status": { "conditions": [ { "type": "Ready", "status": "True" } ] } },
                 { "metadata": { "name": "node-b" }, "status": { "conditions": [ { "type": "Ready", "status": "True" } ] } },
                 { "metadata": { "name": "node-c" }, "status": { "conditions": [ { "type": "Ready", "status": "Unknown" } ] } } ] }),
-            probe: json!({ "component": "lake", "member": { "mode": "writer", "ready": true, "lag_ms": 0 },
+            probe: json!({ "component": "lake", "member": { "mode": "writer", "ready": true, "lag_ms": 0,
+                "zone": "zone-a", "partitions": ["control", "fx:rates", "fx:quotes", "eq:bars", "eq:trades",
+                "eq:quotes", "rates:curves", "crypto:trades"] },
                 "paths": [ { "path": "database", "address": "om-db:5432", "ok": true,
                     "data_checksums": "on", "full_page_writes": "on", "primary": true,
                     "archive": { "last_archived_at": "2026-11-08T10:00:00Z", "seconds_since": 20,
@@ -774,7 +805,10 @@ mod tests {
         );
         assert!(text.contains("internal TLS on"), "{text}");
         assert!(
-            text.contains("om-lake-1  writer, ready, lag 0 ms"),
+            text.contains(
+                "om-lake-1  writer, ready, lag 0 ms, zone zone-a, partitions control fx:rates \
+                 fx:quotes eq:bars eq:trades eq:quotes and 2 more (--json lists them)"
+            ),
             "{text}"
         );
         assert!(text.contains("lake record: last scrub"), "{text}");
