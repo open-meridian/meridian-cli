@@ -388,6 +388,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     let database = database_set(&running_listed);
     let defaults: serde_json::Value =
         serde_yaml::from_str(&super::document(&chart_values)).unwrap_or_default();
+    let chart_has_counts = super::counts::chart_has_counts(&defaults);
     let upgraded_values = std::iter::once(own.clone().unwrap_or_default())
         .chain(given)
         .fold(defaults, |held, over| merged(&held, &over));
@@ -468,6 +469,30 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     if let Some(set) = database.as_ref().filter(|set| set.replicas > 0) {
         findings.extend(checksums_finding(machine, asked, set, &held_pods).await);
     }
+    // The book's partitions and each store's writer groups and databases
+    // (step 3d): a lowering that would strand accounts or data, and a count
+    // changed with the first start on a release that has them, are refused.
+    if chart_has_counts {
+        let counted: serde_json::Value = serde_json::from_str(&running_listed).unwrap_or_default();
+        let runs = super::counts::running(&counted);
+        let wanted = super::counts::wanted(&upgraded_values);
+        let held = match &runs {
+            Some(runs) if runs.has_counts && super::counts::lowers(runs, &wanted) => {
+                partitions_held(machine, asked, &held_pods).await
+            }
+            _ => super::counts::Held::default(),
+        };
+        findings.extend(super::counts::findings(
+            &asked.release,
+            true,
+            runs.as_ref(),
+            &wanted,
+            &held,
+        ));
+        if stopped(&findings) {
+            return refuse(&findings, say);
+        }
+    }
     for finding in &findings {
         say.say(&format!("{finding}"));
     }
@@ -493,6 +518,40 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         // one), as Helm 3's merge let it say: forced, as there.
         force_conflicts: helm_version.is_some_and(|(major, _)| major >= 4),
     }))
+}
+
+/// What the lake's and the book's members say of their partitions, each
+/// from its own probe: asked only when a count that runs would go down.
+async fn partitions_held(
+    machine: &dyn Machine,
+    asked: &Asked,
+    held_pods: &[super::Pod],
+) -> super::counts::Held {
+    let mut held = super::counts::Held::default();
+    for pod in held_pods {
+        let Some(component) = pod.labels.get("meridian.dev/component") else {
+            continue;
+        };
+        let Some((store, _)) = super::counts::store_and_group(component) else {
+            continue;
+        };
+        // An older runtime takes `probe` for nothing and starts a second
+        // copy of the store: never asked of one.
+        if pod.phase != "Running" || pod.terminating || pod.job.is_some() || !pod.probes {
+            continue;
+        }
+        // A group's members run the store's own container and binary.
+        let arguments = crate::probe::exec_arguments(&asked.namespace, &pod.name, store);
+        let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        let said = match machine.run("kubectl", &arguments).await {
+            Ok(said) | Err(Failure::Said(said)) => said,
+            Err(Failure::Missing(_)) => continue,
+        };
+        if let Some(probe) = crate::probe::first_json(&said) {
+            held.read(component, &probe);
+        }
+    }
+    held
 }
 
 /// Whether the brought database has page checksums, from the conductor's

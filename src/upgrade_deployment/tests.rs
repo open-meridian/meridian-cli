@@ -2475,3 +2475,200 @@ async fn with_helm_4_the_charts_counts_are_forced_over_a_scale_another_manager_m
     assert!(!plan.force_conflicts);
     assert!(!helm_arguments(&asked(), &plan).contains(&"--force-conflicts".to_string()));
 }
+
+// ── The counts (step 3d) ─────────────────────────────────────────────────
+
+/// The chart's values from the release that has the counts on.
+const COUNTED_VALUES: &str = "image:\n  repository: ghcr.io/open-meridian/meridian-runtime\n  tag: \"9c5d480\"\nlake:\n  writerGroups: 1\n  databases: 1\nbor:\n  partitions: 1\n  writerGroups: 1\n  databases: 1\n";
+
+/// A store's writer Deployment with what the chart tells it.
+fn store(component: &str, environment: &[(&str, &str)]) -> serde_json::Value {
+    let mut made = deployment(component, "845bd06", 1, 1);
+    made["spec"]["template"]["spec"]["containers"][0]["env"] = environment
+        .iter()
+        .map(|(name, value)| json!({ "name": name, "value": value }))
+        .collect();
+    made
+}
+
+/// A running member whose runtime answers `probe`.
+fn member(name: &str, component: &str) -> serde_json::Value {
+    let mut made = pod(name, component, &format!("{REPO}:845bd06"), 0);
+    made["status"]["phase"] = json!("Running");
+    made["spec"]["containers"][0]["env"] =
+        json!([{ "name": "MERIDIAN_SCRUB_INTERVAL_DAYS", "value": "7" }]);
+    made
+}
+
+const BOOK_PROBE: &str =
+    "kubectl exec -n meridian meridian-bor-0 -c bor -- timeout 30 meridian-bor probe";
+
+fn setting(sets: &[&str]) -> Asked {
+    Asked {
+        sets: sets.iter().map(|set| set.to_string()).collect(),
+        ..asked()
+    }
+}
+
+async fn refused(stand: &Stand, asked: &Asked) -> String {
+    let mut said = Vec::new();
+    let checked = check(stand, asked, &mut |line: &str| said.push(line.to_string())).await;
+    assert!(matches!(checked, Checked::Refused), "{said:?}");
+    assert!(!stand.changed_anything());
+    said.join("\n")
+}
+
+#[tokio::test]
+async fn a_count_set_with_the_first_start_on_its_release_is_refused_upgrade_first() {
+    // A book from before the counts: its Deployment names no partitions.
+    let stand = healthy()
+        .instead(SHOW_VALUES, Ok(COUNTED_VALUES))
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(
+            WORKLOADS,
+            items(vec![store("bor", &[]), store("lake", &[])]),
+        )
+        .json(PODS, items(vec![]));
+    let said = refused(&stand, &setting(&["lake.writerGroups=2"])).await;
+    assert!(
+        said.contains("first start") && said.contains("lake.writerGroups=2"),
+        "{said}"
+    );
+    assert!(
+        said.contains("Upgrade first, then change the count"),
+        "{said}"
+    );
+    assert!(said.contains("Nothing was changed."), "{said}");
+
+    // The same upgrade without the count goes ahead.
+    let mut said = Vec::new();
+    let checked = check(&stand, &asked(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await;
+    assert!(matches!(checked, Checked::Upgrade(_)), "{said:?}");
+}
+
+#[tokio::test]
+async fn fewer_book_partitions_is_refused_naming_each_that_holds_accounts_then_passes() {
+    let stand = healthy()
+        .instead(SHOW_VALUES, Ok(COUNTED_VALUES))
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(
+            WORKLOADS,
+            items(vec![
+                store("bor", &[("MERIDIAN_BOR_PARTITIONS", "3")]),
+                store("lake", &[]),
+            ]),
+        )
+        .json(PODS, items(vec![member("meridian-bor-0", "bor")]))
+        .json(
+            BOOK_PROBE,
+            json!({
+                "component": "bor",
+                "member": { "mode": "writer", "partitions": ["P0", "P1", "P2", "control"] },
+                "partitions": [
+                    { "partition": "P0", "group": 0, "database": 0, "accounts": 4 },
+                    { "partition": "P1", "group": 0, "database": 0, "accounts": 0 },
+                    { "partition": "P2", "group": 0, "database": 0, "accounts": 2 },
+                ],
+            }),
+        );
+    let said = refused(&stand, &setting(&["bor.partitions=1"])).await;
+    assert!(
+        said.contains(
+            "bor.partitions would go from 3 to 1, and P2 (2 accounts) still holds accounts"
+        ),
+        "{said}"
+    );
+    assert!(said.contains("meridian account move"), "{said}");
+
+    // A book whose probe says nothing of what its partitions hold: refused
+    // all the same, and said.
+    let silent = stand.instead(
+        BOOK_PROBE,
+        Ok(r#"{"component":"bor","member":{"mode":"writer","partitions":["P0","P1","P2"]}}"#),
+    );
+    let said = refused(&silent, &setting(&["bor.partitions=1"])).await;
+    assert!(
+        said.contains("what P1, P2 hold could not be read"),
+        "{said}"
+    );
+
+    // Each one going emptied: the upgrade goes ahead, and says so.
+    let emptied = silent.instead(
+        BOOK_PROBE,
+        Ok(&json!({
+            "member": { "mode": "writer", "partitions": ["P0", "P1", "P2", "control"] },
+            "partitions": [
+                { "partition": "P0", "group": 0, "database": 0, "accounts": 6 },
+                { "partition": "P1", "group": 0, "database": 0, "accounts": 0 },
+                { "partition": "P2", "group": 0, "database": 0, "accounts": 0 },
+            ],
+        })
+        .to_string()),
+    );
+    let mut said = Vec::new();
+    let checked = check(
+        &emptied,
+        &setting(&["bor.partitions=1"]),
+        &mut |line: &str| said.push(line.to_string()),
+    )
+    .await;
+    assert!(matches!(checked, Checked::Upgrade(_)), "{said:?}");
+    assert!(
+        said.join("\n")
+            .contains("bor.partitions goes from 3 to 1: P1, P2 hold no accounts"),
+        "{said:?}"
+    );
+}
+
+#[tokio::test]
+async fn fewer_databases_is_refused_while_partitions_hold_data_there() {
+    let stand = healthy()
+        .instead(SHOW_VALUES, Ok(COUNTED_VALUES))
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(
+            WORKLOADS,
+            items(vec![
+                store("bor", &[("MERIDIAN_BOR_PARTITIONS", "1")]),
+                store(
+                    "lake",
+                    &[
+                        ("MERIDIAN_WRITER_GROUPS", "2"),
+                        ("MERIDIAN_LAKE_DATABASES", "2"),
+                    ],
+                ),
+            ]),
+        )
+        .json(
+            PODS,
+            items(vec![
+                member("meridian-lake-0", "lake"),
+                member("meridian-lake-group-1-0", "lake-group-1"),
+            ]),
+        )
+        .json(
+            "kubectl exec -n meridian meridian-lake-0 -c lake -- timeout 30 meridian-lake probe",
+            json!({ "member": { "mode": "writer", "partitions": ["control", "fx:rates"] } }),
+        )
+        // A group's member runs the lake's own container and binary.
+        .json(
+            "kubectl exec -n meridian meridian-lake-group-1-0 -c lake -- timeout 30 meridian-lake probe",
+            json!({ "member": { "mode": "writer", "partitions": ["eq:bars"] } }),
+        );
+    // The deployment's own values keep the two groups; the databases go to 1.
+    let said = refused(
+        &stand,
+        &setting(&["lake.writerGroups=2", "lake.databases=1"]),
+    )
+    .await;
+    assert!(
+        said.contains(
+            "lake.databases would go from 2 to 1, and partitions still hold data in a database \
+             past the new count: eq:bars (database 1)"
+        ),
+        "{said}"
+    );
+    assert!(said.contains("meridian partition move"), "{said}");
+}

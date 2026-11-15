@@ -23,6 +23,7 @@
 //! Ingress's name and the Secret its certificate is in), and where its edge
 //! plugins' archive is (`pluginArchive`), which the upgrade keeps and says so.
 
+pub mod counts;
 pub mod run;
 pub mod watch;
 
