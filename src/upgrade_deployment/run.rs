@@ -469,11 +469,17 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     if let Some(set) = database.as_ref().filter(|set| set.replicas > 0) {
         findings.extend(checksums_finding(machine, asked, set, &held_pods).await);
     }
+    let counted: serde_json::Value = serde_json::from_str(&running_listed).unwrap_or_default();
+    // Leaving every standby behind while a plugin runs with shards or a
+    // standby pod (step 3d): refused, naming them.
+    if let Some(stops) = super::shards::finding(&counted, &upgraded_values) {
+        findings.push(stops);
+        return refuse(&findings, say);
+    }
     // The book's partitions and each store's writer groups and databases
     // (step 3d): a lowering that would strand accounts or data, and a count
     // changed with the first start on a release that has them, are refused.
     if chart_has_counts {
-        let counted: serde_json::Value = serde_json::from_str(&running_listed).unwrap_or_default();
         let runs = super::counts::running(&counted);
         let wanted = super::counts::wanted(&upgraded_values);
         let held = match &runs {

@@ -196,6 +196,9 @@ pub struct Component {
     pub images: Vec<String>,
     pub ready: u64,
     pub wanted: u64,
+    /// A plugin's standby pods (step 3d): its replicas past its shards,
+    /// which wait and are never counted as wanted or missing.
+    pub standbys: u64,
     pub restarts: u64,
     /// The last restart's reason and when it ended, where one is known.
     pub last_reason: String,
@@ -396,6 +399,13 @@ pub fn components(
         if let Some((reason, at)) = last {
             component.last_reason = reason;
             component.last_at = at;
+        }
+        // A plugin's shards are what it wants ready; its replicas past them
+        // stand by (step 3d).
+        if let Some((shards, standbys)) = crate::upgrade_deployment::shards::shape(workload) {
+            component.wanted = shards;
+            component.ready = component.ready.min(shards);
+            component.standbys = standbys;
         }
         if name == SIDECAR {
             component.instance = labels["meridian.dev/instance"].as_str().map(String::from);
@@ -858,10 +868,14 @@ pub fn said(status: &Status, now_ns: u64, namespace: &str) -> String {
         .unwrap_or(0);
     for c in &status.plugins {
         out.push_str(&format!(
-            "  {:width$}  {}/{} ready  {}  {}  {}{}\n",
+            "  {:width$}  {}/{} ready{}  {}  {}  {}{}\n",
             named(c),
             c.ready,
             c.wanted,
+            match c.standbys {
+                0 => String::new(),
+                n => format!(", {n} standby"),
+            },
             restarts_said(c),
             memory_said(c),
             c.plugin_image
@@ -926,6 +940,7 @@ fn component_json(c: &Component) -> serde_json::Value {
         said["instance_id"] = instance.clone().into();
         said["plugin_image"] = c.plugin_image.clone().into();
         said["launched"] = c.launched.into();
+        said["standbys"] = c.standbys.into();
     }
     said
 }

@@ -32,6 +32,12 @@ an older one each says so and changes nothing.
   stores' probes; where a probe does not say, a lowering is refused and says it could not be read.
 - `meridian status` probes the members of each writer group past the first too
   (`<store>-group-<g>`), so each group's writer, its lag and its partitions are shown.
+- `meridian upgrade-deployment` refuses an upgrade that leaves no store or conductor with a
+  standby (`resilience.profile` to tolerant, or the last `standby` to 0) while a plugin instance
+  runs with several shards or a standby pod, naming each: their leases are taken under the
+  members' account, which that upgrade removes. Stop them or relaunch them unsharded first.
+- `meridian status` counts a plugin's shards as what it wants ready, and its pods past them as
+  standbys: `2/2 ready, 1 standby`. `--json` adds `standbys`.
 
 ## 0.1.60
 

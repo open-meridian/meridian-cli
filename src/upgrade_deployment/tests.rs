@@ -2672,3 +2672,37 @@ async fn fewer_databases_is_refused_while_partitions_hold_data_there() {
     );
     assert!(said.contains("meridian partition move"), "{said}");
 }
+
+// ── Plugin shards against the deployment's standbys (step 3d) ────────────
+
+#[tokio::test]
+async fn leaving_ha_is_refused_while_a_plugin_runs_with_shards_or_a_standby() {
+    let mut lake = store("lake", &[("MERIDIAN_LEASE_NAME", "meridian-lake")]);
+    lake["spec"]["replicas"] = json!(2);
+    let mut tiingo = store("sidecar", &[("MERIDIAN_PLUGIN_SHARDS", "2")]);
+    tiingo["metadata"]["name"] = json!("meridian-plugin-tiingo");
+    tiingo["metadata"]["labels"]["meridian.dev/instance"] = json!("tiingo");
+    tiingo["spec"]["replicas"] = json!(3);
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(OWN_VALUES, json!({ "resilience": { "profile": "ha" } }))
+        .json(WORKLOADS, items(vec![lake, tiingo]))
+        .json(PODS, items(vec![]));
+    let stand = stand.instead(OWN_VALUES, Ok(r#"{"resilience":{"profile":"ha"}}"#));
+    let said = refused(&stand, &setting(&["resilience.profile=tolerant"])).await;
+    assert!(
+        said.contains("1 plugin instance still runs with them: tiingo (2 shards, a standby pod)"),
+        "{said}"
+    );
+    assert!(
+        said.contains("Stop them or relaunch them unsharded first"),
+        "{said}"
+    );
+    // Staying ha, the upgrade goes ahead.
+    let mut said = Vec::new();
+    let checked = check(&stand, &asked(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await;
+    assert!(matches!(checked, Checked::Upgrade(_)), "{said:?}");
+}

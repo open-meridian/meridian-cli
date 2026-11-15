@@ -425,6 +425,13 @@ What runs is read from the workloads' own settings and what each partition
 holds from the stores' probes; where a probe does not say, a lowering is
 refused and says it could not be read.
 
+**Leaving every standby behind.** An upgrade that leaves none of the lake, the
+book, the instrument store, the street store and the conductor with a standby
+(`resilience.profile=tolerant`, or the last `standby` set to 0) is refused
+while a plugin instance runs with several shards or a standby pod, naming
+each: their leases are taken under the members' account, which that upgrade
+removes. Stop them or relaunch them unsharded first.
+
 Where it stops, it says what to run next in `meridian` commands alone: `meridian
 status` for the release's state and Helm's own words, `meridian logs migrate` for
 a migration's log, `meridian logs <component> --previous` for why a container

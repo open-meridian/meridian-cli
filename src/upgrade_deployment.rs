@@ -25,6 +25,7 @@
 
 pub mod counts;
 pub mod run;
+pub mod shards;
 pub mod watch;
 
 use std::collections::{BTreeMap, BTreeSet};

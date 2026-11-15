@@ -687,3 +687,44 @@ async fn where_a_nodes_cadvisor_is_refused_the_metrics_apis_figure_is_said_as_th
     assert_eq!(json_of(&held)["memory_read"], "metrics-api");
     assert_eq!(json_of(&held)["metrics"], true);
 }
+
+#[tokio::test]
+async fn a_sharded_plugin_wants_its_shards_ready_and_its_other_pods_stand_by() {
+    // Step 3d: two shards and a standby pod are three replicas, all ready.
+    let mut sharded = sidecar("tiingo", "localhost:5000/plugins/tiingo@sha256:aa01");
+    sharded["spec"]["replicas"] = serde_json::json!(3);
+    sharded["status"]["readyReplicas"] = serde_json::json!(3);
+    sharded["spec"]["template"]["spec"]["containers"][0]["env"] =
+        serde_json::json!([{"name": "MERIDIAN_PLUGIN_SHARDS", "value": "2"}]);
+    // One that says its count and has no pod past it, and one from before.
+    let mut single = sidecar("oanda", "localhost:5000/plugins/oanda@sha256:bb02");
+    single["spec"]["template"]["spec"]["containers"][0]["env"] =
+        serde_json::json!([{"name": "MERIDIAN_PLUGIN_SHARDS", "value": "1"}]);
+    let older = sidecar("snaptrade", "localhost:5000/plugins/snaptrade@sha256:915f");
+    let found = components(
+        &serde_json::json!({ "items": [sharded, single, older] }),
+        &serde_json::json!({ "items": [] }),
+        &BTreeMap::new(),
+    );
+    let shape: Vec<(u64, u64, u64)> = found
+        .iter()
+        .map(|c| (c.ready, c.wanted, c.standbys))
+        .collect();
+    assert_eq!(shape, [(1, 1, 0), (1, 1, 0), (2, 2, 1)]);
+
+    let mut held = status(&Fake::new(), &asked()).await.unwrap();
+    held.plugins = found;
+    let said = said(&held, 0, "meridian");
+    assert!(
+        said.contains("  tiingo     2/2 ready, 1 standby  no restarts"),
+        "{said}"
+    );
+    assert!(
+        said.contains("  oanda      1/1 ready  no restarts"),
+        "{said}"
+    );
+    let json = json_of(&held);
+    assert_eq!(json["plugins"][2]["wanted"], 2);
+    assert_eq!(json["plugins"][2]["standbys"], 1);
+    assert_eq!(json["plugins"][0]["standbys"], 0);
+}
