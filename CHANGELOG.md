@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+Step 3d. These need a deployment whose core carries step 3d's terminal routes and probe; against
+an older one each says so and changes nothing.
+
+- `meridian partition split <partition> --reason <why>` halves a lake range at its midpoint, and
+  prints the split's record: the range closed, its two halves, who and when.
+- `meridian partition move <partition> --to-group <n> --reason <why>` moves a lake range or a book
+  partition (`P0`, `P1`, ...) to another writer group, online. The deployment answers at once that
+  it has begun; the command then follows the Resilience history until the move's record shows,
+  moved or not switched with its cause (lag, timeout, digest), for `--timeout` (2m by default).
+  `--no-wait` answers once it has begun. A move still under way when the time runs out is left to
+  finish, and said.
+- `meridian account move <account> --to-partition <partition> --reason <why>` continues an account
+  in another book partition, online, and prints its record.
+- Each of the three is a deployment admin's, through the session `meridian connect` keeps, as the
+  Resilience page's dialogs and the dashboard's tools make them. A refusal comes through in the
+  deployment's words; one that names a wait (a rollout in progress, the target lagging, a switch
+  out of time) says nothing was changed and when to ask again. `--json` prints the deployment's
+  answer, a refusal with its `retry_after_seconds`. Exit 0 done or begun, 1 refused or not
+  switched, 2 asked wrongly, 3 without a session.
+- `meridian upgrade-deployment` checks the counts before it changes anything:
+  - a lower `bor.partitions` is refused while a partition past the new count holds accounts,
+    naming each one and its accounts;
+  - a lower `lake.databases` or `bor.databases` is refused while partitions hold data in a
+    database past the new count, naming them;
+  - `writerGroups` or `databases` changed in the same upgrade as the deployment's first start on
+    a release that has them is refused: upgrade first, then change the count.
+  What runs is read from the workloads' own settings, and what each partition holds from the
+  stores' probes; where a probe does not say, a lowering is refused and says it could not be read.
+
 ## 0.1.60
 
 - `meridian restore --to-time` follows the timeline that held the time. Each restore starts a

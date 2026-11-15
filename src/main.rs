@@ -20,6 +20,7 @@ mod install;
 mod live;
 mod machine;
 mod migrate;
+mod moves;
 mod offline;
 mod pack;
 mod plugin;
@@ -134,6 +135,15 @@ meridian -- bringing a Meridian deployment up
                              archiver, the replica comparison and internal TLS; each
                              store member's mode, lag and last scrub with its
                              findings; and the book's health per account
+  meridian partition split <partition> --reason <why>
+                             halve a lake range at its midpoint: the range closes and
+                             its two halves continue, with its writer group
+  meridian partition move <partition> --to-group <n> --reason <why>
+                             move a lake range or a book partition (P0, P1, ...) to
+                             another writer group, online; followed until it has
+                             moved, or not switched and why
+  meridian account move <account> --to-partition <partition> --reason <why>
+                             continue an account in another book partition, online
   meridian logs <component>  what a component printed: core's, a plugin's by its instance,
                              or a Job's (migrate, key, first-run, backup), its newest run;
                              --since 10m for the last ten minutes, --previous for what
@@ -406,6 +416,26 @@ what it will do and asks
       --yes                 upgrade without being asked. For a script that has read
                             what it will do
 
+partition split, partition move, account move: a deployment admin's, through the session
+meridian connect keeps (--deployment names one), as the Resilience page's dialogs make
+them. Each is refused while a move or a split of the same partition is under way. A
+refusal that names a wait (a rollout in progress, the target lagging, a switch out of
+time) changed nothing, and says when to ask again. Exits 0 when done or begun, 1 when
+refused or not switched, 2 when asked wrongly, 3 without a session
+      --reason <why>        required: kept with the act's record, at most 2,000
+                            characters
+      --to-group <n>        partition move: the writer group to move it to, numbered
+                            from 0, below the store's writerGroups
+      --to-partition <partition>
+                            account move: the book partition it continues in (P0,
+                            P1, ...), other than its own
+      --no-wait             partition move: answer once it has begun, without
+                            following it to its record
+      --timeout <d>         partition move: how long to follow it (default: 2m). A
+                            move still under way then is left to finish, and said
+      --json                the deployment's answer, one JSON object on stdout; for
+                            partition move with its outcome (moved, aborted, moving)
+
 rollback-deployment: checks first, and changes nothing if a check fails; then shows the
 revision it returns to and asks. Then waits as upgrade-deployment does
       --release <name>      the Helm release (default: meridian)
@@ -485,9 +515,12 @@ connect:
 /// section of flags naming it, and the flags both take; the whole of the
 /// usage for a command it does not know.
 fn help_for(command: &str, words: &[String]) -> String {
-    let with_sub = matches!(command, "plugin" | "backup" | "authority")
-        .then(|| words.first().map(|sub| format!("{command} {sub}")))
-        .flatten();
+    let with_sub = matches!(
+        command,
+        "plugin" | "backup" | "authority" | "partition" | "account"
+    )
+    .then(|| words.first().map(|sub| format!("{command} {sub}")))
+    .flatten();
     let named = with_sub.clone().unwrap_or_else(|| command.to_string());
     if command.is_empty() || matches!(command, "help" | "-h" | "--help") {
         return USAGE.to_string();
@@ -569,7 +602,9 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 42] = [
+const TAKES_A_VALUE: [&str; 44] = [
+    "--to-group",
+    "--to-partition",
     "--to-revision",
     "--set",
     "--to-time",
@@ -656,7 +691,15 @@ fn parse(said: Vec<String>) -> Result<Arguments, String> {
             // rather than ignored, as it always was.
             if matches!(
                 command.as_str(),
-                "plugin" | "connect" | "sign-out" | "authority" | "backup" | "restore" | "logs"
+                "plugin"
+                    | "connect"
+                    | "sign-out"
+                    | "authority"
+                    | "backup"
+                    | "restore"
+                    | "logs"
+                    | "partition"
+                    | "account"
             ) {
                 words.push(argument);
                 continue;
@@ -689,7 +732,10 @@ fn parse(said: Vec<String>) -> Result<Arguments, String> {
             flags.push((argument, value));
             continue;
         }
-        if !SWITCHES.contains(&argument.as_str()) {
+        // `partition move --no-wait` answers once the move has begun;
+        // nothing else has a wait to skip.
+        let no_wait = argument == "--no-wait" && command == "partition";
+        if !no_wait && !SWITCHES.contains(&argument.as_str()) {
             return Err(format!("{argument} is not an option this takes"));
         }
         switches.push(argument);
@@ -791,6 +837,7 @@ async fn main() {
         "authority" => std::process::exit(authority_command(&arguments)),
         "backup" => std::process::exit(backup_command(&arguments, &intended.namespace).await),
         "status" => std::process::exit(status_command(&arguments, &intended.namespace).await),
+        "partition" | "account" => std::process::exit(moves_command(&arguments).await),
         "logs" => std::process::exit(logs_command(&arguments, &intended.namespace).await),
         "restore" => match (
             arguments.value("--to-time", "--to-time"),
@@ -2544,6 +2591,162 @@ async fn download_command(arguments: &Arguments, words: &[&str], platform: &str)
     }
 }
 
+// ── partition split, partition move, account move (step 3d) ──────────────
+
+/// `meridian partition split|move` and `meridian account move`: the three
+/// acts on a store's partitions, through the dashboard's terminal.
+async fn moves_command(arguments: &Arguments) -> i32 {
+    let words: Vec<&str> = arguments.words.iter().map(String::as_str).collect();
+    let (named, subject) = match (arguments.command.as_str(), words.as_slice()) {
+        ("partition", ["split", partition]) => ("partition split", *partition),
+        ("partition", ["move", partition]) => ("partition move", *partition),
+        ("account", ["move", account]) => ("account move", *account),
+        ("partition", _) => {
+            eprintln!(
+                "meridian partition: takes `split <partition>` or `move <partition>`\n\n{}",
+                help_for("partition", &[])
+            );
+            return 2;
+        }
+        _ => {
+            eprintln!(
+                "meridian account: takes `move <account>`\n\n{}",
+                help_for("account", &[])
+            );
+            return 2;
+        }
+    };
+    let asked_wrongly = |why: String| {
+        eprintln!("meridian {named}: {why}");
+        2
+    };
+    let reason = match moves::reason(arguments.value("--reason", "--reason")) {
+        Ok(reason) => reason,
+        Err(refused) => return asked_wrongly(refused),
+    };
+    let target_group = match (named, arguments.value("--to-group", "--to-group")) {
+        ("partition move", Some(said)) => match said.trim().parse::<u32>() {
+            Ok(group) => group,
+            Err(_) => {
+                return asked_wrongly(format!(
+                    "--to-group is a writer group's number, from 0; {said} is not one"
+                ))
+            }
+        },
+        ("partition move", None) => {
+            return asked_wrongly(
+                "--to-group <n> is required: the writer group to move it to".into(),
+            )
+        }
+        (_, Some(_)) => return asked_wrongly("--to-group is partition move's".into()),
+        (_, None) => 0,
+    };
+    let target_partition = match (named, arguments.value("--to-partition", "--to-partition")) {
+        ("account move", Some(said)) if !said.trim().is_empty() => said.trim(),
+        ("account move", _) => {
+            return asked_wrongly(
+                "--to-partition <partition> is required: the book partition it continues in".into(),
+            )
+        }
+        (_, Some(_)) => return asked_wrongly("--to-partition is account move's".into()),
+        (_, None) => "",
+    };
+    let within = match arguments.value("--timeout", "--timeout") {
+        None => std::time::Duration::from_secs(120),
+        Some(said) => match upgrade_deployment::duration(said) {
+            Some(within) => within,
+            None => {
+                return asked_wrongly(format!(
+                    "--timeout is a duration, as 90s or 5m; {said} is not one"
+                ))
+            }
+        },
+    };
+    let json = arguments.set("--json");
+    let failed = |failed: moves::Failed| {
+        if json {
+            println!("{}", failed.json());
+        }
+        eprintln!("meridian {named}: {}", failed.said());
+        failed.code()
+    };
+    let held = match held_session(arguments) {
+        Ok(held) => held,
+        Err(refusal) => return failed(moves::Failed::Session(refusal)),
+    };
+    let address = held.address().to_string();
+    match named {
+        "partition split" => match moves::split(&address, &held, subject, reason).await {
+            Ok(answer) if json => {
+                println!("{answer}");
+                0
+            }
+            Ok(answer) => {
+                print!("{}", moves::split_text(&answer));
+                0
+            }
+            Err(refused) => failed(refused),
+        },
+        "account move" => {
+            match moves::move_account(&address, &held, subject, target_partition, reason).await {
+                Ok(answer) if json => {
+                    println!("{answer}");
+                    0
+                }
+                Ok(answer) => {
+                    print!("{}", moves::account_text(&answer));
+                    0
+                }
+                Err(refused) => failed(refused),
+            }
+        }
+        _ => {
+            let answer =
+                match moves::move_partition(&address, &held, subject, target_group, reason).await {
+                    Ok(answer) => answer,
+                    Err(refused) => return failed(refused),
+                };
+            let moving = moves::Moving::begun(subject, target_group, &answer);
+            if !json {
+                print!("{}", moves::begun_text(&moving));
+            }
+            if arguments.set("--no-wait") {
+                if json {
+                    println!("{}", moves::move_json(&answer, None));
+                }
+                return 0;
+            }
+            eprintln!(
+                "Following it in {address}'s Resilience history, for up to {} s...",
+                within.as_secs()
+            );
+            let following = moves::Following {
+                every: std::time::Duration::from_secs(2),
+                within,
+            };
+            // The move has begun whatever the read says: a read refused is
+            // said, and the move is left to finish.
+            let stands = match moves::follow(&address, &held, &moving, following).await {
+                Ok(stands) => stands,
+                Err(unread) => {
+                    eprintln!(
+                        "meridian {named}: the move has begun, and its record could not be \
+                         read: {}",
+                        unread.said()
+                    );
+                    moves::Stands::Moving
+                }
+            };
+            if json {
+                println!("{}", moves::move_json(&answer, Some(&stands)));
+            } else {
+                print!("{}", moves::stands_text(&stands, within));
+            }
+            i32::from(matches!(stands, moves::Stands::Aborted(_)))
+        }
+    }
+}
+
 // ── status and logs (item 122) ───────────────────────────────────────────
 
 async fn status_command(arguments: &Arguments, namespace: &str) -> i32 {
@@ -3826,6 +4029,59 @@ mod tests {
             assert!(help.contains(line), "{line}: {help}");
         }
         assert!(!help.contains("plugin install --pack"), "{help}");
+    }
+
+    #[test]
+    fn the_moves_and_the_split_parse_and_say_their_help() {
+        // Step 3d: the names approved 2026-11-12.
+        let split = parse(said("partition split eq:bars --reason hot")).unwrap();
+        assert_eq!(split.command, "partition");
+        assert_eq!(split.words, ["split", "eq:bars"]);
+        assert_eq!(split.value("--reason", "--reason"), Some("hot"));
+        let moved = parse(said(
+            "partition move eq:bars/00000000-7fffffff --to-group 1 --reason spread --no-wait \
+             --timeout 5m --json",
+        ))
+        .unwrap();
+        assert_eq!(moved.words, ["move", "eq:bars/00000000-7fffffff"]);
+        assert_eq!(moved.value("--to-group", "--to-group"), Some("1"));
+        assert_eq!(moved.value("--timeout", "--timeout"), Some("5m"));
+        assert!(moved.set("--no-wait") && moved.set("--json"));
+        let account = parse(said(
+            "account move ACC-7 --to-partition P2 --reason together --deployment https://d.example",
+        ))
+        .unwrap();
+        assert_eq!(account.command, "account");
+        assert_eq!(account.words, ["move", "ACC-7"]);
+        assert_eq!(
+            account.value("--to-partition", "--to-partition"),
+            Some("P2")
+        );
+        // Nothing else has a wait to skip.
+        assert!(parse(said("account move ACC-7 --no-wait")).is_err());
+
+        let help = help_for("partition", &["move".to_string()]);
+        for line in [
+            "meridian partition move <partition> --to-group <n> --reason <why>",
+            "--to-group <n>        partition move: the writer group",
+            "--no-wait             partition move: answer once it has begun",
+            "says when to ask again",
+        ] {
+            assert!(help.contains(line), "{line}: {help}");
+        }
+        assert!(!help.contains("meridian partition split"), "{help}");
+        let help = help_for("account", &["move".to_string()]);
+        assert!(
+            help.contains("meridian account move <account> --to-partition <partition>")
+                && help.contains("--to-partition <partition>"),
+            "{help}"
+        );
+        let help = help_for("partition", &[]);
+        assert!(
+            help.contains("meridian partition split <partition> --reason <why>")
+                && help.contains("meridian partition move"),
+            "{help}"
+        );
     }
 
     #[test]

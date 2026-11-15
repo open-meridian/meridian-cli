@@ -19,6 +19,9 @@ meridian upgrade-deployment --enable-checksums  # turn on page checksums in the 
 meridian backup              # back up now; restore <file> brings a backup back
 meridian restore --to-time <time>  # restore the running database to a time, from its WAL archive
 meridian status              # the release, each component and plugin, the database, the book's health
+meridian partition move <partition> --to-group <n> --reason <why>  # move a partition to another writer group, online
+meridian partition split <partition> --reason <why>  # halve a lake range
+meridian account move <account> --to-partition <partition> --reason <why>  # continue an account in another book partition
 meridian connect [<address>] # sign in to a deployment (default: the local one), and keep the session
 meridian sign-out            # end that session, here and at the deployment
 meridian plugin new <name>   # start a plugin from the SDK's reference plugin; --role connectivity, custody, data, operations, pricing or reporting
@@ -402,6 +405,25 @@ deployment's own values, which `--reset-then-reuse-values` applies again, so
 the archive is kept and the plan says so: `Its archive, /mnt/nas/meridian-archive
 on the cluster's node, is kept`. The same steps from a firm's own pipeline
 -- plain Helm, Flux or Argo CD -- are in the docs' *Upgrade a deployment*.
+
+**The counts.** The book's partitions (`bor.partitions`) and each store's
+writer groups and databases (`lake.writerGroups`, `lake.databases`,
+`bor.writerGroups`, `bor.databases`) are raised with `--set` or `-f`, and the
+deployment moves what has to move, online. Three changes are refused among the
+checks, with nothing changed:
+
+- a lower `bor.partitions` while a partition past the new count holds
+  accounts, naming each one: an account moves only by `meridian account move`;
+- a lower `lake.databases` or `bor.databases` while partitions hold data in a
+  database past the new count, naming them: move each with `meridian partition
+  move`, or lower the store's `writerGroups` first and let its partitions move;
+- `writerGroups` or `databases` changed in the same upgrade as the
+  deployment's first start on a release that has them: upgrade first, then
+  change the count.
+
+What runs is read from the workloads' own settings and what each partition
+holds from the stores' probes; where a probe does not say, a lowering is
+refused and says it could not be read.
 
 Where it stops, it says what to run next in `meridian` commands alone: `meridian
 status` for the release's state and Helm's own words, `meridian logs migrate` for
@@ -960,6 +982,42 @@ deployment's own answer (core's `ReadBookHealthFromTerminal`, on the session
 `meridian connect` keeps); nothing is changed, and a deployment admin never
 runs kubectl or helm by hand. `meridian <command> --help` prints that
 command's own flags.
+
+## Moving partitions and accounts
+
+```
+meridian partition move eq:bars --to-group 1 --reason "group 0 is near its ceiling"
+meridian partition move P3 --to-group 0 --reason "before lowering bor.writerGroups"
+meridian partition split eq:bars --reason "half the lake's writes"
+meridian account move ACC-7 --to-partition P2 --reason "the fund's accounts together"
+```
+
+A deployment admin's three acts on a store's partitions, on the session
+`meridian connect` keeps (`--deployment` names one), as the Resilience page's
+dialogs and the dashboard's tools make them. Each takes `--reason`, kept with
+its record.
+
+- **`partition move`** moves a lake range (a dataset's ID, or
+  `<dataset>/<lo>-<hi>` once split) or a book partition (`P0`, `P1`, ...) to
+  another writer group. The deployment answers at once that it has begun; the
+  command then follows the Resilience history until the move's record shows:
+  moved, or not switched with its cause (the target still lagging, the switch
+  out of time, the two digests differing), the source still owning it. It
+  follows for `--timeout` (2m by default); a move still under way then is left
+  to finish, and said. `--no-wait` answers once it has begun.
+- **`partition split`** halves a lake range at its midpoint, and prints the
+  split's record: the range closed and its two halves, which stay with its
+  writer group.
+- **`account move`** continues an account in another book partition, and
+  prints its record: its positions, lots and orders read as before.
+
+Each is refused while a move or a split of the same partition is under way.
+A refusal comes through in the deployment's words; one that names a wait (a
+rollout in progress, the target lagging, a switch out of time) changed
+nothing, and says when to ask again. `--json` prints the deployment's answer,
+for `partition move` with its `outcome` (`moved`, `aborted`, `moving`), and a
+refusal with its `retry_after_seconds`. Exit 0 when done or begun, 1 when
+refused or not switched, 2 when asked wrongly, 3 without a session.
 
 ## Moving a plugin to a newer SDK
 
