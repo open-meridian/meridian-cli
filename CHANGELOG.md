@@ -30,6 +30,8 @@ an older one each says so and changes nothing.
     a release that has them is refused: upgrade first, then change the count.
   What runs is read from the workloads' own settings, and what each partition holds from the
   stores' probes; where a probe does not say, a lowering is refused and says it could not be read.
+- `meridian status` probes the members of each writer group past the first too
+  (`<store>-group-<g>`), so each group's writer, its lag and its partitions are shown.
 
 ## 0.1.60
 

@@ -203,7 +203,11 @@ pub async fn read(
             .as_str()
             .unwrap_or_default();
         let name = pod["metadata"]["name"].as_str().unwrap_or_default();
-        if !crate::probe::PROBED.contains(&component)
+        // A writer group past the first is `<store>-group-<g>` (step 3d),
+        // running the store's own container and binary.
+        let container = crate::upgrade_deployment::counts::store_and_group(component)
+            .map_or(component, |(store, _)| store);
+        if !crate::probe::PROBED.contains(&container)
             || pod["status"]["phase"] != "Running"
             || !pod["metadata"]["deletionTimestamp"].is_null()
             || !pod["metadata"]["ownerReferences"]
@@ -226,7 +230,7 @@ pub async fn read(
             });
             continue;
         }
-        let arguments = crate::probe::exec_arguments(ns, name, component);
+        let arguments = crate::probe::exec_arguments(ns, name, container);
         let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
         let said = cluster.kubectl_printed(&arguments).await;
         let probe = said.as_deref().ok().and_then(crate::probe::first_json);
@@ -769,6 +773,23 @@ mod tests {
             release: "om".into(),
             namespace: "om".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn a_writer_groups_members_are_probed_in_their_stores_container() {
+        let mut fake = ha();
+        let mut grouped = store("om-lake-group-1-0", "lake-group-1");
+        grouped["spec"]["containers"][0]["name"] = json!("lake");
+        fake.pods["items"].as_array_mut().unwrap().push(grouped);
+        let found = read(&fake, &asked(), &fake.workloads, &fake.pods).await;
+        let probed: Vec<&str> = found.probes.iter().map(|p| p.pod.as_str()).collect();
+        assert!(probed.contains(&"om-lake-group-1-0"), "{probed:?}");
+        assert!(
+            fake.asked.lock().unwrap().iter().any(|asked| asked
+                == "exec -n om om-lake-group-1-0 -c lake -- timeout 30 meridian-lake probe"),
+            "{:?}",
+            fake.asked.lock().unwrap()
+        );
     }
 
     #[tokio::test]
