@@ -38,6 +38,9 @@ an older one each says so and changes nothing.
   members' account, which that upgrade removes. Stop them or relaunch them unsharded first.
 - `meridian status` counts a plugin's shards as what it wants ready, and its pods past them as
   standbys: `2/2 ready, 1 standby`. `--json` adds `standbys`.
+- `meridian upgrade-deployment` counts a plugin as rolled out when its shards are ready and every
+  one of its pods is on the new template: a standby pod, which waits unready by design, no longer
+  keeps the upgrade from finishing.
 
 ## 0.1.60
 

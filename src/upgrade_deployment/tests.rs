@@ -2706,3 +2706,37 @@ async fn leaving_ha_is_refused_while_a_plugin_runs_with_shards_or_a_standby() {
     .await;
     assert!(matches!(checked, Checked::Upgrade(_)), "{said:?}");
 }
+
+#[test]
+fn a_plugins_standby_pod_is_excused_from_readiness_never_from_the_new_template() {
+    // Two shards and a standby pod: three replicas, the standby never ready.
+    let sharded = |updated: u64, ready: u64, held: u64| {
+        let mut made = store("sidecar", &[("MERIDIAN_PLUGIN_SHARDS", "2")]);
+        made["spec"]["replicas"] = json!(3);
+        made["status"] = json!({ "observedGeneration": 2, "replicas": held,
+            "updatedReplicas": updated, "readyReplicas": ready, "availableReplicas": ready });
+        workloads(&items(vec![made]).to_string()).remove(0)
+    };
+    // Its two shards ready, every pod on the new template: rolled out.
+    let done = sharded(3, 2, 3);
+    assert_eq!(done.unfinished, None);
+    assert_eq!((done.ready, done.wanted), (2, 2));
+    // A shard not ready yet is waited for, counted against its shards.
+    assert_eq!(sharded(3, 1, 3).unfinished.as_deref(), Some("1 of 2 ready"));
+    // The standby still on the old template is waited for too.
+    assert_eq!(
+        sharded(2, 2, 3).unfinished.as_deref(),
+        Some("2 of 3 on the new template")
+    );
+    // An old pod not yet gone.
+    assert_eq!(
+        sharded(3, 2, 4).unfinished.as_deref(),
+        Some("old pods are still being replaced")
+    );
+    // A workload that says no shard count waits for every replica, as ever.
+    let mut plain = deployment("dashboard", "9c5d480", 2, 3);
+    plain["spec"]["replicas"] = json!(3);
+    plain["status"]["replicas"] = json!(3);
+    let plain = workloads(&items(vec![plain]).to_string()).remove(0);
+    assert_eq!(plain.unfinished.as_deref(), Some("2 of 3 ready"));
+}
