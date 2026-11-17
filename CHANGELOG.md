@@ -41,6 +41,20 @@ an older one each says so and changes nothing.
 - `meridian upgrade-deployment` counts a plugin as rolled out when its shards are ready and every
   one of its pods is on the new template: a standby pod, which waits unready by design, no longer
   keeps the upgrade from finishing.
+- `meridian up --shared-storage-class <class>` names the ReadWriteMany storage class a plugin's
+  shards and standby pod share its storage through on several nodes, the chart's
+  `pluginStorage.shared.storageClassName`. A class the cluster does not have, or one a values
+  file names too, is refused before anything is installed, naming the value.
+- A launch the deployment refuses comes through in the deployment's own words: the bus's framing
+  of a refusal (`[refusal-status ...]`) is no longer printed before them.
+- `meridian plugin list` says, under a launch whose plugin's storage was copied into its shared
+  storage, what the Plugins page says: `Its storage was copied from {old} into {shared}, folder
+  shard-0/, on {date}. The old claim is kept.` `plugin launch` says it too once it is recorded.
+- `meridian doctor` says, where plugins run: each that keeps storage and cannot take a standby
+  (several nodes, no `pluginStorage.shared.storageClassName`); each running with shards or a
+  standby pod and allowed a bucket archive, with the account `<namespace>/<fullname>-shards-<instance>`
+  its bucket must trust and the cloud's step; and each such plugin's shards' epoch and last
+  takeover, from the Resilience history on the session `meridian connect` keeps.
 
 ## 0.1.60
 

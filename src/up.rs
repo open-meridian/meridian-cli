@@ -52,6 +52,79 @@ pub struct Install {
     /// flag, the params file, a values file, or the answer to `up`'s
     /// question.
     pub archive: Option<Archive>,
+    /// The ReadWriteMany storage class an instance's pods share its storage
+    /// through on several nodes (step 3d, checkpoint 5, item 30): the chart's
+    /// `pluginStorage.shared.storageClassName`. None leaves the chart's,
+    /// which offers none.
+    pub shared_storage_class: Option<String>,
+}
+
+/// The chart value `--shared-storage-class` sets, which every refusal of it
+/// names.
+pub const SHARED_STORAGE_VALUE: &str = "pluginStorage.shared.storageClassName";
+
+/// `--shared-storage-class <class>`, checked before anything is installed:
+/// a storage class's name, as Kubernetes names one.
+pub fn shared_storage_class(given: Option<&str>) -> Result<Option<String>, String> {
+    let Some(given) = given else {
+        return Ok(None);
+    };
+    let class = given.trim();
+    let named = (1..=253).contains(&class.len())
+        && class.split('.').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                && !part.starts_with('-')
+                && !part.ends_with('-')
+        });
+    match named {
+        true => Ok(Some(class.to_string())),
+        false => Err(format!(
+            "--shared-storage-class is `{given}`, which is not a storage class's name \
+             ({SHARED_STORAGE_VALUE}): a ReadWriteMany class in this cluster, as \
+             `kubectl get storageclass` lists them"
+        )),
+    }
+}
+
+/// Whether a values document names the shared storage's class itself.
+pub fn names_a_shared_storage_class(values: &str) -> bool {
+    let values: serde_json::Value = serde_yaml::from_str(values).unwrap_or_default();
+    values["pluginStorage"]["shared"]
+        .get("storageClassName")
+        .is_some()
+}
+
+/// The flag and a values file both naming the class is refused, so neither is
+/// quietly dropped.
+pub fn shared_storage_settled(flag: Option<&str>, in_values: Option<&str>) -> Result<(), String> {
+    match (flag, in_values) {
+        (Some(class), Some(file)) => Err(format!(
+            "--shared-storage-class names {class} and {file} names {SHARED_STORAGE_VALUE}: say \
+             it in one place"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// The class, refused where this cluster has no storage class of that name:
+/// `listed` is `kubectl get storageclass -o name`, one
+/// `storageclass.storage.k8s.io/<name>` a line.
+pub fn shared_storage_found(class: &str, listed: &str) -> Result<(), String> {
+    let found = listed
+        .lines()
+        .map(|line| line.trim().rsplit('/').next().unwrap_or_default())
+        .any(|name| name == class);
+    match found {
+        true => Ok(()),
+        false => Err(format!(
+            "this cluster has no storage class {class}, which --shared-storage-class names for \
+             {SHARED_STORAGE_VALUE}: name a ReadWriteMany class it has (a cloud's file store, \
+             CephFS, NFS, Longhorn's RWX), as `kubectl get storageclass` lists them"
+        )),
+    }
 }
 
 /// Where an edge plugin's records past their window go (contract v16; W7.1):
@@ -275,6 +348,11 @@ pub fn values_document(install: &Install) -> String {
     if let Some(Archive::At(path)) = &install.archive {
         out.push_str("pluginArchive:\n");
         out.push_str(&format!("  path: {}\n", quoted(path)));
+    }
+    if let Some(class) = &install.shared_storage_class {
+        out.push_str("pluginStorage:\n");
+        out.push_str("  shared:\n");
+        out.push_str(&format!("    storageClassName: {}\n", quoted(class)));
     }
     if let Some(image) = &install.image {
         let (repository, tag) = image.rsplit_once(':').unwrap_or((image.as_str(), "latest"));

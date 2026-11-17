@@ -946,8 +946,40 @@ pub fn listed(catalogue: &serde_json::Value, address: &str) -> String {
         {
             out.push_str(&format!("    {said}\n"));
         }
+        // Its own storage copied into its shared storage before it first ran
+        // as several pods (step 3d, item 30).
+        if let Some(said) = storage_copied(l) {
+            out.push_str(&format!("    {said}\n"));
+        }
     }
     out
+}
+
+/// The Plugins page's line for a launch whose instance's storage was copied
+/// into its shared storage (step 3d, checkpoint 5, item 30; the wording
+/// approved 2026-11-17, item 69), from the launch's `storage_copied`
+/// (PluginLaunch.storage_copied, a PluginStorageCopied record). None where
+/// it carries none: nothing was copied, or its core is older.
+pub fn storage_copied(launch: &serde_json::Value) -> Option<String> {
+    let copied = &launch["storage_copied"];
+    let from = copied["from_claim"].as_str().filter(|s| !s.is_empty())?;
+    let into = copied["to_claim"].as_str().filter(|s| !s.is_empty())?;
+    // Nanoseconds, as a number or its digits; or a time already written out.
+    let at = &copied["at_ns"];
+    let date = match at
+        .as_u64()
+        .or_else(|| at.as_str().and_then(|s| s.trim().parse().ok()))
+    {
+        Some(ns) if ns > 0 => crate::registry::moment(ns)[..10].to_string(),
+        _ => at
+            .as_str()
+            .filter(|s| s.len() >= 10 && s.is_char_boundary(10))
+            .map(|s| s[..10].to_string())?,
+    };
+    Some(format!(
+        "Its storage was copied from {from} into {into}, folder shard-0/, on {date}. \
+         The old claim is kept."
+    ))
 }
 
 /// A recorded version's roles, which a launch approves.

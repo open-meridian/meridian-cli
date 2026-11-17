@@ -756,3 +756,109 @@ fn a_launchs_limits_shards_and_standby_are_sent_as_asked_and_listed() {
 fn listed_text(catalogue: &serde_json::Value) -> String {
     listed(catalogue, "http://127.0.0.1:8443")
 }
+
+// ── Step 3d, checkpoint 5, item 30 ──────────────────────────────────────────
+
+#[test]
+fn a_launch_whose_storage_was_copied_says_so_as_the_plugins_page_does() {
+    let held = serde_json::json!({
+        "versions": [],
+        "launches": [
+            {"instance_id": "feed", "name": "feed", "version": "0.2.0", "state": "launched",
+             "shards": 2, "standby": true,
+             "storage_copied": {"instance_id": "feed",
+                                "from_claim": "meridian-meridian-runtime-storage-feed",
+                                "to_claim": "meridian-meridian-runtime-shared-storage-feed",
+                                // 2026-11-17T12:00:00Z
+                                "at_ns": "1794916800000000000",
+                                "launched_by": "admin@example.com"}},
+            {"instance_id": "quiet", "name": "quiet", "version": "0.1.0", "state": "launched"},
+        ],
+    });
+    let said = listed(&held, "https://meridian.localhost");
+    assert!(
+        said.contains(
+            "    Its storage was copied from meridian-meridian-runtime-storage-feed into \
+             meridian-meridian-runtime-shared-storage-feed, folder shard-0/, on 2026-11-17. \
+             The old claim is kept.\n"
+        ),
+        "{said}"
+    );
+    // Said once, under its own launch.
+    assert_eq!(said.matches("Its storage was copied").count(), 1, "{said}");
+    // At_ns as a number, or a time already written out, says the same day.
+    let numbered = serde_json::json!({"storage_copied": {
+        "from_claim": "a", "to_claim": "b", "at_ns": 1_794_916_800_000_000_000u64}});
+    let written = serde_json::json!({"storage_copied": {
+        "from_claim": "a", "to_claim": "b", "at_ns": "2026-11-17T12:00:00Z"}});
+    for launch in [numbered, written] {
+        assert_eq!(
+            storage_copied(&launch).as_deref(),
+            Some(
+                "Its storage was copied from a into b, folder shard-0/, on 2026-11-17. \
+                 The old claim is kept."
+            )
+        );
+    }
+    // None where a launch carries none, or its core is older.
+    assert_eq!(
+        storage_copied(&serde_json::json!({"instance_id": "x"})),
+        None
+    );
+    assert_eq!(
+        storage_copied(&serde_json::json!({"storage_copied": null})),
+        None
+    );
+}
+
+#[tokio::test]
+async fn the_conductors_refusal_of_a_launch_is_said_in_its_own_words() {
+    // As core's terminal passes a handler's refusal on whole: the bus's
+    // framing, then the conductor's words (item 69's wording, approved
+    // 2026-11-17).
+    let (address, _) = dashboard(|_, path| match path {
+        "/terminal/plugins/launch" => (
+            422,
+            r#"{"error":"[refusal-status failed-precondition fields=shards] shards was asked for feed, and its plugin keeps storage: its pods share it on several nodes only through a ReadWriteMany storage class, and this deployment runs on 3 nodes and names none in pluginStorage.shared.storageClassName"}"#,
+        ),
+        _ => (404, "{}"),
+    })
+    .await;
+    let asked = Launch {
+        name: "feed",
+        version: "0.2.0",
+        instance: "feed",
+        roles: &[],
+        live: false,
+        shape: Shape {
+            shards: 2,
+            ..Shape::default()
+        },
+    };
+    let failed = launch(
+        &address,
+        &Credential::terminal_session(&address, "live"),
+        &asked,
+    )
+    .await
+    .unwrap_err();
+    let said = failed.said();
+    assert!(
+        said.ends_with(
+            ": shards was asked for feed, and its plugin keeps storage: its pods share it on \
+             several nodes only through a ReadWriteMany storage class, and this deployment runs \
+             on 3 nodes and names none in pluginStorage.shared.storageClassName"
+        ),
+        "{said}"
+    );
+    assert!(!said.contains("[refusal-status"), "{said}");
+    // A refusal passed on with its words alone is untouched.
+    assert_eq!(
+        crate::live::handlers_words("a launcher's own words: [1] stays"),
+        "a launcher's own words: [1] stays"
+    );
+    assert_eq!(
+        crate::live::handlers_words("[refusal-reason 32 retry=3] the lake is busy"),
+        "the lake is busy"
+    );
+}

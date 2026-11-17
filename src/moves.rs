@@ -286,6 +286,38 @@ pub async fn resilience(address: &str, session: &Credential) -> Result<Value, Fa
     call(address, session, RESILIENCE_PATH, None).await
 }
 
+/// A page of ReadResilience's history, `page_size` items from `cursor` (the
+/// page before's `next_cursor`, empty for the first), as the tool takes them.
+pub async fn resilience_page(
+    address: &str,
+    session: &Credential,
+    page_size: u32,
+    cursor: &str,
+) -> Result<Value, Failed> {
+    let asked = std::collections::BTreeMap::from([
+        ("cursor".to_string(), cursor.to_string()),
+        ("page_size".to_string(), page_size.to_string()),
+    ]);
+    let path = format!("{RESILIENCE_PATH}?{}", crate::up::form_encoded(&asked));
+    call(address, session, &path, None).await
+}
+
+/// The history `meridian doctor` reads each shard's last takeover from
+/// (step 3d, item 32), through the session `meridian connect` keeps.
+pub struct SessionHistory {
+    pub session: Credential,
+}
+
+#[async_trait::async_trait]
+impl crate::doctor::shards::History for SessionHistory {
+    async fn page(&self, page_size: u32, cursor: &str) -> Result<Value, String> {
+        let address = self.session.address().to_string();
+        resilience_page(&address, &self.session, page_size, cursor)
+            .await
+            .map_err(|failed| failed.said())
+    }
+}
+
 /// A partition's move, begun.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Moving {

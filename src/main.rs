@@ -203,6 +203,11 @@ up:
                             storage. Given neither, up asks at a terminal, and
                             takes none where there is no terminal. In a cloud, name
                             the bucket as pluginArchive in a values file (-f)
+      --shared-storage-class <class>
+                            the ReadWriteMany storage class a plugin's shards and
+                            standby pod share its storage through on several nodes
+                            (pluginStorage.shared.storageClassName). Without one, a
+                            plugin that keeps storage runs as one pod there
       --host <name>         the name it is reached by through the cluster's ingress
                             controller (default: meridian.localhost, which every
                             browser sends to this machine). Any other name is
@@ -602,7 +607,7 @@ struct Arguments {
 }
 
 /// Flags that take a value, so a switch is never read as one.
-const TAKES_A_VALUE: [&str; 44] = [
+const TAKES_A_VALUE: [&str; 45] = [
     "--to-group",
     "--to-partition",
     "--to-revision",
@@ -639,6 +644,7 @@ const TAKES_A_VALUE: [&str; 44] = [
     "--first-run-code",
     "--port",
     "--archive",
+    "--shared-storage-class",
     "--note",
     "--pack",
     "--with",
@@ -817,7 +823,7 @@ async fn main() {
 
     match arguments.command.as_str() {
         "doctor" => {
-            let (said, code) = examined(&intended).await;
+            let (said, code) = examined(&arguments, &intended).await;
             print!("{said}");
             std::process::exit(code);
         }
@@ -1642,7 +1648,17 @@ async fn kept_as_asked(
         .into_iter()
         .flatten()
         .find(|launch| launch["instance_id"] == instance);
-    match launch.and_then(catalogue::Shape::listed) {
+    // Its own storage copied into its shared storage, where a launch of it
+    // records that (step 3d, item 30): said as the Plugins page says it.
+    let copied = held["launches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .rev()
+        .filter(|launch| launch["instance_id"] == instance)
+        .find_map(catalogue::storage_copied)
+        .map_or(String::new(), |said| format!("{said}\n"));
+    let kept = match launch.and_then(catalogue::Shape::listed) {
         Some(kept) if kept == asked => {
             format!("Kept on its launch, as asked: {}.\n", kept.said())
         }
@@ -1659,7 +1675,8 @@ async fn kept_as_asked(
              contract v30 and kept none of them. `meridian upgrade-deployment` first, then stop \
              and launch it again.\n"
         ),
-    }
+    };
+    format!("{kept}{copied}")
 }
 
 // ── The live loop (spec/live-plugin-development, requirements 10 to 14) ──
@@ -3765,8 +3782,15 @@ fn authority_command(arguments: &Arguments) -> i32 {
     }
 }
 
-async fn examined(intended: &Intended) -> (String, i32) {
-    let findings = doctor::examine(&machine::ThisMachine, intended).await;
+async fn examined(arguments: &Arguments, intended: &Intended) -> (String, i32) {
+    // The Resilience read's history, for each plugin shard's epoch and last
+    // takeover (step 3d, item 32): through the session `meridian connect`
+    // keeps, asked only where a plugin runs sharded or with a standby pod.
+    let history: Box<dyn doctor::shards::History> = match held_session(arguments) {
+        Ok(session) => Box::new(moves::SessionHistory { session }),
+        Err(why) => Box::new(doctor::shards::NoHistory(why)),
+    };
+    let findings = doctor::examine(&machine::ThisMachine, intended, history.as_ref()).await;
     doctor::verdict(&findings)
 }
 
@@ -3791,11 +3815,20 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
             return 2;
         }
     };
+    let shared_storage_class = match up::shared_storage_class(
+        arguments.value("--shared-storage-class", "--shared-storage-class"),
+    ) {
+        Ok(class) => class,
+        Err(refusal) => {
+            eprintln!("meridian up: {refusal}. Nothing was installed.");
+            return 2;
+        }
+    };
 
     // Run by `up` rather than asked for, because a check nobody runs is a
     // check that does not exist (spec/the-cli, ruling 3).
     if !arguments.set("--no-doctor") {
-        let (said, code) = examined(&intended).await;
+        let (said, code) = examined(arguments, &intended).await;
         print!("{said}");
         if code != 0 {
             eprintln!("Nothing was installed. Fix the above, or run again with --no-doctor.");
@@ -3844,6 +3877,7 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
         tls_secret: None,
         plain_http: arguments.set("--plain-http"),
         archive,
+        shared_storage_class,
     };
     let ingress_host = match arguments.set("--no-ingress") {
         true => None,
@@ -4328,5 +4362,22 @@ mod tests {
     #[test]
     fn a_stray_word_is_refused_rather_than_ignored() {
         assert!(parse(said("up dep-7")).is_err());
+    }
+
+    #[test]
+    fn up_takes_a_shared_storage_class_and_says_its_value() {
+        // Step 3d, checkpoint 5, item 30: the flag the spec gives.
+        let up = parse(said("up --id DEP-7 --shared-storage-class efs-sc")).unwrap();
+        assert_eq!(
+            up.value("--shared-storage-class", "--shared-storage-class"),
+            Some("efs-sc")
+        );
+        assert!(parse(said("up --shared-storage-class")).is_err());
+        let help = help_for("up", &[]);
+        assert!(
+            help.contains("--shared-storage-class <class>")
+                && help.contains("(pluginStorage.shared.storageClassName)"),
+            "{help}"
+        );
     }
 }

@@ -135,6 +135,25 @@ worth knowing; on a local VM, Docker's build cache is often most of it
 deployment no longer runs is named too, with the stop and launch that move
 it.
 
+Where plugins run in the namespace, it says too (step 3d):
+
+- each plugin that keeps storage and cannot take a standby or shards, because
+  the deployment runs on several nodes and names no ReadWriteMany class in
+  `pluginStorage.shared.storageClassName`, with the upgrade that names one.
+  Nodes are counted from where the deployment's pods run, as its conductor
+  counts them; a count it cannot read counts as several;
+- each plugin running with shards or a standby pod and allowed a bucket
+  archive, with the account its bucket's workload identity must trust,
+  `<namespace>/<fullname>-shards-<instance>`, and the cloud's step as the
+  chart's `pluginArchive` says it: on EKS a trust-policy condition on
+  `system:serviceaccount:<namespace>:<fullname>-shards-*` (or a Pod Identity
+  association for each), on GKE a binding for each account alone, on Azure a
+  federated identity credential for each;
+- each such plugin's shards: its epoch and its last takeover, from the
+  Resilience history. That read is a deployment admin's, through the session
+  `meridian connect` keeps (`--deployment` names one), and is asked only where
+  a plugin runs several pods.
+
 The clock is the one nobody can check in their head. Assertions are time-bound,
 and a skewed clock fails authentication in a way that looks exactly like a bad
 key.
@@ -240,6 +259,19 @@ none, records past their window stay in each plugin's storage. In a cloud, the
 archive is a bucket, named as `pluginArchive` in a values file (`-f`), and
 nothing is asked. Said in two places -- a flag and a values file, say -- it is
 refused rather than one quietly dropped. `upgrade-deployment` keeps it.
+
+**Shared storage.** A plugin that keeps storage, run as shards or with a
+standby pod, shares one claim between its pods, each shard writing its own
+folder of it. On several nodes that takes a ReadWriteMany storage class -- a
+cloud's file store, CephFS, NFS, Longhorn's RWX -- which
+`--shared-storage-class <class>` names, the chart's
+`pluginStorage.shared.storageClassName` (its size is
+`pluginStorage.shared.size`, 10Gi by default). Without one, such a plugin runs
+as one pod there, and a launch asking for more is refused in the deployment's
+own words; a deployment on one node needs none. A class the cluster does not
+have, or one also named in a values file, is refused before anything is
+installed, naming the value. `upgrade-deployment --set
+pluginStorage.shared.storageClassName=<class>` names one later.
 
 It drives your own `helm` and `kubectl` and prints the command it used, so
 you can see exactly what it did. It embeds no Helm library: the chart is what says what
@@ -544,6 +576,11 @@ meridian plugin list                     # versions uploaded, and what is launch
 meridian plugin launch my-plugin 0.1.0 --instance my-plugin
 meridian plugin stop my-plugin
 ```
+
+A plugin that kept storage as one pod has it copied into its shared storage
+before it first runs as shards or with a standby pod. `plugin list` says so
+under its launch, as its page does: `Its storage was copied from {old} into
+{shared}, folder shard-0/, on {date}. The old claim is kept.`
 
 `plugin new` writes a working plugin: its pages, each a view function and a
 Jinja2 template declared with the levels it serves (a Setup page under

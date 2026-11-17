@@ -139,6 +139,19 @@ pub async fn up(
     // where it has none, as before.
     let mut install = install.clone();
     install.archive = Some(archive);
+
+    // The ReadWriteMany class an instance's pods share its storage through
+    // (step 3d, item 30): said in one place, and a class this cluster has,
+    // before anything is installed.
+    if let Some(class) = install.shared_storage_class.clone() {
+        let in_values = install.values.iter().find(|file| {
+            std::fs::read_to_string(file)
+                .is_ok_and(|values| super::names_a_shared_storage_class(&values))
+        });
+        super::shared_storage_settled(Some(&class), in_values.map(String::as_str))?;
+        let listed = kubectl(&install, &["get", "storageclass", "-o", "name"]).await?;
+        super::shared_storage_found(&class, &listed)?;
+    }
     if let Some(host) = ingress_host {
         let listed = kubectl(
             &install,
