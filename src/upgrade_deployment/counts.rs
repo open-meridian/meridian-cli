@@ -81,7 +81,8 @@ pub struct Wanted {
     pub databases: BTreeMap<&'static str, Option<u64>>,
 }
 
-fn environment(deployment: &Value) -> BTreeMap<&str, &str> {
+/// A workload's environment, every container's, as its template sets it.
+pub fn environment(deployment: &Value) -> BTreeMap<&str, &str> {
     deployment["spec"]["template"]["spec"]["containers"]
         .as_array()
         .into_iter()

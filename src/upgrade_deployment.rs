@@ -1199,6 +1199,9 @@ pub struct Plan {
     /// `--force-conflicts`, with Helm 4's server-side apply: the chart's
     /// counts over a scale another manager made.
     pub force_conflicts: bool,
+    /// Each store whose writer groups the upgrade raises, from what runs to
+    /// what it sets: a return to the revision it was at would lower them.
+    pub raised: Vec<(&'static str, u64, u64)>,
 }
 
 /// The same command, as somebody would type it.

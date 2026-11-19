@@ -12,13 +12,23 @@
 //! not know. It asks, then rolls back and waits as upgrade-deployment does:
 //! the migration that revision runs, if any, and every component on its
 //! template.
+//!
+//! A rollback that would lower a store's writer groups where they are
+//! raise-only (item 111) is refused among the checks: `helm rollback`
+//! applies the stored manifest without rendering the chart, so the chart's
+//! own refusal never runs.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
+use serde::Deserialize;
+use serde_json::Value;
 use tokio::time::Instant;
 
 use crate::doctor::{Failure, Machine};
 use crate::status::{revisions_from, Release};
+use crate::upgrade_deployment::counts::{environment, GROUPS_VARIABLE, STORES};
+use crate::upgrade_deployment::shards::LEASE_VARIABLE;
 use crate::upgrade_deployment::{jobs, pods, progress, workloads};
 
 pub struct Asked {
@@ -136,7 +146,156 @@ pub async fn check(machine: &dyn Machine, asked: &Asked) -> Result<Plan, String>
             to.revision
         ));
     }
+    writer_groups_kept(machine, asked, to.revision).await?;
     Ok(Plan { from, to })
+}
+
+/// Set on the lake's members while its writes are kept in a stream.
+const WRITE_AHEAD_VARIABLE: &str = "MERIDIAN_LAKE_WRITE_AHEAD";
+
+type Writers = BTreeMap<&'static str, BTreeMap<String, String>>;
+
+/// Each store's group-0 writer Deployment among `items`, found by its
+/// component label: its environment.
+fn writers(items: &[Value]) -> Writers {
+    STORES
+        .iter()
+        .filter_map(|store| {
+            let deployment = items.iter().find(|item| {
+                item["kind"] == "Deployment"
+                    && item["metadata"]["labels"]["meridian.dev/component"] == *store
+            })?;
+            let environment = environment(deployment)
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect();
+            Some((*store, environment))
+        })
+        .collect()
+}
+
+/// A store's writer groups as its writer's environment says them: 1 where
+/// it says none, as the chart reads them.
+fn groups_in(writers: &Writers, store: &str) -> u64 {
+    writers
+        .get(store)
+        .and_then(|environment| environment.get(GROUPS_VARIABLE))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(1)
+}
+
+fn sets(writers: &Writers, store: &str, name: &str) -> bool {
+    writers
+        .get(store)
+        .is_some_and(|environment| environment.contains_key(name))
+}
+
+/// Writer groups in ha are raised, never lowered yet (item 111). The chart
+/// refuses a lowered count when it renders; `helm rollback` applies the
+/// stored manifest without rendering, so the same refusal is made here.
+/// What runs is read from the live group-0 writer Deployments, as the chart
+/// reads it; what the rollback would leave, from that revision's manifest
+/// and values. The lake's is refused where that revision is ha or keeps the
+/// lake's writes in a stream, or the running lake does; the book's where
+/// that revision is ha or the running book keeps a lease.
+async fn writer_groups_kept(machine: &dyn Machine, asked: &Asked, to: u64) -> Result<(), String> {
+    let live: Value =
+        serde_json::from_str(&listed(machine, asked, "deployments").await).unwrap_or_default();
+    let running = writers(live["items"].as_array().map(Vec::as_slice).unwrap_or(&[]));
+    // Nothing runs above one group, so nothing can be lowered.
+    if STORES.iter().all(|store| groups_in(&running, store) <= 1) {
+        return Ok(());
+    }
+    let revision = to.to_string();
+    let (release, namespace) = (asked.release.as_str(), asked.namespace.as_str());
+    let unread = |what: &str, failed: Failure| {
+        format!(
+            "Can't read revision {to}'s {what} ({}), so can't tell whether returning to it would \
+             lower a store's writer groups",
+            said(failed)
+        )
+    };
+    let manifest = machine
+        .run(
+            "helm",
+            &[
+                "get",
+                "manifest",
+                release,
+                "--revision",
+                &revision,
+                "--namespace",
+                namespace,
+            ],
+        )
+        .await
+        .map_err(|failed| unread("manifest", failed))?;
+    let documents: Vec<Value> = serde_yaml::Deserializer::from_str(&manifest)
+        .filter_map(|document| Value::deserialize(document).ok())
+        .collect();
+    let target = writers(&documents);
+    // Whether that revision is ha: read once, and only where it decides.
+    let mut ha = None;
+    let mut refused = Vec::new();
+    for store in STORES {
+        let (runs, wanted) = (groups_in(&running, store), groups_in(&target, store));
+        if wanted >= runs {
+            continue;
+        }
+        let kept = if store == "lake" {
+            sets(&target, store, WRITE_AHEAD_VARIABLE)
+                || sets(&running, store, WRITE_AHEAD_VARIABLE)
+        } else {
+            sets(&running, store, LEASE_VARIABLE)
+        };
+        if !kept {
+            if ha.is_none() {
+                let values = machine
+                    .run(
+                        "helm",
+                        &[
+                            "get",
+                            "values",
+                            release,
+                            "--revision",
+                            &revision,
+                            "--namespace",
+                            namespace,
+                            "--all",
+                            "-o",
+                            "json",
+                        ],
+                    )
+                    .await
+                    .map_err(|failed| unread("values", failed))?;
+                let values: Value = serde_json::from_str(&values).unwrap_or_default();
+                ha = Some(values["resilience"]["profile"] == "ha");
+            }
+            if ha != Some(true) {
+                continue;
+            }
+        }
+        // The chart's own refusal (item 112), naming the revision.
+        refused.push(if store == "lake" {
+            format!(
+                "lake.writerGroups is {wanted} at revision {to}, but this deployment's lake runs \
+                 {runs} writer groups. In the ha profile, this release can raise the lake's \
+                 writer groups but can't lower them yet: a group taken away could leave writes \
+                 it had acknowledged unrecorded. Keep lake.writerGroups at {runs} or more"
+            )
+        } else {
+            format!(
+                "bor.writerGroups is {wanted} at revision {to}, but this deployment's book runs \
+                 {runs} writer groups. In the ha profile, this release can raise the book's \
+                 writer groups but can't lower them yet. Keep bor.writerGroups at {runs} or more"
+            )
+        });
+    }
+    if refused.is_empty() {
+        Ok(())
+    } else {
+        Err(refused.join(".\n"))
+    }
 }
 
 /// What it will do, said before it asks.

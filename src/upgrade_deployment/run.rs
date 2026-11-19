@@ -479,9 +479,18 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     // The book's partitions and each store's writer groups and databases
     // (step 3d): a lowering that would strand accounts or data, and a count
     // changed with the first start on a release that has them, are refused.
+    let mut raised = Vec::new();
     if chart_has_counts {
         let runs = super::counts::running(&counted);
         let wanted = super::counts::wanted(&upgraded_values);
+        if let Some(runs) = &runs {
+            for store in super::counts::STORES {
+                let from = runs.stores[store].groups;
+                if let Some(to) = wanted.groups[store].filter(|to| *to > from) {
+                    raised.push((store, from, to));
+                }
+            }
+        }
         let held = match &runs {
             Some(runs) if runs.has_counts && super::counts::lowers(runs, &wanted) => {
                 partitions_held(machine, asked, &held_pods).await
@@ -523,6 +532,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         // chart is what says each count (it reads the database's live
         // one), as Helm 3's merge let it say: forced, as there.
         force_conflicts: helm_version.is_some_and(|(major, _)| major >= 4),
+        raised,
     }))
 }
 
@@ -840,6 +850,16 @@ pub async fn apply(
     Ok(report)
 }
 
+/// The writer groups an upgrade raises, as a failed one says them: None
+/// where it raises none.
+fn raised_said(raised: &[(&str, u64, u64)]) -> Option<String> {
+    let said: Vec<String> = raised
+        .iter()
+        .map(|(store, from, to)| format!("{store}.writerGroups from {from} to {to}"))
+        .collect();
+    (!said.is_empty()).then(|| said.join(" and "))
+}
+
 /// One `helm upgrade` of the plan, and the wait for its migration and every
 /// workload by the rollout rules: the revision it made, and what was last
 /// read of the release's Jobs, workloads and pods.
@@ -858,14 +878,28 @@ async fn upgrade_once(
     watch.begin(Step::Apply);
     let applied = machine.run("helm", &arguments).await;
     watch.end(Step::Apply, applied.is_ok());
+    // A return to the revision it was at would lower the writer groups this
+    // upgrade raises: never suggested then (item 111). The second of two
+    // upgrades starts from the first, which raised them already.
+    let lowered_by_a_return = (from_revision == plan.from.revision)
+        .then(|| raised_said(&plan.raised))
+        .flatten();
     applied.map_err(|failed| {
         let scope = crate::status::scope(release, namespace);
-        format!(
-            "helm refused the upgrade: {failed}\n`meridian status {scope}` shows the revision \
-             it left; `meridian rollback-deployment {scope} --to-revision {}` returns it to the \
-             revision it was at.",
-            from_revision
-        )
+        match &lowered_by_a_return {
+            Some(raised) => format!(
+                "helm refused the upgrade: {failed}\n`meridian status {scope}` shows the \
+                 revision it left. This upgrade raises {raised}, so returning to revision \
+                 {from_revision} would lower them again. Fix the cause and run this upgrade \
+                 again."
+            ),
+            None => format!(
+                "helm refused the upgrade: {failed}\n`meridian status {scope}` shows the \
+                 revision it left; `meridian rollback-deployment {scope} --to-revision {}` \
+                 returns it to the revision it was at.",
+                from_revision
+            ),
+        }
     })?;
     let revision = self::release(machine, asked)
         .await
@@ -917,14 +951,24 @@ async fn upgrade_once(
 
         if let Some(job) = now.failed {
             let scope = crate::status::scope(release, namespace);
-            return Err(format!(
-                "the migration, job/{job}, failed, and the components wait for it.\n\
-                 Its log: `meridian logs migrate {scope}`.\n\
-                 Revision {revision} stays applied. `meridian status {scope}` says the release's \
-                 state; read the log before `meridian rollback-deployment {scope}`, since a \
-                 migration that got part of the way may have changed what the older runtime \
-                 would read."
-            ));
+            return Err(match &lowered_by_a_return {
+                Some(raised) => format!(
+                    "the migration, job/{job}, failed, and the components wait for it.\n\
+                     Its log: `meridian logs migrate {scope}`.\n\
+                     Revision {revision} stays applied. `meridian status {scope}` says the \
+                     release's state. This upgrade raises {raised}, so returning to revision \
+                     {from_revision} would lower them again. Fix the cause and run this upgrade \
+                     again."
+                ),
+                None => format!(
+                    "the migration, job/{job}, failed, and the components wait for it.\n\
+                     Its log: `meridian logs migrate {scope}`.\n\
+                     Revision {revision} stays applied. `meridian status {scope}` says the \
+                     release's state; read the log before `meridian rollback-deployment \
+                     {scope}`, since a migration that got part of the way may have changed what \
+                     the older runtime would read."
+                ),
+            });
         }
         if now.waiting.is_empty() {
             watch.end(Step::Components, true);

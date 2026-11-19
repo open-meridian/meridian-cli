@@ -1161,6 +1161,105 @@ async fn helm_refusing_says_how_to_get_back() {
     assert!(failed.contains("revision 7"), "{failed}");
 }
 
+#[tokio::test]
+async fn a_failed_raise_never_suggests_the_return_that_would_lower_it() {
+    // Writer groups in ha are raise-only (item 111): returning to the
+    // revision before a raise would lower them.
+    let stand = healthy()
+        .instead(SHOW_VALUES, Ok(COUNTED_VALUES))
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(
+            WORKLOADS,
+            items(vec![
+                store("bor", &[("MERIDIAN_BOR_PARTITIONS", "1")]),
+                store("lake", &[("MERIDIAN_WRITER_GROUPS", "2")]),
+            ]),
+        )
+        .json(PODS, items(vec![]));
+    let raising = setting(&["lake.writerGroups=3"]);
+    let mut said = Vec::new();
+    let Checked::Upgrade(plan) = check(&stand, &raising, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    else {
+        panic!("refused: {said:?}");
+    };
+    assert_eq!(plan.raised, vec![("lake", 2, 3)]);
+
+    // helm refuses it: nothing is scripted for its upgrade.
+    let failed = apply(&stand, &raising, &plan, &pace(), &mut |_: &str| {})
+        .await
+        .expect_err("helm refused");
+    assert!(failed.starts_with("helm refused the upgrade"), "{failed}");
+    assert!(!failed.contains("meridian rollback-deployment"), "{failed}");
+    assert!(
+        failed.contains(
+            "This upgrade raises lake.writerGroups from 2 to 3, so returning to revision 7 \
+             would lower them again. Fix the cause and run this upgrade again."
+        ),
+        "{failed}"
+    );
+
+    // Its migration fails.
+    let migrating = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
+        .json(WORKLOADS, items(vec![]))
+        .json(PODS, items(vec![]))
+        .json(
+            JOBS,
+            items(vec![job(
+                "meridian-meridian-runtime-migrate-8",
+                Some("Failed"),
+            )]),
+        )
+        .answering(UPGRADE, Ok("upgraded"));
+    let mut plan = planned(&migrating).await;
+    plan.raised = vec![("lake", 2, 3), ("bor", 1, 2)];
+    let failed = apply(&migrating, &asked(), &plan, &pace(), &mut |_: &str| {})
+        .await
+        .expect_err("a failed migration is a failed upgrade");
+    assert!(
+        failed.contains("job/meridian-meridian-runtime-migrate-8, failed"),
+        "{failed}"
+    );
+    assert!(!failed.contains("meridian rollback-deployment"), "{failed}");
+    assert!(
+        failed.contains(
+            "This upgrade raises lake.writerGroups from 2 to 3 and bor.writerGroups from 1 to \
+             2, so returning to revision 7 would lower them again. Fix the cause and run this \
+             upgrade again."
+        ),
+        "{failed}"
+    );
+
+    // An upgrade that raises none still says how to get back.
+    let stand = healthy()
+        .instead(SHOW_VALUES, Ok(COUNTED_VALUES))
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(
+            WORKLOADS,
+            items(vec![
+                store("bor", &[("MERIDIAN_BOR_PARTITIONS", "1")]),
+                store("lake", &[("MERIDIAN_WRITER_GROUPS", "2")]),
+            ]),
+        )
+        .json(PODS, items(vec![]));
+    let keeping = setting(&["lake.writerGroups=2"]);
+    let Checked::Upgrade(plan) = check(&stand, &keeping, &mut |_: &str| {}).await else {
+        panic!("refused");
+    };
+    assert!(plan.raised.is_empty());
+    let failed = apply(&stand, &keeping, &plan, &pace(), &mut |_: &str| {})
+        .await
+        .expect_err("helm refused");
+    assert!(
+        failed.contains("`meridian rollback-deployment -n meridian --to-revision 7`"),
+        "{failed}"
+    );
+}
+
 // ── What is read ─────────────────────────────────────────────────────────
 
 #[test]

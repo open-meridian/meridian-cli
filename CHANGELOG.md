@@ -30,6 +30,13 @@ an older one each says so and changes nothing.
     a release that has them is refused: upgrade first, then change the count.
   What runs is read from the workloads' own settings, and what each partition holds from the
   stores' probes; where a probe does not say, a lowering is refused and says it could not be read.
+- `meridian rollback-deployment` refuses a rollback that would lower a store's writer groups where
+  they can only be raised (the lake in ha or with its write-ahead stream on, the book in ha), with
+  the same message an upgrade gets, naming the revision. If it can't read what that revision would
+  run, it refuses and says so.
+- `meridian upgrade-deployment` no longer suggests rolling back after a failed upgrade that raises
+  writer groups, since that would lower them again. It says to fix the cause and run the upgrade
+  again.
 - `meridian status` probes the members of each writer group past the first too
   (`<store>-group-<g>`), so each group's writer, its lag and its partitions are shown.
 - `meridian upgrade-deployment` refuses an upgrade that leaves no store or conductor with a
