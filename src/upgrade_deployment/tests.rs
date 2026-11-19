@@ -2839,3 +2839,154 @@ fn a_plugins_standby_pod_is_excused_from_readiness_never_from_the_new_template()
     let plain = workloads(&items(vec![plain]).to_string()).remove(0);
     assert_eq!(plain.unfinished.as_deref(), Some("2 of 3 ready"));
 }
+
+const SETS_AND_CLAIMS: &str = "kubectl get statefulsets,persistentvolumeclaims -n meridian -l app.kubernetes.io/instance=meridian -o json";
+const BROKER: &str = "meridian-meridian-runtime-broker";
+
+/// A broker StatefulSet as the chart makes it: the set without JetStream
+/// selected by the component alone, the JetStream set by its name as well.
+fn broker_set(name: &str) -> serde_json::Value {
+    let mut selected =
+        json!({"app.kubernetes.io/instance": "meridian", "meridian.dev/component": "broker"});
+    if name.ends_with("-jetstream") {
+        selected["meridian.dev/broker-set"] = json!(name);
+    }
+    json!({"kind": "StatefulSet", "metadata": {"name": name},
+           "spec": {"selector": {"matchLabels": selected}}})
+}
+
+fn claim(name: &str) -> serde_json::Value {
+    json!({"kind": "PersistentVolumeClaim", "metadata": {"name": name}})
+}
+
+/// Every claim the release has: the JetStream set's three, the database's,
+/// a plugin's, another set's whose name begins as the broker's does, and
+/// one that is not a server's.
+fn claims() -> Vec<serde_json::Value> {
+    vec![
+        claim(&format!("jetstream-{BROKER}-jetstream-0")),
+        claim(&format!("jetstream-{BROKER}-jetstream-1")),
+        claim(&format!("jetstream-{BROKER}-jetstream-2")),
+        claim("data-meridian-meridian-runtime-database-0"),
+        claim("data-meridian-meridian-runtime-database-1"),
+        claim("data-plugin-coinbase-1-0"),
+        claim(&format!("jetstream-{BROKER}-jetstream-archive-0")),
+        claim(&format!("jetstream-{BROKER}-jetstream-")),
+    ]
+}
+
+/// Item 191 (ruled 2026-11-19): where the broker runs without its
+/// JetStream set, the claims that set's servers left are the ones deleted,
+/// and nothing else -- never a database's or a plugin's, never another
+/// set's; where the set is there, or the release brings no broker, none.
+#[test]
+fn the_jetstream_sets_claims_are_left_only_where_the_set_is_not_there() {
+    let database = json!({"kind": "StatefulSet", "metadata": {"name": "meridian-meridian-runtime-database"},
+                          "spec": {"selector": {"matchLabels": {"meridian.dev/component": "database"}}}});
+    let tolerant = items([vec![broker_set(BROKER), database.clone()], claims()].concat());
+    assert_eq!(
+        jetstream_claims_left(&tolerant.to_string()),
+        [0, 1, 2].map(|n| format!("jetstream-{BROKER}-jetstream-{n}"))
+    );
+    let ha = items(
+        [
+            vec![broker_set(&format!("{BROKER}-jetstream")), database.clone()],
+            claims(),
+        ]
+        .concat(),
+    );
+    assert!(
+        jetstream_claims_left(&ha.to_string()).is_empty(),
+        "the set is there: its claims are its own"
+    );
+    let brought_none = items([vec![database], claims()].concat());
+    assert!(
+        jetstream_claims_left(&brought_none.to_string()).is_empty(),
+        "no broker of the release's"
+    );
+    assert!(jetstream_claims_left("not json").is_empty());
+}
+
+/// An upgrade deletes the JetStream set's leftover claims before it
+/// applies -- a switch to ha starts JetStream afresh -- and, the set gone
+/// with the upgrade, after: a switch to tolerant leaves none, the set
+/// deleted in the same upgrade that first gives it its retention policy
+/// included. Where the claims cannot be listed nothing is deleted.
+#[tokio::test]
+async fn an_upgrade_deletes_the_claims_jetstream_left_before_and_after_it_applies() {
+    let deleting = format!(
+        "kubectl delete pvc -n meridian --ignore-not-found --wait=false {}",
+        [0, 1, 2]
+            .map(|n| format!("jetstream-{BROKER}-jetstream-{n}"))
+            .join(" ")
+    );
+    let left = items([vec![broker_set(BROKER)], claims()].concat());
+    let stand = upgrading()
+        .json(SETS_AND_CLAIMS, left.clone())
+        .json(SETS_AND_CLAIMS, left)
+        .answering(&deleting, Ok("deleted"));
+    let plan = planned(&stand).await;
+    let mut said = Vec::new();
+    let report = apply(&stand, &asked(), &plan, &pace(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    .unwrap_or_else(|failed| panic!("{failed}\n{said:?}"));
+    let asked_for = stand.asked();
+    let at = |command: &str| asked_for.iter().position(|asked| asked == command);
+    let upgraded = at(UPGRADE).expect("upgraded");
+    let deleted: Vec<usize> = asked_for
+        .iter()
+        .enumerate()
+        .filter(|(_, asked)| asked.starts_with("kubectl delete pvc"))
+        .map(|(n, _)| n)
+        .collect();
+    assert_eq!(deleted.len(), 2, "{asked_for:#?}");
+    assert!(
+        deleted[0] < upgraded && deleted[1] > upgraded,
+        "{asked_for:#?}"
+    );
+    assert!(
+        deleted.iter().all(|n| asked_for[*n] == deleting),
+        "only the JetStream set's claims: {asked_for:#?}"
+    );
+    assert!(report.not_cleaned.is_empty(), "{:?}", report.not_cleaned);
+    assert!(
+        said.join("\n")
+            .contains("JetStream starts afresh when ha is taken again"),
+        "{said:?}"
+    );
+
+    // The set there: nothing deleted.
+    let ha = items([vec![broker_set(&format!("{BROKER}-jetstream"))], claims()].concat());
+    let stand = upgrading().json(SETS_AND_CLAIMS, ha);
+    let plan = planned(&stand).await;
+    apply(&stand, &asked(), &plan, &pace(), &mut |_: &str| {})
+        .await
+        .unwrap();
+    assert!(
+        !stand
+            .asked()
+            .iter()
+            .any(|asked| asked.starts_with("kubectl delete pvc")),
+        "{:#?}",
+        stand.asked()
+    );
+
+    // Found and not deleted before it applies: refused, nothing changed.
+    let stand = upgrading()
+        .json(
+            SETS_AND_CLAIMS,
+            items([vec![broker_set(BROKER)], claims()].concat()),
+        )
+        .answering(&deleting, Err("forbidden"));
+    let plan = planned(&stand).await;
+    let failed = apply(&stand, &asked(), &plan, &pace(), &mut |_: &str| {})
+        .await
+        .unwrap_err();
+    assert!(
+        failed.contains("could not be deleted") && failed.contains("Nothing else was changed"),
+        "{failed}"
+    );
+    assert!(!stand.asked().contains(&UPGRADE.to_string()));
+}

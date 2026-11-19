@@ -545,6 +545,48 @@ pub struct DatabaseSet {
     pub tls: bool,
 }
 
+/// The volume claims the broker's JetStream set left (item 191, ruled
+/// 2026-11-19), among `kubectl get statefulsets,persistentvolumeclaims -o
+/// json`'s items: where the release's broker runs without that set --
+/// `tolerant`, or before a switch to `ha` makes it -- each claim of its
+/// servers, `jetstream-<set>-<n>`, the set named for the broker's own,
+/// `<broker>-jetstream`. Nothing where the set is there, or the release
+/// brings no broker; never a claim of another set's, a database's or a
+/// plugin's. Deleted, a return to `ha` starts JetStream afresh, never on
+/// the state its servers kept before.
+pub fn jetstream_claims_left(listed: &str) -> Vec<String> {
+    let Ok(listed) = serde_json::from_str::<serde_json::Value>(listed) else {
+        return Vec::new();
+    };
+    let items = listed["items"].as_array().cloned().unwrap_or_default();
+    let brokers: Vec<&str> = items
+        .iter()
+        .filter(|item| {
+            item["kind"] == "StatefulSet"
+                && item["spec"]["selector"]["matchLabels"]["meridian.dev/component"] == "broker"
+        })
+        .filter_map(|set| set["metadata"]["name"].as_str())
+        .collect();
+    let Some(broker) = brokers.iter().find(|name| !name.ends_with("-jetstream")) else {
+        return Vec::new();
+    };
+    let set = format!("{broker}-jetstream");
+    if brokers.contains(&set.as_str()) {
+        return Vec::new();
+    }
+    let servers = format!("jetstream-{set}-");
+    items
+        .iter()
+        .filter(|item| item["kind"] == "PersistentVolumeClaim")
+        .filter_map(|claim| claim["metadata"]["name"].as_str())
+        .filter(|name| {
+            name.strip_prefix(&servers)
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .map(String::from)
+        .collect()
+}
+
 /// The release's brought database, among `kubectl get deployments,
 /// statefulsets -o json`'s items: the StatefulSet whose pods are the
 /// database component.
