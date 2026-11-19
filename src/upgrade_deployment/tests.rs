@@ -2899,6 +2899,20 @@ fn the_jetstream_sets_claims_are_left_only_where_the_set_is_not_there() {
         jetstream_claims_left(&ha.to_string()).is_empty(),
         "the set is there: its claims are its own"
     );
+    let switching = items(
+        [
+            vec![
+                broker_set(BROKER),
+                broker_set(&format!("{BROKER}-jetstream")),
+            ],
+            claims(),
+        ]
+        .concat(),
+    );
+    assert!(
+        jetstream_claims_left(&switching.to_string()).is_empty(),
+        "both sets there, a switch under way: the JetStream set's claims are its own"
+    );
     let brought_none = items([vec![database], claims()].concat());
     assert!(
         jetstream_claims_left(&brought_none.to_string()).is_empty(),
