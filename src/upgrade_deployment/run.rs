@@ -393,6 +393,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         .chain(given)
         .fold(defaults, |held, over| merged(&held, &over));
     let patroni_move = patroni_move(database.as_ref(), &upgraded_values);
+    let jetstream = super::jetstream_in(&upgraded_values);
 
     match direction(&from, &to) {
         Direction::Down(stops) => {
@@ -533,6 +534,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         // one), as Helm 3's merge let it say: forced, as there.
         force_conflicts: helm_version.is_some_and(|(major, _)| major >= 4),
         raised,
+        jetstream,
     }))
 }
 
@@ -690,34 +692,54 @@ async fn kubectl_json(machine: &dyn Machine, asked: &Asked, what: &str) -> Resul
         .map_err(|failed| failed.to_string())
 }
 
+/// How long the delete before an upgrade waits for JetStream's leftover
+/// claims to go (item 191's review, finding 6). It runs only where the
+/// JetStream set is not there, so a pod still using a claim is one of a
+/// set deleted just before, terminating: the broker's pods are given
+/// Kubernetes' default grace, 30 s (the chart sets none), all at once, and
+/// a claim goes once its last pod is gone, its volume unmounted and the
+/// claim's protection let go. Twice the grace bounds both.
+pub const JETSTREAM_CLAIMS_GONE: &str = "60s";
+
 /// The volume claims the broker's JetStream set left, deleted where that
 /// set is not there ([`super::jetstream_claims_left`]; item 191): before
 /// the upgrade, so a switch to `ha` starts JetStream afresh, and after it,
 /// so a switch to `tolerant` leaves none -- a set deleted in the upgrade
 /// that first gives it its retention policy, and a deployment that switched
-/// before, keep theirs. What was deleted, said; an error where they were
-/// found and not deleted. Nothing where they could not be listed.
+/// before, keep theirs. Before the upgrade the delete waits until they are
+/// gone ([`JETSTREAM_CLAIMS_GONE`]), so a set made by the upgrade never
+/// finds one still going. What was deleted, said; an error where they
+/// could not be listed, or were found and not deleted.
 async fn jetstream_claims_deleted(
     machine: &dyn Machine,
     asked: &Asked,
     watch: &mut dyn Watch,
+    wait: bool,
 ) -> Result<(), String> {
-    let Ok(listed) = kubectl_json(machine, asked, "statefulsets,persistentvolumeclaims").await
-    else {
-        return Ok(());
-    };
-    let left = super::jetstream_claims_left(&listed);
+    let listed = kubectl_json(machine, asked, "statefulsets,persistentvolumeclaims")
+        .await
+        .map_err(|failed| {
+            format!(
+                "the broker's JetStream volumes left without its set could not be listed: {failed}"
+            )
+        })?;
+    let left = super::jetstream_claims_left(&listed)?;
     if left.is_empty() {
         return Ok(());
     }
+    let timeout = format!("--timeout={JETSTREAM_CLAIMS_GONE}");
     let mut arguments = vec![
         "delete",
         "pvc",
         "-n",
         asked.namespace.as_str(),
         "--ignore-not-found",
-        "--wait=false",
     ];
+    if wait {
+        arguments.extend(["--wait", timeout.as_str()]);
+    } else {
+        arguments.push("--wait=false");
+    }
     arguments.extend(left.iter().map(String::as_str));
     machine.run("kubectl", &arguments).await.map_err(|failed| {
         format!(
@@ -761,10 +783,19 @@ pub async fn apply(
     let before_names: BTreeSet<String> = before_pods.into_iter().map(|pod| pod.name).collect();
 
     // JetStream's volumes left by a set that is gone (item 191): a switch
-    // to ha never starts on them.
-    jetstream_claims_deleted(machine, asked, watch)
-        .await
-        .map_err(|failed| format!("{failed}\nNothing else was changed."))?;
+    // to ha never starts on them. Where the upgrade brings the set, not
+    // knowing they are gone stops it (item 191's review, finding 6);
+    // otherwise it is said with what was not cleaned up.
+    let mut not_cleaned_before = None;
+    if let Err(failed) = jetstream_claims_deleted(machine, asked, watch, true).await {
+        if plan.jetstream {
+            return Err(format!(
+                "{failed}\nThe upgrade gives the broker its JetStream set, which would start on \
+                 them. Nothing else was changed."
+            ));
+        }
+        not_cleaned_before = Some(failed);
+    }
 
     // The certificate first, so the controller has it when the Ingress
     // names it.
@@ -872,11 +903,15 @@ pub async fn apply(
     // chart's revisionHistoryLimit's. And JetStream's volumes, where the
     // upgrade left ha and its set kept them (item 191).
     watch.begin(Step::Cleanup);
-    if let Err(failed) = jetstream_claims_deleted(machine, asked, watch).await {
-        report.not_cleaned.push(format!(
+    let after = jetstream_claims_deleted(machine, asked, watch, false).await;
+    for failed in not_cleaned_before.into_iter().chain(after.err()) {
+        let said = format!(
             "{failed}. The upgrade itself is done; the next `meridian upgrade-deployment` \
              deletes them, before ha is taken again."
-        ));
+        );
+        if !report.not_cleaned.contains(&said) {
+            report.not_cleaned.push(said);
+        }
     }
     let (finished, running) = leftovers(&held_jobs, revision);
     report.left = running;

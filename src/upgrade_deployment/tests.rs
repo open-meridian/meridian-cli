@@ -2332,6 +2332,8 @@ fn moving_to_ha() -> Stand {
         )
         .json(PODS, items(vec![]))
         .json(JOBS, items(vec![]))
+        // No JetStream set before, and none of its claims left (item 191).
+        .json(SETS_AND_CLAIMS, items(vec![]))
         .answering(TO_HA, Ok("Release \"meridian\" has been upgraded."))
 }
 
@@ -2885,7 +2887,7 @@ fn the_jetstream_sets_claims_are_left_only_where_the_set_is_not_there() {
                           "spec": {"selector": {"matchLabels": {"meridian.dev/component": "database"}}}});
     let tolerant = items([vec![broker_set(BROKER), database.clone()], claims()].concat());
     assert_eq!(
-        jetstream_claims_left(&tolerant.to_string()),
+        jetstream_claims_left(&tolerant.to_string()).unwrap(),
         [0, 1, 2].map(|n| format!("jetstream-{BROKER}-jetstream-{n}"))
     );
     let ha = items(
@@ -2896,7 +2898,7 @@ fn the_jetstream_sets_claims_are_left_only_where_the_set_is_not_there() {
         .concat(),
     );
     assert!(
-        jetstream_claims_left(&ha.to_string()).is_empty(),
+        jetstream_claims_left(&ha.to_string()).unwrap().is_empty(),
         "the set is there: its claims are its own"
     );
     let switching = items(
@@ -2910,34 +2912,45 @@ fn the_jetstream_sets_claims_are_left_only_where_the_set_is_not_there() {
         .concat(),
     );
     assert!(
-        jetstream_claims_left(&switching.to_string()).is_empty(),
+        jetstream_claims_left(&switching.to_string())
+            .unwrap()
+            .is_empty(),
         "both sets there, a switch under way: the JetStream set's claims are its own"
     );
     let brought_none = items([vec![database], claims()].concat());
     assert!(
-        jetstream_claims_left(&brought_none.to_string()).is_empty(),
+        jetstream_claims_left(&brought_none.to_string())
+            .unwrap()
+            .is_empty(),
         "no broker of the release's"
     );
-    assert!(jetstream_claims_left("not json").is_empty());
+    assert!(
+        jetstream_claims_left("not json").is_err(),
+        "a listing it cannot read is never an empty one"
+    );
 }
 
 /// An upgrade deletes the JetStream set's leftover claims before it
 /// applies -- a switch to ha starts JetStream afresh -- and, the set gone
 /// with the upgrade, after: a switch to tolerant leaves none, the set
 /// deleted in the same upgrade that first gives it its retention policy
-/// included. Where the claims cannot be listed nothing is deleted.
+/// included. The delete before waits, bounded, until they are gone (item
+/// 191's review, finding 6): a set the upgrade makes never finds one still
+/// going.
 #[tokio::test]
 async fn an_upgrade_deletes_the_claims_jetstream_left_before_and_after_it_applies() {
-    let deleting = format!(
-        "kubectl delete pvc -n meridian --ignore-not-found --wait=false {}",
-        [0, 1, 2]
-            .map(|n| format!("jetstream-{BROKER}-jetstream-{n}"))
-            .join(" ")
-    );
+    let servers = [0, 1, 2]
+        .map(|n| format!("jetstream-{BROKER}-jetstream-{n}"))
+        .join(" ");
+    let waiting =
+        format!("kubectl delete pvc -n meridian --ignore-not-found --wait --timeout=60s {servers}");
+    let deleting =
+        format!("kubectl delete pvc -n meridian --ignore-not-found --wait=false {servers}");
     let left = items([vec![broker_set(BROKER)], claims()].concat());
     let stand = upgrading()
         .json(SETS_AND_CLAIMS, left.clone())
         .json(SETS_AND_CLAIMS, left)
+        .answering(&waiting, Ok("deleted"))
         .answering(&deleting, Ok("deleted"));
     let plan = planned(&stand).await;
     let mut said = Vec::new();
@@ -2960,9 +2973,13 @@ async fn an_upgrade_deletes_the_claims_jetstream_left_before_and_after_it_applie
         deleted[0] < upgraded && deleted[1] > upgraded,
         "{asked_for:#?}"
     );
-    assert!(
-        deleted.iter().all(|n| asked_for[*n] == deleting),
-        "only the JetStream set's claims: {asked_for:#?}"
+    assert_eq!(
+        (
+            asked_for[deleted[0]].as_str(),
+            asked_for[deleted[1]].as_str()
+        ),
+        (waiting.as_str(), deleting.as_str()),
+        "only the JetStream set's claims, waited for before: {asked_for:#?}"
     );
     assert!(report.not_cleaned.is_empty(), "{:?}", report.not_cleaned);
     assert!(
@@ -2987,20 +3004,119 @@ async fn an_upgrade_deletes_the_claims_jetstream_left_before_and_after_it_applie
         stand.asked()
     );
 
-    // Found and not deleted before it applies: refused, nothing changed.
-    let stand = upgrading()
-        .json(
-            SETS_AND_CLAIMS,
-            items([vec![broker_set(BROKER)], claims()].concat()),
-        )
-        .answering(&deleting, Err("forbidden"));
-    let plan = planned(&stand).await;
-    let failed = apply(&stand, &asked(), &plan, &pace(), &mut |_: &str| {})
+    // Found and not deleted before an upgrade that brings JetStream:
+    // refused, nothing changed.
+    let found = items([vec![broker_set(BROKER)], claims()].concat()).to_string();
+    let stand = moving_to_ha()
+        .instead(SETS_AND_CLAIMS, Ok(&found))
+        .answering(&waiting, Err("timed out waiting for the condition"));
+    let to_ha = with_sets(&["resilience.profile=ha"]);
+    let plan = match check(&stand, &to_ha, &mut |_: &str| {}).await {
+        Checked::Upgrade(plan) => *plan,
+        _ => panic!("refused"),
+    };
+    let failed = apply(&stand, &to_ha, &plan, &pace(), &mut |_: &str| {})
         .await
         .unwrap_err();
     assert!(
         failed.contains("could not be deleted") && failed.contains("Nothing else was changed"),
         "{failed}"
     );
-    assert!(!stand.asked().contains(&UPGRADE.to_string()));
+    assert!(!stand.asked().contains(&TO_HA.to_string()));
+
+    // Found and not deleted before an upgrade that brings none: it goes
+    // on, and says so with what was not cleaned up.
+    let stand = upgrading()
+        .json(
+            SETS_AND_CLAIMS,
+            items([vec![broker_set(BROKER)], claims()].concat()),
+        )
+        .answering(&waiting, Err("forbidden"))
+        .answering(&deleting, Ok("deleted"));
+    let plan = planned(&stand).await;
+    let report = apply(&stand, &asked(), &plan, &pace(), &mut |_: &str| {})
+        .await
+        .unwrap();
+    assert!(stand.asked().contains(&UPGRADE.to_string()));
+    assert!(
+        report
+            .not_cleaned
+            .iter()
+            .any(|said| said.contains("could not be deleted: forbidden")),
+        "{:?}",
+        report.not_cleaned
+    );
+}
+
+/// Item 191's review, finding 6: an upgrade that gives the broker its
+/// JetStream set (`ha`) and cannot list, or read, the claims a set before
+/// it left stops before it changes anything: JetStream would start on
+/// them, its old state or its old stream.
+#[tokio::test]
+async fn an_upgrade_to_ha_that_cannot_list_jetstreams_left_claims_stops_before_it_changes_anything()
+{
+    for answer in [Err("the server could not be reached"), Ok("not json")] {
+        let stand = moving_to_ha().instead(SETS_AND_CLAIMS, answer);
+        let asked = with_sets(&["resilience.profile=ha"]);
+        let plan = match check(&stand, &asked, &mut |_: &str| {}).await {
+            Checked::Upgrade(plan) => *plan,
+            _ => panic!("refused"),
+        };
+        let failed = apply(&stand, &asked, &plan, &pace(), &mut |_: &str| {})
+            .await
+            .err();
+        assert!(
+            failed
+                .as_deref()
+                .is_some_and(|failed| failed.contains("Nothing else was changed")),
+            "{answer:?}: {failed:?}"
+        );
+        assert!(
+            !stand.asked().contains(&TO_HA.to_string()),
+            "{answer:?}: upgraded: {:#?}",
+            stand.asked()
+        );
+    }
+}
+
+/// Item 191's review, finding 6: an upgrade that brings no JetStream set
+/// and cannot list the claims one left goes on, and says so with what was
+/// not cleaned up -- once, though both the delete before it and the one
+/// after the rollout could not list them.
+#[tokio::test]
+async fn an_upgrade_without_jetstream_that_cannot_list_its_left_claims_says_so_with_what_was_not_cleaned(
+) {
+    let stand = upgrading().answering(SETS_AND_CLAIMS, Err("forbidden"));
+    let plan = planned(&stand).await;
+    let report = apply(&stand, &asked(), &plan, &pace(), &mut |_: &str| {})
+        .await
+        .unwrap();
+    assert!(stand.asked().contains(&UPGRADE.to_string()));
+    let said: Vec<&String> = report
+        .not_cleaned
+        .iter()
+        .filter(|said| said.contains("JetStream volumes") && said.contains("could not be listed"))
+        .collect();
+    assert_eq!(said.len(), 1, "{:#?}", report.not_cleaned);
+}
+
+/// Whether an upgrade gives the broker its JetStream set, as the chart
+/// decides it: `broker.jetstream.replicas` where set, else the `ha`
+/// profile.
+#[test]
+fn jetstream_is_brought_as_the_chart_decides_it() {
+    assert!(jetstream_in(&json!({"resilience": {"profile": "ha"}})));
+    assert!(!jetstream_in(
+        &json!({"resilience": {"profile": "tolerant"}})
+    ));
+    assert!(!jetstream_in(&json!({})));
+    assert!(!jetstream_in(
+        &json!({"resilience": {"profile": "ha"}, "broker": {"jetstream": {"replicas": 0}}})
+    ));
+    assert!(jetstream_in(
+        &json!({"resilience": {"profile": "tolerant"}, "broker": {"jetstream": {"replicas": 3}}})
+    ));
+    assert!(jetstream_in(
+        &json!({"broker": {"jetstream": {"replicas": "3"}}})
+    ));
 }

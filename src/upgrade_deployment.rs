@@ -553,11 +553,12 @@ pub struct DatabaseSet {
 /// `<broker>-jetstream`. Nothing where the set is there, or the release
 /// brings no broker; never a claim of another set's, a database's or a
 /// plugin's. Deleted, a return to `ha` starts JetStream afresh, never on
-/// the state its servers kept before.
-pub fn jetstream_claims_left(listed: &str) -> Vec<String> {
-    let Ok(listed) = serde_json::from_str::<serde_json::Value>(listed) else {
-        return Vec::new();
-    };
+/// the state its servers kept before. A listing that is not JSON is an
+/// error, never an empty one (item 191's review, finding 6).
+pub fn jetstream_claims_left(listed: &str) -> Result<Vec<String>, String> {
+    let listed = serde_json::from_str::<serde_json::Value>(listed).map_err(|failed| {
+        format!("`kubectl get statefulsets,persistentvolumeclaims` said something that is not JSON: {failed}")
+    })?;
     let items = listed["items"].as_array().cloned().unwrap_or_default();
     let brokers: Vec<&str> = items
         .iter()
@@ -568,14 +569,14 @@ pub fn jetstream_claims_left(listed: &str) -> Vec<String> {
         .filter_map(|set| set["metadata"]["name"].as_str())
         .collect();
     let Some(broker) = brokers.iter().find(|name| !name.ends_with("-jetstream")) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let set = format!("{broker}-jetstream");
     if brokers.contains(&set.as_str()) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let servers = format!("jetstream-{set}-");
-    items
+    Ok(items
         .iter()
         .filter(|item| item["kind"] == "PersistentVolumeClaim")
         .filter_map(|claim| claim["metadata"]["name"].as_str())
@@ -584,7 +585,19 @@ pub fn jetstream_claims_left(listed: &str) -> Vec<String> {
                 .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
         })
         .map(String::from)
-        .collect()
+        .collect())
+}
+
+/// Whether values give the broker its JetStream set, as the chart decides
+/// it (its jetstreamReplicas): `broker.jetstream.replicas` where set, else
+/// 3 under `resilience.profile: ha` and 0 otherwise (item 191's review,
+/// finding 6).
+pub fn jetstream_in(values: &serde_json::Value) -> bool {
+    match &values["broker"]["jetstream"]["replicas"] {
+        serde_json::Value::Number(n) => n.as_u64().unwrap_or(0) > 0,
+        serde_json::Value::String(n) => n.parse::<u64>().unwrap_or(0) > 0,
+        _ => values["resilience"]["profile"] == "ha",
+    }
 }
 
 /// The release's brought database, among `kubectl get deployments,
@@ -1244,6 +1257,10 @@ pub struct Plan {
     /// Each store whose writer groups the upgrade raises, from what runs to
     /// what it sets: a return to the revision it was at would lower them.
     pub raised: Vec<(&'static str, u64, u64)>,
+    /// The upgrade gives the broker its JetStream set (`ha`): JetStream's
+    /// volumes left by a set that went before must be gone first, or it
+    /// starts on them (item 191's review, finding 6).
+    pub jetstream: bool,
 }
 
 /// The same command, as somebody would type it.
