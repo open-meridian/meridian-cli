@@ -274,7 +274,10 @@ PRODUCERS: dict[str, Producer] = {
 #: every read carries its `about` (Track E), the reads its work never makes:
 #: it values positions at a close, so it reads no orders, fills, order
 #: histories, bookings or alerts, no settlement calendar and no settlement
-#: date. Report on any of them and map the case to the plugin's own read.
+#: date. From contract 30 it holds no standing figure (it values at a close,
+#: not as inputs change) and shows no source priorities (it reads the
+#: deployment's default). Report on any of them and map the case to the
+#: plugin's own read.
 _NO_ORDERS = "this board values positions at a close; it reads no orders"
 NOT_PRESENTED: dict[str, str] = {
     "hears-and-reads-an-outcome": "this board values prices, and no event contract's outcome",
@@ -286,6 +289,12 @@ NOT_PRESENTED: dict[str, str] = {
     "reads-a-calendar": "this board values positions at a close; it reads no calendar",
     "asks-for-a-settlement-date": (
         "this board values positions at a close; it asks no settlement date"
+    ),
+    "holds-a-standing-figure": (
+        "this board values positions at a close; it holds no figure kept current"
+    ),
+    "reads-the-source-priorities": (
+        "this board reads the deployment's default source; it shows no priorities"
     ),
 }
 

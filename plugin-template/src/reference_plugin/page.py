@@ -97,9 +97,11 @@ def reports(plugin: meridian.Plugin) -> bool:
 
 class Custody(custody.Role):
     """The plugin's custody role class (SDK 0.35): the acts the pages make
-    are its own, on the connection `meridian.run` registers it on. Started
-    only where the deployment launched the plugin with `custody`; a plugin
-    holding none makes no act, and its pages say there is nothing to link."""
+    are its own, on the connection `meridian.run` registers it on. This
+    plugin declares no role, so __main__.py registers no class and the pages'
+    acts are refused, said on the page; declare `custody` and register
+    `CUSTODY` there (its comment shows how). A class for a role the instance
+    was not launched with is not started."""
 
     async def on_start(self) -> None:
         # The external accounts its connection reaches, which an admin of
@@ -109,7 +111,7 @@ class Custody(custody.Role):
             log.info("reported %d external account(s) to link", len(REACHES))
 
 
-#: The custody role object the pages act through, which __main__.py registers.
+#: The custody role object the pages act through, once __main__.py registers it.
 CUSTODY = Custody()
 
 

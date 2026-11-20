@@ -159,7 +159,9 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   `archivable=False` for state read and updated in place. Declare no window
   setting of your own: the SDK declares `<kind>_window_days` and
   `<kind>_past_window` for every kind, and refuses a plugin that takes either
-  name. Keep each kind in units it can find again -- a file or directory per
+  name; read them from the settings as delivered (`config.values`, beside
+  your typed fields) or let `meridian.edge.RawStore.tend(plugin,
+  settings=config, today=...)` read them. Keep each kind in units it can find again -- a file or directory per
   account and month, say -- and name a record by its path within its unit
   (`plugin.raw_record("activity/ACC-1/2019-03/act-77.json")`). When a unit's
   last record is past the kind's window, do what `<kind>_past_window` says:
@@ -195,8 +197,10 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   edge, and shows none.** Declare each dataset in the declaration's
   catalogue, from code: `Declaration(catalogue=[meridian.DatasetDeclaration(
   key="daily", vendor=..., data_types=["meridian.v1.Price"], modes=["pull"],
-  licence_default=meridian.DatasetLicence(...), day_time_zone="Etc/UTC",
-  venue_id=...)])`, a daily dataset and a live one apart. Resolve every
+  terms_and_pricing="...", day_time_zone="Etc/UTC", venue_id=...)])`, a
+  daily dataset and a live one apart; `terms_and_pricing` is the vendor's
+  terms and pricing in plain words (what it charges, what it forbids), never
+  a licence, which the deployment admin sets. Resolve every
   subject (`resolve_identifier`) and venue (`resolve_venue`) before recording,
   and report what does not resolve (`report_missing_instrument`,
   `report_missing_venue`); keep the vendor's product map in storage, never a
@@ -223,8 +227,8 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   keeps its real kind -- a composite's is `mid`, an evaluated bond's `bid`,
   `mid` and `ask` -- never a kind made up for the class. Where the vendor
   passes on another source's data or serves an aggregate, name it in the
-  terms, `DatasetLicence(underlying_source=...)`, in words: "Pyth's aggregate
-  of its publishers". Where the source states an interval around its price,
+  dataset's `terms_and_pricing`, in words: "Pyth's aggregate of its
+  publishers". Where the source states an interval around its price,
   record it as the source states it, `Price(confidence=...)`, in the price's
   own unit, never computed, and name `meridian.v1.Price.confidence` among
   the dataset's `data_types`. A deployment admin sees the class and the
@@ -283,6 +287,12 @@ and subscribe to comes from the roles `pyproject.toml` declares under
   an adapter over its venue (`Venue`), and tests that adapter on
   `meridian.roles.connectivity.testing.Rig` over a fake broker. How the
   plugin reaches its vendor -- its client, its stream, FIX -- stays its own.
+  The data template (`meridian plugin new --role data`) shows it in two
+  examples, neither wired in (rulings 1027 and 1028): `stream.py`, a
+  vendor's WebSocket stream from an established library kept open by the
+  SDK's `meridian.helpers.sessions.Supervisor` (reopened with jittered
+  backoff, the gap caught up after a reopen); and `pacing.py`, the vendor's
+  rate limit and its 429's `Retry-After` kept by the plugin.
 - **Follow the role's common part.** A person who knows a role knows any
   plugin of it: `meridian.roles.<role>` (`data`, `custody`, `operations`,
   `reporting`, `connectivity`) gives each common page's record (`<Page>Read`, the page's
@@ -427,6 +437,15 @@ no bus call.
 - **Book records too.** `OrderUpdated`, `PositionChanged` and the other
   records your roles hear keep a view by entity. A page reads the view, not
   `list_orders` on every request.
+- **Figures worked out from views: `pages.live_values`.** Where a page
+  shows a mid, a cross or a move rather than the rows as recorded, its
+  `pages.live` function answers `await pages.live_values(key, compute,
+  views=...)`, `compute` making each value with `LiveValue.of(key, shown,
+  rows, datasets=..., liveness=..., sessions=...)`. Each carries its source
+  dataset, its age, and a stale flag past its dataset's ceiling, counted
+  only in session; with no ceiling declared it is never stale. The kit's
+  `<om-live cells>` (kit 0.16.0) draws them into the elements marked
+  `data-live`. Never write a live module of your own.
 
 ```python
 @pages.live("/rates/live", levels="read")
@@ -685,8 +704,8 @@ theirs.
 
 ### Start the loop
 
-The instance is called `reference-plugin` below. Use whatever the person
-wants it called, and the same name in every command.
+The instance is called `<instance>` below: whatever the person wants it
+called, the same name in every command.
 
 **The first time an instance is launched, the person approves what it asks
 for.** Show them the `roles` in `pyproject.toml`'s `[tool.meridian]`
@@ -698,7 +717,7 @@ Run it in the background, and keep it running for the whole session:
 
 ```sh
 mkdir -p .meridian
-meridian plugin dev --instance reference-plugin --yes --json > .meridian/dev.jsonl 2> .meridian/dev.err
+meridian plugin dev --instance <instance> --yes --json > .meridian/dev.jsonl 2> .meridian/dev.err
 ```
 
 Its output goes under `.meridian/` on purpose. `plugin dev` sends every file
@@ -742,10 +761,10 @@ Ask the question that answers what you changed:
 
 | To know | Run |
 |---|---|
-| What a page shows, as the person is served it | `meridian plugin open --instance reference-plugin --level open --print /` for Accounts under Open (`--level view` under View), and `--level manage --print /setup` for Setup under Manage: any path on the plugin, at a level it is declared with |
-| What the plugin printed or logged since your change | `meridian plugin logs --instance reference-plugin --since <R-1>` |
-| What the sidecar refused it, or what else happened | `meridian plugin events --instance reference-plugin --since <R-1> --json` |
-| What the person sees in a browser | `meridian plugin open --instance reference-plugin --level open`: a link one browser opens once, at that level. Give it to the person, or open it in your browser pane |
+| What a page shows, as the person is served it | `meridian plugin open --instance <instance> --level open --print /` for Accounts under Open (`--level view` under View), and `--level manage --print /setup` for Setup under Manage: any path on the plugin, at a level it is declared with |
+| What the plugin printed or logged since your change | `meridian plugin logs --instance <instance> --since <R-1>` |
+| What the sidecar refused it, or what else happened | `meridian plugin events --instance <instance> --since <R-1> --json` |
+| What the person sees in a browser | `meridian plugin open --instance <instance> --level open`: a link one browser opens once, at that level. Give it to the person, or open it in your browser pane |
 
 `--level` is the home's button the session is opened by: `manage`, `open` or
 `view`. Name it every time. A page answers 403 at a level it is not declared
@@ -776,7 +795,7 @@ When the person is satisfied:
    exits 0.
 2. Raise `version` in `pyproject.toml`. A version is never replaced.
 3. Show the person the roles again, and get their yes.
-4. Run `meridian plugin dev --release --instance reference-plugin --yes`.
+4. Run `meridian plugin dev --release --instance <instance> --yes`.
 
 That uploads this directory as that version and runs it in place of the live
 instance. It is then an ordinary version in the deployment's catalogue.
@@ -784,12 +803,15 @@ instance. It is then an ordinary version in the deployment's catalogue.
 ### Stop
 
 Stop the background `plugin dev`. The instance keeps running, live, as it was.
-`meridian plugin stop reference-plugin` ends it, which is the person's call.
+`meridian plugin stop <instance>` ends it, which is the person's call.
 
 ## Publish it to a registry
 
-To list a version on the platform's registry, publish a signed release tag
-of it:
+Only a plugin meant to be listed on the platform's registry is published; a
+private one never is, and a version of it reaches a deployment by
+`meridian plugin upload` once its pull request is merged. Ask the person
+which this plugin is before publishing anything. To list a version on the
+platform's registry, publish a signed release tag of it:
 
 1. Once: `meridian plugin key setup`. It makes git's SSH signing key ready,
    or a new one, sets git to sign tags with it, and registers its public half

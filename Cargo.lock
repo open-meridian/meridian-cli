@@ -1447,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-cli"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "age",
  "async-trait",

@@ -139,7 +139,7 @@ ci-mirror-check:
 # role one generated class, the plugin entered through `meridian.run(...)`
 # (rulings 1009-1023). Its template/, templates/ and src/meridian/roles are
 # the same trees as at branch 0.35's 2e90655.
-SDK_REV  := ab749b77e4274ee7546f3c23789af40ad39ffb2d
+SDK_REV  := a30e4eb9e159d24e2449121559febed35eb84c8d
 SDK_REPO := https://github.com/open-meridian/meridian-python.git
 SCRATCH  := .sdk-scratch
 SDK_ROLES := $(SCRATCH)/src/meridian/roles

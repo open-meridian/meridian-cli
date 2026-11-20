@@ -10,8 +10,10 @@ knows no other address, and cannot choose its own identity or grants: those
 come from how the deployment launched it. Start from here -- each role the
 plugin holds is one class, `meridian.roles.<role>.Role`, whose acts are the
 steps that role may take, and nothing else reaches the bus -- and keep it
-that way. This one registers a custody class (page.py), started only where
-the deployment launched it with `custody`.
+that way. This one declares no role (`[tool.meridian] roles = []`), so it
+registers no class: page.py holds a custody class, `CUSTODY`, to show how
+one is written, and its pages say there is nothing to link until it is
+registered.
 """
 
 import logging
@@ -19,7 +21,7 @@ import logging
 import meridian
 
 from .declaration import DECLARATION, PORT
-from .page import CUSTODY, pages
+from .page import CUSTODY, pages  # noqa: F401 - CUSTODY, once `custody` is declared
 
 
 def main() -> None:
@@ -29,7 +31,15 @@ def main() -> None:
     # Where the pages listen, on loopback beside the sidecar, which forwards
     # people's requests to them. Each page is declared with the levels it
     # serves, and the dashboard shows it under those buttons.
-    meridian.run(declaration=DECLARATION, roles=[CUSTODY], pages=pages, port=PORT)
+    #
+    # A class is registered for each role the plugin declares, and only
+    # those: `meridian plugin check` fails a declared role with no class, and
+    # warns of a class for a role not declared. This plugin declares none.
+    # Declaring `custody` in pyproject.toml's [tool.meridian] roles, register
+    # page.py's class with it:
+    #
+    #     meridian.run(declaration=DECLARATION, roles=[CUSTODY], pages=pages, port=PORT)
+    meridian.run(declaration=DECLARATION, roles=[], pages=pages, port=PORT)
 
 
 if __name__ == "__main__":
