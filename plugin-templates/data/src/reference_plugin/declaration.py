@@ -44,8 +44,19 @@ DAILY = meridian.DatasetDeclaration(
     modes=["pull"],
     cadence=86_400,
     history=1_826,
-    licence_default=meridian.DatasetLicence(kept=True),
     day_time_zone="Etc/UTC",
+    # The deployment admin settles the terms with the vendor and sets the
+    # licence on Data sources; the plugin only describes them, in plain words
+    # (contract 30, ruling 1032), shown on Data sources and in its docs.
+    terms_and_pricing=(
+        "Daily closes and bars, five years back. Included in the vendor's free plan "
+        "for personal use; business use needs its Business plan ($99 a month). Not "
+        "for redistribution; the vendor asks that pages showing it say 'Data from "
+        "Reference vendor'."
+    ),
+    # A gap the lake's write-ahead stream leaves is asked again of a vendor
+    # serving history (W10.14).
+    gap_recovery="backfill",
 )
 
 

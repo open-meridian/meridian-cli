@@ -112,6 +112,19 @@ changed, or a poll, is the dataset's liveness (`Wants.liveness`,
 (`meridian.dataset_thresholds()`), and the plugin admin its ceilings
 (`meridian.session_ceilings()`).
 
+**From 0.35** (924's items; spec/each-role-is-one-generated-class, section
+4): `SentRows` (a row sent again only when it changed, by a digest of its
+values) and `Conflator` (the latest per key, once a period; never a trade, a
+fill or an outcome); `Timetable` (a polled source's standing wants read at
+their declared cadence, gated by the venue's sessions and the market's
+days, within a vendor's allowance); the settings `timeliness(label,
+choices, default)` and `api_key(label, description)`;
+`meridian.roles.data.option_chains`, a source's listed option chains
+(`Feed`, `ChainSource`, `ChainOption`, `SourceTrade`); the listings feed's
+edge, timeliness, two clocks, venues by MIC and pages; and the pairs feed's
+`conflate_first`, `day_clock`, the `mid` kind and its supervised stream
+(`pairs.supervised`).
+
 How a plugin talks to its venue -- an API client, a WebSocket, FIX -- is its
 own, never here.
 """
@@ -146,6 +159,9 @@ from ._records import (
     Want,
     WantHeard,
 )
+from ._rows import Conflator, SentRows
+from ._settings import DELAYED, END_OF_DAY, REAL_TIME, TIMELINESS, api_key, timeliness
+from ._timetable import Timetable
 from ._wants import (
     BATCH,
     Counts,
@@ -164,6 +180,15 @@ from ._wants import (
 __all__ = [
     "Role",
     "BATCH",
+    "DELAYED",
+    "END_OF_DAY",
+    "REAL_TIME",
+    "TIMELINESS",
+    "Conflator",
+    "SentRows",
+    "Timetable",
+    "api_key",
+    "timeliness",
     "NANOS_PER_DAY",
     "NANOS_PER_SECOND",
     "SECONDS_PER_DAY",

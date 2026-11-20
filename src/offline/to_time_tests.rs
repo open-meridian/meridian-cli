@@ -888,3 +888,65 @@ async fn a_failed_restore_to_the_end_is_taken_from_there_by_its_own_command() {
         "meridian restore --to-archive-end -n meridian"
     );
 }
+
+// ── A store on more than one database (review F, headline 3) ─────────────────
+
+#[tokio::test]
+async fn a_store_on_more_than_one_database_is_refused_before_anything_changes() {
+    for brought in [true, false] {
+        let sim = Sim::new(State {
+            archive: true,
+            brought,
+            store_databases: [("lake".to_string(), 2)].into(),
+            ..State::default()
+        });
+        let (checked, said) = check_of(&sim).await;
+        assert!(checked.is_err(), "brought {brought}: {said}");
+        assert!(
+            said.contains(
+                "a restore covers only each store's first database, and lake runs 2 \
+                 (lake.databases: 2): lake's database 1 would be left out"
+            ),
+            "brought {brought}: {said}"
+        );
+        assert!(said.contains("Nothing was changed."), "{said}");
+        assert!(!sim.changed_anything(), "{:#?}", sim.asked());
+        // Refused before the database is probed or its archive read.
+        assert!(
+            !sim.asked().iter().any(|c| c.contains("probe")),
+            "{:#?}",
+            sim.asked()
+        );
+    }
+}
+
+#[tokio::test]
+async fn to_the_archives_end_is_refused_with_more_than_one_database_as_a_time_is() {
+    let sim = Sim::new(State {
+        archive: true,
+        store_databases: [("lake".to_string(), 2), ("bor".to_string(), 3)].into(),
+        ..State::default()
+    });
+    let (checked, said) = check_to_the_end(&sim).await;
+    assert!(checked.is_err(), "{said}");
+    assert!(
+        said.contains(
+            "bor runs 3 (bor.databases: 3) and lake runs 2 (lake.databases: 2): bor's \
+             databases 1 to 2 and lake's database 1 would be left out"
+        ),
+        "{said}"
+    );
+    assert!(!sim.changed_anything(), "{:#?}", sim.asked());
+}
+
+#[tokio::test]
+async fn with_one_database_to_each_store_a_restore_is_planned_as_before() {
+    let sim = Sim::new(State {
+        archive: true,
+        store_databases: [("lake".to_string(), 1)].into(),
+        ..State::default()
+    });
+    let (checked, said) = check_of(&sim).await;
+    checked.unwrap_or_else(|()| panic!("{said}"));
+    assert!(!said.contains("first database"), "{said}");
+}

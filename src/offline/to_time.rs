@@ -21,8 +21,9 @@
 //! nothing here reads or prints it.
 
 use super::{
-    act_running, clear_stopped, database, members_now, record_stop, run_act, standbys_to_remake,
-    start, started_components, stop_database, stop_these, suspend_cronjobs, Act, Release, Stopped,
+    act_running, clear_stopped, members_now, record_stop, release_workloads, run_act,
+    standbys_to_remake, start, started_components, stop_database, stop_these, suspend_cronjobs,
+    Act, Release, Stopped,
 };
 use crate::doctor::{Finding, Machine};
 use crate::upgrade_deployment::run::Pace;
@@ -292,9 +293,26 @@ async fn checks_made(
         refuse(&findings, say);
         return Err(());
     }
+    // A store on more than one database: restore acts on the first alone,
+    // so it is refused before anything is asked of the database.
+    let listed = release_workloads(machine, &release).await;
+    let several = listed
+        .as_ref()
+        .map(super::several_databases)
+        .unwrap_or_default();
+    if !several.is_empty() {
+        findings.push(Finding::Stops {
+            what: super::several_databases_refused("a restore", &several),
+            fix: "Restore each database with the database's own tools until meridian restore \
+                  covers every one."
+                .into(),
+        });
+        refuse(&findings, say);
+        return Err(());
+    }
     let mut resume = None;
     let mut earlier = None;
-    let set = match database(machine, &release).await {
+    let set = match listed.map(|listed| crate::upgrade_deployment::database_set_of(&listed)) {
         Ok(Some(set)) if set.replicas > 0 => {
             earlier = super::recorded_stopped(machine, &release, &set.name).await;
             set

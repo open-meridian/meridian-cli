@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 import meridian
-from meridian import edge
 from meridian.roles import connectivity
 
 from .declaration import DECLARATION, PORT
@@ -30,13 +29,11 @@ def main() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     venue = StandInVenue()
-    sent, enabled, originated = connectivity.trading_files(edge.storage_dir())
+    # What it sent, enabled and watched is read from its storage on start,
+    # once registered: a shard's own folder is known only then.
     trader = connectivity.Trader(
         lambda: venue,
         now=lambda: datetime.now(UTC),
-        sent=connectivity.Sent(sent),
-        enabled=connectivity.Sent(enabled),
-        watched=connectivity.Watched(originated),
         market_zone=MARKET_ZONE,
         poll_seconds=lambda: 5.0,
     )
