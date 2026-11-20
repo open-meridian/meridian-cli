@@ -1417,12 +1417,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "meridian-budget"
+version = "0.1.0"
+source = "git+https://github.com/open-meridian/meridian-core.git?rev=8599e1fd34ceee4dc663f421eea9f897b49f7073#8599e1fd34ceee4dc663f421eea9f897b49f7073"
+dependencies = [
+ "libc",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "meridian-bus"
 version = "0.1.0"
-source = "git+https://github.com/open-meridian/meridian-core.git?rev=94f711d3da98379a5b7b61c453e7bd8c8b6bfca4#94f711d3da98379a5b7b61c453e7bd8c8b6bfca4"
+source = "git+https://github.com/open-meridian/meridian-core.git?rev=8599e1fd34ceee4dc663f421eea9f897b49f7073#8599e1fd34ceee4dc663f421eea9f897b49f7073"
 dependencies = [
  "async-nats",
  "futures-util",
+ "meridian-budget",
+ "meridian-clock",
  "meridian-domain",
  "meridian-pb",
  "prost",
@@ -1435,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-cli"
-version = "0.1.60"
+version = "0.1.61"
 dependencies = [
  "age",
  "async-trait",
@@ -1459,14 +1471,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "meridian-clock"
+version = "0.1.0"
+source = "git+https://github.com/open-meridian/meridian-core.git?rev=8599e1fd34ceee4dc663f421eea9f897b49f7073#8599e1fd34ceee4dc663f421eea9f897b49f7073"
+
+[[package]]
 name = "meridian-conductor"
 version = "0.1.0"
-source = "git+https://github.com/open-meridian/meridian-core.git?rev=94f711d3da98379a5b7b61c453e7bd8c8b6bfca4#94f711d3da98379a5b7b61c453e7bd8c8b6bfca4"
+source = "git+https://github.com/open-meridian/meridian-core.git?rev=8599e1fd34ceee4dc663f421eea9f897b49f7073#8599e1fd34ceee4dc663f421eea9f897b49f7073"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
  "ed25519-dalek",
  "meridian-bus",
+ "meridian-clock",
  "meridian-domain",
  "meridian-symbology",
  "prost",
@@ -1474,6 +1492,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -1482,16 +1501,18 @@ dependencies = [
 [[package]]
 name = "meridian-domain"
 version = "0.1.0"
-source = "git+https://github.com/open-meridian/meridian-core.git?rev=94f711d3da98379a5b7b61c453e7bd8c8b6bfca4#94f711d3da98379a5b7b61c453e7bd8c8b6bfca4"
+source = "git+https://github.com/open-meridian/meridian-core.git?rev=8599e1fd34ceee4dc663f421eea9f897b49f7073#8599e1fd34ceee4dc663f421eea9f897b49f7073"
 dependencies = [
  "meridian-pb",
  "prost",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "meridian-pb"
 version = "0.1.0"
-source = "git+https://github.com/open-meridian/meridian-schema.git?rev=1296436d3dd20a399d76ac8338bb8d8193865683#1296436d3dd20a399d76ac8338bb8d8193865683"
+source = "git+https://github.com/open-meridian/meridian-schema.git?rev=9f396f9f043fcf69d41685de9b3aaf23df14b5f9#9f396f9f043fcf69d41685de9b3aaf23df14b5f9"
 dependencies = [
  "prost",
  "tonic",
@@ -1500,7 +1521,7 @@ dependencies = [
 [[package]]
 name = "meridian-symbology"
 version = "0.1.0"
-source = "git+https://github.com/open-meridian/meridian-core.git?rev=94f711d3da98379a5b7b61c453e7bd8c8b6bfca4#94f711d3da98379a5b7b61c453e7bd8c8b6bfca4"
+source = "git+https://github.com/open-meridian/meridian-core.git?rev=8599e1fd34ceee4dc663f421eea9f897b49f7073#8599e1fd34ceee4dc663f421eea9f897b49f7073"
 dependencies = [
  "meridian-domain",
 ]
