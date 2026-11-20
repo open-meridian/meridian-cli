@@ -17,6 +17,13 @@
 //! raise-only (item 111) is refused among the checks: `helm rollback`
 //! applies the stored manifest without rendering the chart, so the chart's
 //! own refusal never runs.
+//!
+//! So is a rollback to a revision whose manifest carries a launched plugin's
+//! credential as it was when that revision was rendered, where the broker
+//! has made the credential again since: the stored manifest would put the
+//! old one back under a plugin that runs on the new one (Helm 3's merge),
+//! or be refused by the cluster and leave the rollback's own revision
+//! failed (Helm 4's server-side apply; the dev deployment, 2026-11-20).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -147,7 +154,133 @@ pub async fn check(machine: &dyn Machine, asked: &Asked) -> Result<Plan, String>
         ));
     }
     writer_groups_kept(machine, asked, to.revision).await?;
+    launched_credentials_kept(machine, asked, to.revision).await?;
     Ok(Plan { from, to })
+}
+
+/// The Secret the broker keeps launched plugins' credentials in, by the end
+/// of its name: `<release>-meridian-runtime-broker-launched`, one key pair
+/// per instance, `<instance>.password` and `<instance>.url`.
+const LAUNCHED_SECRET: &str = "-launched";
+
+/// The instances whose credential `manifest` states and `live` holds with
+/// another value: each named once, in order. Values are compared and never
+/// kept or said.
+fn credentials_made_again(manifest: &Value, live: &Value) -> Vec<String> {
+    let mut instances: Vec<String> = manifest["data"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(key, then)| live["data"].get(key).is_some_and(|now| now != *then))
+        .map(|(key, _)| {
+            key.strip_suffix(".password")
+                .or_else(|| key.strip_suffix(".url"))
+                .unwrap_or(key)
+                .to_string()
+        })
+        .collect();
+    instances.sort();
+    instances.dedup();
+    instances
+}
+
+/// A launched plugin's credential is the broker's: made when the plugin is
+/// launched, taken out when it is stopped. The chart once rendered the
+/// Secret's keys from what it held, so such a revision's manifest states
+/// each credential as it was then, and `helm rollback` applies that manifest
+/// as it is stored. Where one has been made again since, the rollback is
+/// refused here, before anything changes, naming the instances: a stopped
+/// plugin has no credential to lose, so stopping them first is the way
+/// through. A credential the revision states as it still is, or for a plugin
+/// that no longer runs, is left to Helm: the first changes nothing, and the
+/// broker takes the second out again.
+async fn launched_credentials_kept(
+    machine: &dyn Machine,
+    asked: &Asked,
+    to: u64,
+) -> Result<(), String> {
+    let revision = to.to_string();
+    let (release, namespace) = (asked.release.as_str(), asked.namespace.as_str());
+    let manifest = machine
+        .run(
+            "helm",
+            &[
+                "get",
+                "manifest",
+                release,
+                "--revision",
+                &revision,
+                "--namespace",
+                namespace,
+            ],
+        )
+        .await
+        .map_err(|failed| {
+            format!(
+                "Can't read revision {to}'s manifest ({}), so can't tell whether returning to it                  would put back a launched plugin's old credential",
+                said(failed)
+            )
+        })?;
+    let stated: Vec<Value> = serde_yaml::Deserializer::from_str(&manifest)
+        .filter_map(|document| Value::deserialize(document).ok())
+        .filter(|document| {
+            document["kind"] == "Secret"
+                && document["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with(LAUNCHED_SECRET))
+                && document["data"]
+                    .as_object()
+                    .is_some_and(|data| !data.is_empty())
+        })
+        .collect();
+    let mut made_again = Vec::new();
+    for secret in &stated {
+        let name = secret["metadata"]["name"].as_str().unwrap_or_default();
+        let live = machine
+            .run(
+                "kubectl",
+                &[
+                    "get",
+                    "secret",
+                    name,
+                    "-n",
+                    namespace,
+                    "--ignore-not-found",
+                    "-o",
+                    "json",
+                ],
+            )
+            .await
+            .map_err(|failed| {
+                format!(
+                    "Can't read which launched plugins hold a credential now ({}), so can't tell                      whether returning to revision {to} would put an old one back",
+                    said(failed)
+                )
+            })?;
+        let live: Value = serde_json::from_str(&live).unwrap_or_default();
+        made_again.extend(credentials_made_again(secret, &live));
+    }
+    if made_again.is_empty() {
+        return Ok(());
+    }
+    let stops = made_again
+        .iter()
+        .map(|instance| format!("  meridian plugin stop {instance}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (have, them) = if made_again.len() == 1 {
+        ("one has", "it")
+    } else {
+        ("some have", "them")
+    };
+    Err(format!(
+        "revision {to} keeps the credentials of the plugins that were launched when it was made, \
+         as they were then, and {have} been made again since: {}. Returning to it would put the \
+         old one back under a plugin that runs on the new one, or the cluster would refuse it and \
+         leave the release at a failed revision. Stop {them} first, roll back, and launch {them} \
+         again (a stopped plugin has no credential to lose):\n{stops}",
+        made_again.join(", "),
+    ))
 }
 
 /// Set on the lake's members while its writes are kept in a stream.

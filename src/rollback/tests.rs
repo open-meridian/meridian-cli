@@ -59,6 +59,15 @@ fn stand() -> Stand {
             Ok("Kubernetes control plane is running"),
         )
         .answering(HISTORY, Ok(REVISIONS))
+        // A revision whose manifest states no launched plugin's credential.
+        .answering(
+            "helm get manifest meridian --revision 12 --namespace meridian",
+            Ok(""),
+        )
+        .answering(
+            "helm get manifest meridian --revision 11 --namespace meridian",
+            Ok(""),
+        )
 }
 
 fn asked(to: Option<u64>) -> Asked {
@@ -364,13 +373,15 @@ async fn a_raise_an_unchanged_count_and_tolerant_roll_back_as_before() {
     );
     assert!(check(&raised, &asked(None)).await.is_ok());
     assert!(!raised.asked().iter().any(|c| c == VALUES_12));
-    // One group runs: nothing can be lowered, and the revision is not read.
+    // One group runs: nothing can be lowered, and the revision is read once,
+    // for the launched plugins' credentials alone.
     let one = stand().answering(
         LIVE,
         Ok(&live(&[deployment("lake", &[]), deployment("bor", &[])])),
     );
     assert!(check(&one, &asked(None)).await.is_ok());
-    assert!(!one.asked().iter().any(|c| c == MANIFEST_12));
+    assert_eq!(one.asked().iter().filter(|c| *c == MANIFEST_12).count(), 1);
+    assert!(!one.asked().iter().any(|c| c == VALUES_12));
 }
 
 #[tokio::test]
@@ -395,4 +406,112 @@ async fn a_revision_that_cannot_be_read_is_refused_not_passed() {
         .unwrap_err()
         .contains("Can't read revision 12's values (Error: forbidden), so can't tell"));
     assert!(!stand.asked().iter().any(|c| c.starts_with("helm rollback")));
+}
+
+const LAUNCHED: &str =
+    "kubectl get secret meridian-meridian-runtime-broker-launched -n meridian --ignore-not-found -o json";
+
+/// Revision 12's manifest with the launched plugins' Secret as an older
+/// chart rendered it: each credential as it was that day.
+fn manifest_with_credentials(data: &[(&str, &str)]) -> String {
+    let data: String = data
+        .iter()
+        .map(|(key, value)| format!("  {key}: {value}\n"))
+        .collect();
+    format!(
+        "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: meridian-meridian-runtime-broker\n\
+         data:\n  dashboard: b25l\n\
+         ---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: meridian-meridian-runtime-broker-launched\n\
+         type: Opaque\ndata:\n{data}"
+    )
+}
+
+fn held(data: &[(&str, &str)]) -> String {
+    let data: serde_json::Map<String, Value> = data
+        .iter()
+        .map(|(key, value)| (key.to_string(), Value::String(value.to_string())))
+        .collect();
+    serde_json::json!({"kind": "Secret", "data": data}).to_string()
+}
+
+#[tokio::test]
+async fn a_revision_holding_a_credential_made_again_since_is_refused_before_helm_rollback() {
+    // tiingo and tradier were stopped and launched again since revision 12;
+    // alpaca's credential is as it was; kalshi was launched after it.
+    let stand = stand()
+        .answering(
+            MANIFEST_12,
+            Ok(&manifest_with_credentials(&[
+                ("alpaca.password", "YWxwYWNhLXRoZW4="),
+                ("alpaca.url", "bmF0czovL2FscGFjYS10aGVu"),
+                ("tiingo.password", "dGlpbmdvLXRoZW4="),
+                ("tiingo.url", "bmF0czovL3RpaW5nby10aGVu"),
+                ("tradier.password", "dHJhZGllci10aGVu"),
+                ("tradier.url", "bmF0czovL3RyYWRpZXItdGhlbg=="),
+            ])),
+        )
+        .answering(
+            LAUNCHED,
+            Ok(&held(&[
+                ("alpaca.password", "YWxwYWNhLXRoZW4="),
+                ("alpaca.url", "bmF0czovL2FscGFjYS10aGVu"),
+                ("kalshi.password", "a2Fsc2hpLW5vdw=="),
+                ("kalshi.url", "bmF0czovL2thbHNoaS1ub3c="),
+                ("tiingo.password", "dGlpbmdvLW5vdw=="),
+                ("tiingo.url", "bmF0czovL3RpaW5nby1ub3c="),
+                ("tradier.password", "dHJhZGllci1ub3c="),
+                ("tradier.url", "bmF0czovL3RyYWRpZXItbm93"),
+            ])),
+        );
+    let refused = check(&stand, &asked(None)).await.unwrap_err();
+    assert!(
+        refused.contains("some have been made again since: tiingo, tradier."),
+        "{refused}"
+    );
+    assert!(
+        refused.ends_with("  meridian plugin stop tiingo\n  meridian plugin stop tradier"),
+        "{refused}"
+    );
+    // The instances, never a credential, then or now.
+    for value in ["dGlpbmdv", "dHJhZGllci", "bmF0czovL", "alpaca", "kalshi"] {
+        assert!(!refused.contains(value), "{value} in: {refused}");
+    }
+    assert!(!stand.asked().iter().any(|c| c.starts_with("helm rollback")));
+}
+
+#[tokio::test]
+async fn a_credential_as_it_was_or_of_a_plugin_stopped_since_rolls_back_as_before() {
+    let then = manifest_with_credentials(&[
+        ("alpaca.password", "YWxwYWNhLXRoZW4="),
+        ("alpaca.url", "bmF0czovL2FscGFjYS10aGVu"),
+        ("tiingo.password", "dGlpbmdvLXRoZW4="),
+        ("tiingo.url", "bmF0czovL3RpaW5nby10aGVu"),
+    ]);
+    // alpaca's as it was, and tiingo stopped: nothing of a running plugin's
+    // would change.
+    let stand = stand().answering(MANIFEST_12, Ok(&then)).answering(
+        LAUNCHED,
+        Ok(&held(&[
+            ("alpaca.password", "YWxwYWNhLXRoZW4="),
+            ("alpaca.url", "bmF0czovL2FscGFjYS10aGVu"),
+        ])),
+    );
+    assert_eq!(check(&stand, &asked(None)).await.unwrap().to.revision, 12);
+    // The Secret gone altogether, as `--ignore-not-found` answers: nothing.
+    let stand = stand.answering(LAUNCHED, Ok(""));
+    assert_eq!(check(&stand, &asked(None)).await.unwrap().to.revision, 12);
+    // A revision whose manifest states no key asks nothing of the cluster.
+    let stand = self::stand().answering(MANIFEST_12, Ok(&manifest_with_credentials(&[])));
+    assert_eq!(check(&stand, &asked(None)).await.unwrap().to.revision, 12);
+    assert!(!stand
+        .asked()
+        .iter()
+        .any(|c| c.starts_with("kubectl get secret")));
+    // And one that cannot be read is refused, not passed.
+    let stand = self::stand()
+        .answering(MANIFEST_12, Ok(&then))
+        .answering(LAUNCHED, Err("Error: forbidden"));
+    assert!(check(&stand, &asked(None)).await.unwrap_err().contains(
+        "Can't read which launched plugins hold a credential now (Error: forbidden), so can't tell"
+    ));
 }

@@ -68,6 +68,12 @@ an older one each says so and changes nothing.
   book runs more than one database (`lake.databases` or `bor.databases` above 1), before changing
   anything: each covers only a store's first database, and says which databases it would leave
   out. A backup taken where a store ran more than one database is refused at restore the same way.
+- `meridian rollback-deployment` refuses, before anything changes, a revision whose manifest keeps a
+  launched plugin's credential as it was when the revision was made, where that credential has been
+  made again since. It names the plugins and the way through: stop them, roll back, launch them
+  again. Before, Helm 4 refused the rollback part-way and left the release at a failed revision,
+  which `upgrade-deployment` then refused; Helm 3 put the old credential back under the running
+  plugin.
 
 ## 0.1.60
 
