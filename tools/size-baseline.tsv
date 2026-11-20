@@ -1,0 +1,8 @@
+# S2: hand-written files over 1,500 lines today, with their lines. Lowered as each is split;
+# never raised (CONTRIBUTING.md, "Code structure").
+src/backup.rs	2937
+src/check/rules.rs	4854
+src/check/tests.rs	4877
+src/main.rs	4383
+src/upgrade_deployment.rs	2057
+src/upgrade_deployment/tests.rs	3122

@@ -10,7 +10,7 @@ DOCKER := DOCKER_BUILDKIT=1 docker
 unexport GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
          GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
 
-.PHONY: help ci-local ci-local-deep ci-stage pre-push pre-push-run build test lint fmt lock install-hooks e2e-up e2e-migrate \
+.PHONY: help check-structure check-structure-selftest check-interims check-pins check-licences check-shellouts check-size check-baselines ci-local ci-local-deep ci-stage pre-push pre-push-run build test lint fmt lock install-hooks e2e-up e2e-migrate \
         vendor-template check-vendored-template check-install check-c-deps check-scaffolds \
         check-fresh-sources smoke-linux \
         ci-mirror-check e2e-authority-macos advisories
@@ -19,6 +19,7 @@ help:
 	@echo "  make pre-push   the fast gate the pre-push hook runs: lint, build, tests, the stages the changed paths select"
 	@echo "  make ci-local   every gate, as CI runs it: optional, for when CI is down"
 	@echo "  make ci-stage STAGE=<gate>  one of CI's gates, as CI runs it (ci-local's: $(CI_STAGES))"
+	@echo "  make check-structure  the code-structure rules: S3, S4, S5, S9, S10, and S2 as a warning"
 	@echo "  make build      compile the binary"
 	@echo "  make test       the unit tests: every check against a fake machine"
 	@echo "  make lint       rustfmt --check and clippy with warnings denied"
@@ -39,7 +40,7 @@ help:
 # Every gate. CI on the pull request runs it, and the pull request merges on
 # it (accepted 2026-11-07, superseding ruling 1075's full local gate); here it
 # is the optional full run, for when CI is down.
-ci-local: ci-mirror-check check-vendored-template advisories build test lint smoke-linux \
+ci-local: ci-mirror-check check-structure check-vendored-template advisories build test lint smoke-linux \
           check-c-deps check-fresh-sources check-install check-scaffolds
 	@echo
 	@echo "ci-local: GREEN"
@@ -49,7 +50,7 @@ ci-local-deep: ci-local
 # One of CI's gates, as CI's ci-local job runs it: reproduce a failing one
 # with this before pushing again, rather than rerunning CI until it is green.
 # ci-local's prerequisites, the same list (ci-mirror-check reads that line).
-CI_STAGES := ci-mirror-check check-vendored-template advisories build test lint smoke-linux \
+CI_STAGES := ci-mirror-check check-structure check-vendored-template advisories build test lint smoke-linux \
           check-c-deps check-fresh-sources check-install check-scaffolds
 ci-stage:
 	@case " $(CI_STAGES) " in *" $(STAGE) "*) ;; \
@@ -105,7 +106,7 @@ pre-push:
 
 pre-push-run: $(addprefix pre-push-,$(PRE_PUSH_STAGES))
 
-pre-push-checks: ci-mirror-check advisories
+pre-push-checks: ci-mirror-check check-structure advisories
 pre-push-rust: lint build test
 pre-push-vendored: check-vendored-template
 pre-push-c-deps: check-c-deps
@@ -121,6 +122,45 @@ PY := python3
 
 ci-mirror-check:
 	@$(PY) tools/ci_mirror_check.py --repo-root .
+
+# The code-structure rules (CONTRIBUTING.md, "Code structure"; adopted
+# 2026-11-20), each red on a planted violation (`make check-structure-selftest`):
+#   S3  generated is generated: check-vendored-template (the scaffolds and
+#       sdk-roles are meridian-python's at SDK_REV) and check-interims (the
+#       register is the markers').
+#   S4  check-interims: INTERIM(vNN): reason, none due at roadmap_version.
+#   S5  check-pins: Cargo.toml and the workflows pin other repositories by a
+#       release or a full SHA; exceptions listed with their marker.
+#   S9  check-shellouts: the kubectl and helm calls in src/ may not grow.
+#   S10 check-licences: the scaffolds and sdk-roles, which plugins ship under
+#       Apache-2.0, carry no GPL or AGPL text.
+#   S2  check-size: files over 1,500 lines reported, a warning until v31b.
+#   check-baselines: a baseline or allowlist changes only with a
+#       `Baseline-Change:` trailer, and a ratchet only goes down.
+# tools/code_structure.py is the same in every repository that runs it.
+check-structure: check-structure-selftest check-interims check-pins check-licences check-shellouts \
+                 check-size check-baselines
+
+check-structure-selftest:
+	@$(PY) tools/code_structure.py --self-test
+
+check-interims:
+	@$(PY) tools/code_structure.py interims
+
+check-pins:
+	@$(PY) tools/code_structure.py pins
+
+check-licences:
+	@$(PY) tools/code_structure.py licences
+
+check-shellouts:
+	@$(PY) tools/code_structure.py shellouts
+
+check-size:
+	@$(PY) tools/code_structure.py size
+
+check-baselines:
+	@$(PY) tools/code_structure.py baselines --base "$(PRE_PUSH_BASE)"
 
 # What `meridian plugin new` writes: meridian-python's template/, at one SDK
 # revision, copied here and compiled into the binary, so scaffolding works

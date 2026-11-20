@@ -1,0 +1,3 @@
+# Interims (S4), generated from the INTERIM(vNN) markers by `tools/code_structure.py interims --write`. Roadmap version: v31a.
+# version	place	reason
+v31b	tools/pins-allowlist.txt:2	the shared suggestion-licence action is read at core's main in every public repository's copy (licence.yaml, the same everywhere); pinned to a core SHA in all of them in one sweep
