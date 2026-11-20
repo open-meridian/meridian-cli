@@ -335,9 +335,11 @@ fn a_new_plugin_commits_the_agents_shared_files_and_keeps_all_of_them_out_of_its
 
     // What they teach is about this plugin, not the template, and it is
     // taught once: AGENTS.md holds the loop, and Claude's files lead to it.
+    // The instance is whatever the person calls it (SDK 0.37.1's template
+    // says `<instance>`), the plugin's code its own module.
     let agents = std::fs::read_to_string(into.join("AGENTS.md")).unwrap();
     assert!(
-        agents.contains("meridian plugin dev --instance meridian-snaptrade"),
+        agents.contains("meridian plugin dev --instance <instance>"),
         "{agents}"
     );
     assert!(agents.contains("src/meridian_snaptrade/"), "{agents}");

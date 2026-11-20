@@ -103,7 +103,7 @@ const TEMPLATE: [(&str, &str); 22] = [
 /// prices put into the lake, its catalogue declared, the data role's common
 /// pages, Connection and Datasets, with their read tools, and its tests
 /// running the suite.
-const DATA: [(&str, &str); 25] = [
+const DATA: [(&str, &str); 28] = [
     (
         "AGENTS.md",
         include_str!("../plugin-templates/data/AGENTS.md"),
@@ -153,8 +153,16 @@ const DATA: [(&str, &str); 25] = [
         include_str!("../plugin-templates/data/src/reference_plugin/declaration.py"),
     ),
     (
+        "src/reference_plugin/pacing.py",
+        include_str!("../plugin-templates/data/src/reference_plugin/pacing.py"),
+    ),
+    (
         "src/reference_plugin/page.py",
         include_str!("../plugin-templates/data/src/reference_plugin/page.py"),
+    ),
+    (
+        "src/reference_plugin/stream.py",
+        include_str!("../plugin-templates/data/src/reference_plugin/stream.py"),
     ),
     (
         "src/reference_plugin/templates/connection.html",
@@ -167,6 +175,10 @@ const DATA: [(&str, &str); 25] = [
     (
         "src/reference_plugin/vendor.py",
         include_str!("../plugin-templates/data/src/reference_plugin/vendor.py"),
+    ),
+    (
+        "tests/test_examples.py",
+        include_str!("../plugin-templates/data/tests/test_examples.py"),
     ),
     (
         "tests/test_page.py",

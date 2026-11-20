@@ -8,10 +8,11 @@
 #   - The reference plugin keeps every rule, checked as verified too, each
 #     of its acts naming its check tool.
 #   - Given `custody`, as the tutorial gives it to record a statement no
-#     vendor sent, it keeps every rule, told the custody role's common part
-#     as advice; checked as verified, it fails role-suite, since no test of
-#     its runs the custody suite, and role-pages, since it has none of the
-#     role's common pages.
+#     vendor sent (declared, and the template's custody class registered as
+#     the comment above its entry shows), it keeps every rule, told the
+#     custody role's common part as advice; checked as verified, it fails
+#     role-suite, since no test of its runs the custody suite, and
+#     role-pages, since it has none of the role's common pages.
 #   - The `connectivity`, `custody`, `data`, `operations`, `pricing` and
 #     `reporting` templates keep every rule, checked as verified too, on their
 #     roles' common parts; the connectivity (from SDK 0.31.0), custody, data,
@@ -84,6 +85,8 @@ passes reference --verified --run-tests
 
 sed -i 's/^roles = \[\]$/roles = ["custody"]/' reference/pyproject.toml
 grep -q '^roles = \["custody"\]$' reference/pyproject.toml
+sed -i 's/^\(    meridian\.run(declaration=DECLARATION, roles=\)\[\]/\1[CUSTODY]/' reference/src/reference/__main__.py
+grep -q '^    meridian\.run(declaration=DECLARATION, roles=\[CUSTODY\]' reference/src/reference/__main__.py
 passes reference --run-tests
 if grep -q "declares no Account links page" reference.out; then
     say "ok    reference: given custody, it is told the role's common part as advice"
