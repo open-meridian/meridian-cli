@@ -979,6 +979,26 @@ pub async fn take_in_cluster(
     unix_seconds: u64,
 ) -> Result<Taken, String> {
     let ns = asked.namespace.as_str();
+    // A store on more than one database: the backup's Job dumps the first
+    // alone, so it is refused before the Job is made.
+    let release = crate::offline::Release {
+        release: asked.release.clone(),
+        namespace: asked.namespace.clone(),
+    };
+    let listed = crate::offline::release_workloads(machine, &release)
+        .await
+        .map_err(|failed| {
+            format!(
+                "whether a store runs more than one database could not be read ({failed}), so \
+                 nothing was backed up"
+            )
+        })?;
+    let several = crate::offline::several_databases(&listed);
+    if !several.is_empty() {
+        return Err(crate::offline::several_databases_refused(
+            "a backup", &several,
+        ));
+    }
     let selector = format!(
         "app.kubernetes.io/instance={},meridian.dev/component=backup",
         asked.release
@@ -1776,6 +1796,12 @@ pub async fn restore(
 
     let values: serde_yaml::Value = serde_yaml::from_slice(opened.member("values/values.yaml")?)
         .map_err(|failed| format!("the backup's values could not be read: {failed}"))?;
+    // Taken where a store ran more than one database, it holds the first
+    // alone: refused before the cluster is asked anything.
+    let several = crate::offline::several_databases_in(&values);
+    if !several.is_empty() {
+        return Err(crate::offline::several_databases_in_backup(&several));
+    }
     let full = fullname(&release, &values);
     let db_secret = opened.object("secrets", &manifest.database.secret);
     let database = database_plan(&manifest, &db_secret, &values)?;

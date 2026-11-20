@@ -56,6 +56,10 @@ pub struct State {
     pub brought: bool,
     /// The offline act's script, as the chart's ConfigMap holds it.
     pub script: String,
+    /// Each store's databases (`lake.databases`, `bor.databases`), where
+    /// above one: its members' MERIDIAN_<STORE>_DATABASES, and with the
+    /// database brought, a StatefulSet for each past the first.
+    pub store_databases: BTreeMap<String, u64>,
 }
 
 impl Default for State {
@@ -95,6 +99,7 @@ impl Default for State {
             patch_refused: BTreeSet::new(),
             brought: true,
             script: NEW_SCRIPT.into(),
+            store_databases: BTreeMap::new(),
         }
     }
 }
@@ -197,6 +202,15 @@ impl Sim {
             .iter()
             .map(|(name, replicas)| {
                 let component = name.rsplit('-').next().unwrap_or_default();
+                let env: Vec<Value> = state
+                    .store_databases
+                    .get(component)
+                    .map(|count| {
+                        json!({ "name": format!("MERIDIAN_{}_DATABASES", component.to_uppercase()),
+                                "value": count.to_string() })
+                    })
+                    .into_iter()
+                    .collect();
                 json!({
                     "kind": "Deployment",
                     "metadata": { "name": name, "generation": 1,
@@ -204,7 +218,8 @@ impl Sim {
                     "spec": { "replicas": replicas,
                         "selector": { "matchLabels": { "app.kubernetes.io/instance": "meridian",
                                                        "meridian.dev/component": component } },
-                        "template": { "spec": { "containers": [ { "name": component, "image": "runtime:1" } ] } } },
+                        "template": { "spec": { "containers": [
+                            { "name": component, "image": "runtime:1", "env": env } ] } } },
                     "status": { "observedGeneration": 1, "replicas": replicas, "updatedReplicas": replicas,
                                 "readyReplicas": replicas, "availableReplicas": replicas }
                 })
@@ -232,6 +247,21 @@ impl Sim {
                             "updatedReplicas": state.database, "readyReplicas": state.database,
                             "currentRevision": "a", "updateRevision": "a" }
             }));
+            for (store, count) in &state.store_databases {
+                for d in 1..*count {
+                    let component = format!("{store}-database-{d}");
+                    items.push(json!({
+                        "kind": "StatefulSet",
+                        "metadata": { "name": format!("meridian-meridian-runtime-{component}"),
+                                      "generation": 1 },
+                        "spec": { "replicas": state.database,
+                            "selector": { "matchLabels": { "app.kubernetes.io/instance": "meridian",
+                                                           "meridian.dev/component": component } },
+                            "template": { "spec": { "containers": [
+                                { "name": "postgres", "image": "meridian-postgres:1" } ] } } }
+                    }));
+                }
+            }
         }
         json!({ "items": items })
     }
@@ -643,4 +673,87 @@ fn the_downtime_grows_with_the_size_and_each_standby_made_again() {
         minutes(Duration::from_secs(14 * 60 + 1)),
         "about 15 minutes"
     );
+}
+
+// ── A store on more than one database (review F, headline 3) ─────────────────
+
+fn take() -> crate::backup::Take {
+    crate::backup::Take {
+        release: "meridian".into(),
+        namespace: NS.into(),
+        to: None,
+        timeout: Duration::from_secs(5),
+    }
+}
+
+#[tokio::test]
+async fn a_backup_where_a_store_runs_more_than_one_database_is_refused_before_its_job() {
+    let sim = Sim::new(State {
+        store_databases: [("bor".to_string(), 3)].into(),
+        ..State::default()
+    });
+    let refused = crate::backup::take_in_cluster(&sim, &take(), 1_794_000_000)
+        .await
+        .err()
+        .expect("refused");
+    assert!(
+        refused.contains(
+            "a backup covers only each store's first database, and bor runs 3 \
+             (bor.databases: 3): bor's databases 1 to 2 would be left out"
+        ),
+        "{refused}"
+    );
+    assert!(refused.contains("nothing was changed"), "{refused}");
+    assert!(
+        !sim.asked().iter().any(|c| c.starts_with("kubectl create")),
+        "{:#?}",
+        sim.asked()
+    );
+    assert!(sim.now().jobs.is_empty());
+}
+
+#[tokio::test]
+async fn a_backup_with_one_database_to_each_store_is_taken_as_before() {
+    let sim = Sim::new(State::default());
+    let taken = crate::backup::take_in_cluster(&sim, &take(), 1_794_000_000)
+        .await
+        .unwrap_or_else(|failed| panic!("{failed}"));
+    assert_eq!(
+        taken.written.name,
+        "meridian-20261108T100000Z.meridian-backup"
+    );
+    assert_eq!(sim.now().jobs.len(), 1);
+}
+
+#[test]
+fn a_store_runs_more_than_one_database_by_its_members_count_or_its_sets() {
+    // A database somebody else runs: only the members' count says so.
+    let external = json!({ "items": [ { "kind": "Deployment",
+        "spec": { "template": { "spec": { "containers": [ { "name": "bor", "env": [
+            { "name": "MERIDIAN_BOR_DATABASES", "value": "2" },
+            { "name": "MERIDIAN_BOR_DATABASE_URL_1", "valueFrom": {} } ] } ] } } } } ] });
+    assert_eq!(several_databases(&external), [("bor".to_string(), 2)]);
+    // A brought one past the first, with no member listed.
+    let sets = json!({ "items": [ { "kind": "StatefulSet",
+        "spec": { "selector": { "matchLabels": { "meridian.dev/component": "lake-database-2" } } } } ] });
+    assert_eq!(several_databases(&sets), [("lake".to_string(), 3)]);
+    // One database: the chart sets no count, and brings no other set.
+    let one = Sim::workloads(&State::default(), true);
+    assert!(several_databases(&one).is_empty());
+}
+
+#[test]
+fn a_backups_values_say_whether_a_store_ran_more_than_one_database() {
+    let values: serde_yaml::Value =
+        serde_yaml::from_str("lake:\n  databases: 2\nbor:\n  databases: \"1\"\n").unwrap();
+    assert_eq!(several_databases_in(&values), [("lake".to_string(), 2)]);
+    let said = several_databases_in_backup(&several_databases_in(&values));
+    assert!(
+        said.contains("lake runs 2 (lake.databases: 2)")
+            && said.contains("lake's database 1 would come back empty")
+            && said.ends_with("Nothing was changed"),
+        "{said}"
+    );
+    let none: serde_yaml::Value = serde_yaml::from_str("lake:\n  writerGroups: 2\n").unwrap();
+    assert!(several_databases_in(&none).is_empty());
 }

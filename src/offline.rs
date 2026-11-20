@@ -234,11 +234,12 @@ async fn json(machine: &dyn Machine, arguments: &[&str]) -> Result<serde_json::V
         .map_err(|failed| format!("kubectl's answer could not be read: {failed}"))
 }
 
-/// The release's workloads and its database's StatefulSet, as listed now.
-pub async fn database(
+/// The release's Deployments and StatefulSets, as listed now (null where
+/// kubectl's answer is not JSON, which lists none).
+pub async fn release_workloads(
     machine: &dyn Machine,
     release: &Release,
-) -> Result<Option<DatabaseSet>, String> {
+) -> Result<serde_json::Value, String> {
     let listed = kubectl(
         machine,
         &[
@@ -253,7 +254,123 @@ pub async fn database(
         ],
     )
     .await?;
-    Ok(crate::upgrade_deployment::database_set(&listed))
+    Ok(serde_json::from_str(&listed).unwrap_or_default())
+}
+
+/// The release's workloads and its database's StatefulSet, as listed now.
+pub async fn database(
+    machine: &dyn Machine,
+    release: &Release,
+) -> Result<Option<DatabaseSet>, String> {
+    Ok(crate::upgrade_deployment::database_set_of(
+        &release_workloads(machine, release).await?,
+    ))
+}
+
+// ── More than one database to a store ────────────────────────────────────────
+//
+// A store may write to several databases (step 3d; the resilience spec's
+// section 6.4, `lake.databases` and `bor.databases`). Restore and backup act
+// on the brought database alone: restore in place stops, restores and starts
+// the first database's StatefulSet, and the backup's Job dumps the database
+// first run made. Until they cover every database (review F, headline 3),
+// each refuses a deployment where a store runs more than one, before it
+// changes anything, rather than restore or back up part of it silently.
+
+/// The stores in `lake` and `bor` that run more than one database, with
+/// how many, as the workloads listed show them: a store member's
+/// `MERIDIAN_<STORE>_DATABASES`, which the chart sets only above one, and
+/// each database past the first the chart brings, a StatefulSet whose
+/// component is `<store>-database-<d>`.
+pub fn several_databases(listed: &serde_json::Value) -> Vec<(String, u64)> {
+    let mut found: BTreeMap<String, u64> = BTreeMap::new();
+    let mut note = |store: &str, count: u64| {
+        if count > 1 {
+            let held = found.entry(store.to_string()).or_insert(0);
+            *held = (*held).max(count);
+        }
+    };
+    for item in listed["items"].as_array().into_iter().flatten() {
+        let containers = item["spec"]["template"]["spec"]["containers"].as_array();
+        for env in containers
+            .into_iter()
+            .flatten()
+            .flat_map(|container| container["env"].as_array().into_iter().flatten())
+        {
+            let name = env["name"].as_str().unwrap_or_default();
+            if let Some(store) = name
+                .strip_prefix("MERIDIAN_")
+                .and_then(|rest| rest.strip_suffix("_DATABASES"))
+            {
+                let count = env["value"].as_str().and_then(|v| v.parse().ok());
+                note(&store.to_lowercase(), count.unwrap_or(0));
+            }
+        }
+        let component = item["spec"]["selector"]["matchLabels"]["meridian.dev/component"]
+            .as_str()
+            .unwrap_or_default();
+        if item["kind"] == "StatefulSet" {
+            if let Some((store, d)) = component.split_once("-database-") {
+                if let Ok(d) = d.parse::<u64>() {
+                    note(store, d + 1);
+                }
+            }
+        }
+    }
+    found.into_iter().collect()
+}
+
+/// The same, from a deployment's values: `lake.databases` and
+/// `bor.databases` above one.
+pub fn several_databases_in(values: &serde_yaml::Value) -> Vec<(String, u64)> {
+    ["lake", "bor"]
+        .into_iter()
+        .filter_map(|store| {
+            let given = values.get(store)?.get("databases")?;
+            let count = given
+                .as_u64()
+                .or_else(|| given.as_str().and_then(|v| v.trim().parse().ok()))?;
+            (count > 1).then(|| (store.to_string(), count))
+        })
+        .collect()
+}
+
+/// Each store running more than one database, said: `lake runs 2
+/// (lake.databases: 2)`; and what past the first is left out.
+fn several_said(several: &[(String, u64)]) -> (String, String) {
+    let each: Vec<String> = several
+        .iter()
+        .map(|(store, count)| format!("{store} runs {count} ({store}.databases: {count})"))
+        .collect();
+    let past: Vec<String> = several
+        .iter()
+        .map(|(store, count)| match count {
+            2 => format!("{store}'s database 1"),
+            _ => format!("{store}'s databases 1 to {}", count - 1),
+        })
+        .collect();
+    (each.join(" and "), past.join(" and "))
+}
+
+/// Why `act` ("a restore", "a backup") is refused on a deployment whose
+/// stores run `several` databases: what it would leave out, and that
+/// nothing was changed.
+pub fn several_databases_refused(act: &str, several: &[(String, u64)]) -> String {
+    let (each, past) = several_said(several);
+    format!(
+        "{act} covers only each store's first database, and {each}: {past} would be left out. \
+         It is refused rather than made of part of the deployment, so nothing was changed"
+    )
+}
+
+/// Why a backup taken where stores ran `several` databases is not
+/// restored: it holds each store's first database alone.
+pub fn several_databases_in_backup(several: &[(String, u64)]) -> String {
+    let (each, past) = several_said(several);
+    format!(
+        "the backup's values say {each}, and a backup holds only each store's first database: \
+         {past} would come back empty. Nothing was changed"
+    )
 }
 
 /// The database's members as their pods are now.

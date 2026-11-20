@@ -62,7 +62,12 @@ an older one each says so and changes nothing.
   standby pod and allowed a bucket archive, with the account `<namespace>/<fullname>-shards-<instance>`
   its bucket must trust and the cloud's step; and each such plugin's shards' epoch and last
   takeover, from the Resilience history on the session `meridian connect` keeps.
-- New plugins start on SDK 0.37.1.
+- New plugins start on SDK 0.37.1. `meridian plugin new --role data` writes the data template's
+  `pacing.py`, `stream.py` and `tests/test_examples.py`, which it had left out.
+- `meridian restore` (each form) and `meridian backup` refuse a deployment where the lake or the
+  book runs more than one database (`lake.databases` or `bor.databases` above 1), before changing
+  anything: each covers only a store's first database, and says which databases it would leave
+  out. A backup taken where a store ran more than one database is refused at restore the same way.
 
 ## 0.1.60
 
