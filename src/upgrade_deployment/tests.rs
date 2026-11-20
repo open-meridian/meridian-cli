@@ -1161,6 +1161,105 @@ async fn helm_refusing_says_how_to_get_back() {
     assert!(failed.contains("revision 7"), "{failed}");
 }
 
+#[tokio::test]
+async fn a_failed_raise_never_suggests_the_return_that_would_lower_it() {
+    // Writer groups in ha are raise-only (item 111): returning to the
+    // revision before a raise would lower them.
+    let stand = healthy()
+        .instead(SHOW_VALUES, Ok(COUNTED_VALUES))
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(
+            WORKLOADS,
+            items(vec![
+                store("bor", &[("MERIDIAN_BOR_PARTITIONS", "1")]),
+                store("lake", &[("MERIDIAN_WRITER_GROUPS", "2")]),
+            ]),
+        )
+        .json(PODS, items(vec![]));
+    let raising = setting(&["lake.writerGroups=3"]);
+    let mut said = Vec::new();
+    let Checked::Upgrade(plan) = check(&stand, &raising, &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    else {
+        panic!("refused: {said:?}");
+    };
+    assert_eq!(plan.raised, vec![("lake", 2, 3)]);
+
+    // helm refuses it: nothing is scripted for its upgrade.
+    let failed = apply(&stand, &raising, &plan, &pace(), &mut |_: &str| {})
+        .await
+        .expect_err("helm refused");
+    assert!(failed.starts_with("helm refused the upgrade"), "{failed}");
+    assert!(!failed.contains("meridian rollback-deployment"), "{failed}");
+    assert!(
+        failed.contains(
+            "This upgrade raises lake.writerGroups from 2 to 3, so returning to revision 7 \
+             would lower them again. Fix the cause and run this upgrade again."
+        ),
+        "{failed}"
+    );
+
+    // Its migration fails.
+    let migrating = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
+        .json(WORKLOADS, items(vec![]))
+        .json(PODS, items(vec![]))
+        .json(
+            JOBS,
+            items(vec![job(
+                "meridian-meridian-runtime-migrate-8",
+                Some("Failed"),
+            )]),
+        )
+        .answering(UPGRADE, Ok("upgraded"));
+    let mut plan = planned(&migrating).await;
+    plan.raised = vec![("lake", 2, 3), ("bor", 1, 2)];
+    let failed = apply(&migrating, &asked(), &plan, &pace(), &mut |_: &str| {})
+        .await
+        .expect_err("a failed migration is a failed upgrade");
+    assert!(
+        failed.contains("job/meridian-meridian-runtime-migrate-8, failed"),
+        "{failed}"
+    );
+    assert!(!failed.contains("meridian rollback-deployment"), "{failed}");
+    assert!(
+        failed.contains(
+            "This upgrade raises lake.writerGroups from 2 to 3 and bor.writerGroups from 1 to \
+             2, so returning to revision 7 would lower them again. Fix the cause and run this \
+             upgrade again."
+        ),
+        "{failed}"
+    );
+
+    // An upgrade that raises none still says how to get back.
+    let stand = healthy()
+        .instead(SHOW_VALUES, Ok(COUNTED_VALUES))
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(
+            WORKLOADS,
+            items(vec![
+                store("bor", &[("MERIDIAN_BOR_PARTITIONS", "1")]),
+                store("lake", &[("MERIDIAN_WRITER_GROUPS", "2")]),
+            ]),
+        )
+        .json(PODS, items(vec![]));
+    let keeping = setting(&["lake.writerGroups=2"]);
+    let Checked::Upgrade(plan) = check(&stand, &keeping, &mut |_: &str| {}).await else {
+        panic!("refused");
+    };
+    assert!(plan.raised.is_empty());
+    let failed = apply(&stand, &keeping, &plan, &pace(), &mut |_: &str| {})
+        .await
+        .expect_err("helm refused");
+    assert!(
+        failed.contains("`meridian rollback-deployment -n meridian --to-revision 7`"),
+        "{failed}"
+    );
+}
+
 // ── What is read ─────────────────────────────────────────────────────────
 
 #[test]
@@ -2233,6 +2332,8 @@ fn moving_to_ha() -> Stand {
         )
         .json(PODS, items(vec![]))
         .json(JOBS, items(vec![]))
+        // No JetStream set before, and none of its claims left (item 191).
+        .json(SETS_AND_CLAIMS, items(vec![]))
         .answering(TO_HA, Ok("Release \"meridian\" has been upgraded."))
 }
 
@@ -2474,4 +2575,548 @@ async fn with_helm_4_the_charts_counts_are_forced_over_a_scale_another_manager_m
     .await;
     assert!(!plan.force_conflicts);
     assert!(!helm_arguments(&asked(), &plan).contains(&"--force-conflicts".to_string()));
+}
+
+// ── The counts (step 3d) ─────────────────────────────────────────────────
+
+/// The chart's values from the release that has the counts on.
+const COUNTED_VALUES: &str = "image:\n  repository: ghcr.io/open-meridian/meridian-runtime\n  tag: \"9c5d480\"\nlake:\n  writerGroups: 1\n  databases: 1\nbor:\n  partitions: 1\n  writerGroups: 1\n  databases: 1\n";
+
+/// A store's writer Deployment with what the chart tells it.
+fn store(component: &str, environment: &[(&str, &str)]) -> serde_json::Value {
+    let mut made = deployment(component, "845bd06", 1, 1);
+    made["spec"]["template"]["spec"]["containers"][0]["env"] = environment
+        .iter()
+        .map(|(name, value)| json!({ "name": name, "value": value }))
+        .collect();
+    made
+}
+
+/// A running member whose runtime answers `probe`.
+fn member(name: &str, component: &str) -> serde_json::Value {
+    let mut made = pod(name, component, &format!("{REPO}:845bd06"), 0);
+    made["status"]["phase"] = json!("Running");
+    made["spec"]["containers"][0]["env"] =
+        json!([{ "name": "MERIDIAN_SCRUB_INTERVAL_DAYS", "value": "7" }]);
+    made
+}
+
+const BOOK_PROBE: &str =
+    "kubectl exec -n meridian meridian-bor-0 -c bor -- timeout 30 meridian-bor probe";
+
+fn setting(sets: &[&str]) -> Asked {
+    Asked {
+        sets: sets.iter().map(|set| set.to_string()).collect(),
+        ..asked()
+    }
+}
+
+async fn refused(stand: &Stand, asked: &Asked) -> String {
+    let mut said = Vec::new();
+    let checked = check(stand, asked, &mut |line: &str| said.push(line.to_string())).await;
+    assert!(matches!(checked, Checked::Refused), "{said:?}");
+    assert!(!stand.changed_anything());
+    said.join("\n")
+}
+
+#[tokio::test]
+async fn a_count_set_with_the_first_start_on_its_release_is_refused_upgrade_first() {
+    // A book from before the counts: its Deployment names no partitions.
+    let stand = healthy()
+        .instead(SHOW_VALUES, Ok(COUNTED_VALUES))
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(
+            WORKLOADS,
+            items(vec![store("bor", &[]), store("lake", &[])]),
+        )
+        .json(PODS, items(vec![]));
+    let said = refused(&stand, &setting(&["lake.writerGroups=2"])).await;
+    assert!(
+        said.contains("first start") && said.contains("lake.writerGroups=2"),
+        "{said}"
+    );
+    assert!(
+        said.contains("Upgrade first, then change the count"),
+        "{said}"
+    );
+    assert!(said.contains("Nothing was changed."), "{said}");
+
+    // The same upgrade without the count goes ahead.
+    let mut said = Vec::new();
+    let checked = check(&stand, &asked(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await;
+    assert!(matches!(checked, Checked::Upgrade(_)), "{said:?}");
+}
+
+#[tokio::test]
+async fn fewer_book_partitions_is_refused_naming_each_that_holds_accounts_then_passes() {
+    let stand = healthy()
+        .instead(SHOW_VALUES, Ok(COUNTED_VALUES))
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(
+            WORKLOADS,
+            items(vec![
+                store("bor", &[("MERIDIAN_BOR_PARTITIONS", "3")]),
+                store("lake", &[]),
+            ]),
+        )
+        .json(PODS, items(vec![member("meridian-bor-0", "bor")]))
+        .json(
+            BOOK_PROBE,
+            json!({
+                "component": "bor",
+                "member": { "mode": "writer", "partitions": ["P0", "P1", "P2", "control"] },
+                "partitions": [
+                    { "partition": "P0", "group": 0, "database": 0, "accounts": 4 },
+                    { "partition": "P1", "group": 0, "database": 0, "accounts": 0 },
+                    { "partition": "P2", "group": 0, "database": 0, "accounts": 2 },
+                ],
+            }),
+        );
+    let said = refused(&stand, &setting(&["bor.partitions=1"])).await;
+    assert!(
+        said.contains(
+            "bor.partitions would go from 3 to 1, and P2 (2 accounts) still holds accounts"
+        ),
+        "{said}"
+    );
+    assert!(said.contains("meridian account move"), "{said}");
+
+    // A book whose probe says nothing of what its partitions hold: refused
+    // all the same, and said.
+    let silent = stand.instead(
+        BOOK_PROBE,
+        Ok(r#"{"component":"bor","member":{"mode":"writer","partitions":["P0","P1","P2"]}}"#),
+    );
+    let said = refused(&silent, &setting(&["bor.partitions=1"])).await;
+    assert!(
+        said.contains("what P1, P2 hold could not be read"),
+        "{said}"
+    );
+
+    // Each one going emptied: the upgrade goes ahead, and says so.
+    let emptied = silent.instead(
+        BOOK_PROBE,
+        Ok(&json!({
+            "member": { "mode": "writer", "partitions": ["P0", "P1", "P2", "control"] },
+            "partitions": [
+                { "partition": "P0", "group": 0, "database": 0, "accounts": 6 },
+                { "partition": "P1", "group": 0, "database": 0, "accounts": 0 },
+                { "partition": "P2", "group": 0, "database": 0, "accounts": 0 },
+            ],
+        })
+        .to_string()),
+    );
+    let mut said = Vec::new();
+    let checked = check(
+        &emptied,
+        &setting(&["bor.partitions=1"]),
+        &mut |line: &str| said.push(line.to_string()),
+    )
+    .await;
+    assert!(matches!(checked, Checked::Upgrade(_)), "{said:?}");
+    assert!(
+        said.join("\n")
+            .contains("bor.partitions goes from 3 to 1: P1, P2 hold no accounts"),
+        "{said:?}"
+    );
+}
+
+#[tokio::test]
+async fn fewer_databases_is_refused_while_partitions_hold_data_there() {
+    let stand = healthy()
+        .instead(SHOW_VALUES, Ok(COUNTED_VALUES))
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(
+            WORKLOADS,
+            items(vec![
+                store("bor", &[("MERIDIAN_BOR_PARTITIONS", "1")]),
+                store(
+                    "lake",
+                    &[
+                        ("MERIDIAN_WRITER_GROUPS", "2"),
+                        ("MERIDIAN_LAKE_DATABASES", "2"),
+                    ],
+                ),
+            ]),
+        )
+        .json(
+            PODS,
+            items(vec![
+                member("meridian-lake-0", "lake"),
+                member("meridian-lake-group-1-0", "lake-group-1"),
+            ]),
+        )
+        .json(
+            "kubectl exec -n meridian meridian-lake-0 -c lake -- timeout 30 meridian-lake probe",
+            json!({ "member": { "mode": "writer", "partitions": ["control", "fx:rates"] } }),
+        )
+        // A group's member runs the lake's own container and binary.
+        .json(
+            "kubectl exec -n meridian meridian-lake-group-1-0 -c lake -- timeout 30 meridian-lake probe",
+            json!({ "member": { "mode": "writer", "partitions": ["eq:bars"] } }),
+        );
+    // The deployment's own values keep the two groups; the databases go to 1.
+    let said = refused(
+        &stand,
+        &setting(&["lake.writerGroups=2", "lake.databases=1"]),
+    )
+    .await;
+    assert!(
+        said.contains(
+            "lake.databases would go from 2 to 1, and partitions still hold data in a database \
+             past the new count: eq:bars (database 1)"
+        ),
+        "{said}"
+    );
+    assert!(said.contains("meridian partition move"), "{said}");
+}
+
+// ── Plugin shards against the deployment's standbys (step 3d) ────────────
+
+#[tokio::test]
+async fn leaving_ha_is_refused_while_a_plugin_runs_with_shards_or_a_standby() {
+    let mut lake = store("lake", &[("MERIDIAN_LEASE_NAME", "meridian-lake")]);
+    lake["spec"]["replicas"] = json!(2);
+    let mut tiingo = store("sidecar", &[("MERIDIAN_PLUGIN_SHARDS", "2")]);
+    tiingo["metadata"]["name"] = json!("meridian-plugin-tiingo");
+    tiingo["metadata"]["labels"]["meridian.dev/instance"] = json!("tiingo");
+    tiingo["spec"]["replicas"] = json!(3);
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(OWN_VALUES, json!({ "resilience": { "profile": "ha" } }))
+        .json(WORKLOADS, items(vec![lake, tiingo]))
+        .json(PODS, items(vec![]));
+    let stand = stand.instead(OWN_VALUES, Ok(r#"{"resilience":{"profile":"ha"}}"#));
+    let said = refused(&stand, &setting(&["resilience.profile=tolerant"])).await;
+    assert!(
+        said.contains("1 plugin instance still runs with them: tiingo (2 shards, a standby pod)"),
+        "{said}"
+    );
+    assert!(
+        said.contains("Stop them or relaunch them unsharded first"),
+        "{said}"
+    );
+    // Staying ha, the upgrade goes ahead.
+    let mut said = Vec::new();
+    let checked = check(&stand, &asked(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await;
+    assert!(matches!(checked, Checked::Upgrade(_)), "{said:?}");
+}
+
+#[test]
+fn a_plugins_standby_pod_is_excused_from_readiness_never_from_the_new_template() {
+    // Two shards and a standby pod: three replicas, the standby never ready.
+    let sharded = |updated: u64, ready: u64, held: u64| {
+        let mut made = store("sidecar", &[("MERIDIAN_PLUGIN_SHARDS", "2")]);
+        made["spec"]["replicas"] = json!(3);
+        made["status"] = json!({ "observedGeneration": 2, "replicas": held,
+            "updatedReplicas": updated, "readyReplicas": ready, "availableReplicas": ready });
+        workloads(&items(vec![made]).to_string()).remove(0)
+    };
+    // Its two shards ready, every pod on the new template: rolled out.
+    let done = sharded(3, 2, 3);
+    assert_eq!(done.unfinished, None);
+    assert_eq!((done.ready, done.wanted), (2, 2));
+    // A shard not ready yet is waited for, counted against its shards.
+    assert_eq!(sharded(3, 1, 3).unfinished.as_deref(), Some("1 of 2 ready"));
+    // The standby still on the old template is waited for too.
+    assert_eq!(
+        sharded(2, 2, 3).unfinished.as_deref(),
+        Some("2 of 3 on the new template")
+    );
+    // An old pod not yet gone.
+    assert_eq!(
+        sharded(3, 2, 4).unfinished.as_deref(),
+        Some("old pods are still being replaced")
+    );
+    // A workload that says no shard count waits for every replica, as ever.
+    let mut plain = deployment("dashboard", "9c5d480", 2, 3);
+    plain["spec"]["replicas"] = json!(3);
+    plain["status"]["replicas"] = json!(3);
+    let plain = workloads(&items(vec![plain]).to_string()).remove(0);
+    assert_eq!(plain.unfinished.as_deref(), Some("2 of 3 ready"));
+}
+
+const SETS_AND_CLAIMS: &str = "kubectl get statefulsets,persistentvolumeclaims -n meridian -l app.kubernetes.io/instance=meridian -o json";
+const BROKER: &str = "meridian-meridian-runtime-broker";
+
+/// A broker StatefulSet as the chart makes it: the set without JetStream
+/// selected by the component alone, the JetStream set by its name as well.
+fn broker_set(name: &str) -> serde_json::Value {
+    let mut selected =
+        json!({"app.kubernetes.io/instance": "meridian", "meridian.dev/component": "broker"});
+    if name.ends_with("-jetstream") {
+        selected["meridian.dev/broker-set"] = json!(name);
+    }
+    json!({"kind": "StatefulSet", "metadata": {"name": name},
+           "spec": {"selector": {"matchLabels": selected}}})
+}
+
+fn claim(name: &str) -> serde_json::Value {
+    json!({"kind": "PersistentVolumeClaim", "metadata": {"name": name}})
+}
+
+/// Every claim the release has: the JetStream set's three, the database's,
+/// a plugin's, another set's whose name begins as the broker's does, and
+/// one that is not a server's.
+fn claims() -> Vec<serde_json::Value> {
+    vec![
+        claim(&format!("jetstream-{BROKER}-jetstream-0")),
+        claim(&format!("jetstream-{BROKER}-jetstream-1")),
+        claim(&format!("jetstream-{BROKER}-jetstream-2")),
+        claim("data-meridian-meridian-runtime-database-0"),
+        claim("data-meridian-meridian-runtime-database-1"),
+        claim("data-plugin-coinbase-1-0"),
+        claim(&format!("jetstream-{BROKER}-jetstream-archive-0")),
+        claim(&format!("jetstream-{BROKER}-jetstream-")),
+    ]
+}
+
+/// Item 191 (ruled 2026-11-19): where the broker runs without its
+/// JetStream set, the claims that set's servers left are the ones deleted,
+/// and nothing else -- never a database's or a plugin's, never another
+/// set's; where the set is there, or the release brings no broker, none.
+#[test]
+fn the_jetstream_sets_claims_are_left_only_where_the_set_is_not_there() {
+    let database = json!({"kind": "StatefulSet", "metadata": {"name": "meridian-meridian-runtime-database"},
+                          "spec": {"selector": {"matchLabels": {"meridian.dev/component": "database"}}}});
+    let tolerant = items([vec![broker_set(BROKER), database.clone()], claims()].concat());
+    assert_eq!(
+        jetstream_claims_left(&tolerant.to_string()).unwrap(),
+        [0, 1, 2].map(|n| format!("jetstream-{BROKER}-jetstream-{n}"))
+    );
+    let ha = items(
+        [
+            vec![broker_set(&format!("{BROKER}-jetstream")), database.clone()],
+            claims(),
+        ]
+        .concat(),
+    );
+    assert!(
+        jetstream_claims_left(&ha.to_string()).unwrap().is_empty(),
+        "the set is there: its claims are its own"
+    );
+    let switching = items(
+        [
+            vec![
+                broker_set(BROKER),
+                broker_set(&format!("{BROKER}-jetstream")),
+            ],
+            claims(),
+        ]
+        .concat(),
+    );
+    assert!(
+        jetstream_claims_left(&switching.to_string())
+            .unwrap()
+            .is_empty(),
+        "both sets there, a switch under way: the JetStream set's claims are its own"
+    );
+    let brought_none = items([vec![database], claims()].concat());
+    assert!(
+        jetstream_claims_left(&brought_none.to_string())
+            .unwrap()
+            .is_empty(),
+        "no broker of the release's"
+    );
+    assert!(
+        jetstream_claims_left("not json").is_err(),
+        "a listing it cannot read is never an empty one"
+    );
+}
+
+/// An upgrade deletes the JetStream set's leftover claims before it
+/// applies -- a switch to ha starts JetStream afresh -- and, the set gone
+/// with the upgrade, after: a switch to tolerant leaves none, the set
+/// deleted in the same upgrade that first gives it its retention policy
+/// included. The delete before waits, bounded, until they are gone (item
+/// 191's review, finding 6): a set the upgrade makes never finds one still
+/// going.
+#[tokio::test]
+async fn an_upgrade_deletes_the_claims_jetstream_left_before_and_after_it_applies() {
+    let servers = [0, 1, 2]
+        .map(|n| format!("jetstream-{BROKER}-jetstream-{n}"))
+        .join(" ");
+    let waiting =
+        format!("kubectl delete pvc -n meridian --ignore-not-found --wait --timeout=60s {servers}");
+    let deleting =
+        format!("kubectl delete pvc -n meridian --ignore-not-found --wait=false {servers}");
+    let left = items([vec![broker_set(BROKER)], claims()].concat());
+    let stand = upgrading()
+        .json(SETS_AND_CLAIMS, left.clone())
+        .json(SETS_AND_CLAIMS, left)
+        .answering(&waiting, Ok("deleted"))
+        .answering(&deleting, Ok("deleted"));
+    let plan = planned(&stand).await;
+    let mut said = Vec::new();
+    let report = apply(&stand, &asked(), &plan, &pace(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await
+    .unwrap_or_else(|failed| panic!("{failed}\n{said:?}"));
+    let asked_for = stand.asked();
+    let at = |command: &str| asked_for.iter().position(|asked| asked == command);
+    let upgraded = at(UPGRADE).expect("upgraded");
+    let deleted: Vec<usize> = asked_for
+        .iter()
+        .enumerate()
+        .filter(|(_, asked)| asked.starts_with("kubectl delete pvc"))
+        .map(|(n, _)| n)
+        .collect();
+    assert_eq!(deleted.len(), 2, "{asked_for:#?}");
+    assert!(
+        deleted[0] < upgraded && deleted[1] > upgraded,
+        "{asked_for:#?}"
+    );
+    assert_eq!(
+        (
+            asked_for[deleted[0]].as_str(),
+            asked_for[deleted[1]].as_str()
+        ),
+        (waiting.as_str(), deleting.as_str()),
+        "only the JetStream set's claims, waited for before: {asked_for:#?}"
+    );
+    assert!(report.not_cleaned.is_empty(), "{:?}", report.not_cleaned);
+    assert!(
+        said.join("\n")
+            .contains("JetStream starts afresh when ha is taken again"),
+        "{said:?}"
+    );
+
+    // The set there: nothing deleted.
+    let ha = items([vec![broker_set(&format!("{BROKER}-jetstream"))], claims()].concat());
+    let stand = upgrading().json(SETS_AND_CLAIMS, ha);
+    let plan = planned(&stand).await;
+    apply(&stand, &asked(), &plan, &pace(), &mut |_: &str| {})
+        .await
+        .unwrap();
+    assert!(
+        !stand
+            .asked()
+            .iter()
+            .any(|asked| asked.starts_with("kubectl delete pvc")),
+        "{:#?}",
+        stand.asked()
+    );
+
+    // Found and not deleted before an upgrade that brings JetStream:
+    // refused, nothing changed.
+    let found = items([vec![broker_set(BROKER)], claims()].concat()).to_string();
+    let stand = moving_to_ha()
+        .instead(SETS_AND_CLAIMS, Ok(&found))
+        .answering(&waiting, Err("timed out waiting for the condition"));
+    let to_ha = with_sets(&["resilience.profile=ha"]);
+    let plan = match check(&stand, &to_ha, &mut |_: &str| {}).await {
+        Checked::Upgrade(plan) => *plan,
+        _ => panic!("refused"),
+    };
+    let failed = apply(&stand, &to_ha, &plan, &pace(), &mut |_: &str| {})
+        .await
+        .unwrap_err();
+    assert!(
+        failed.contains("could not be deleted") && failed.contains("Nothing else was changed"),
+        "{failed}"
+    );
+    assert!(!stand.asked().contains(&TO_HA.to_string()));
+
+    // Found and not deleted before an upgrade that brings none: it goes
+    // on, and says so with what was not cleaned up.
+    let stand = upgrading()
+        .json(
+            SETS_AND_CLAIMS,
+            items([vec![broker_set(BROKER)], claims()].concat()),
+        )
+        .answering(&waiting, Err("forbidden"))
+        .answering(&deleting, Ok("deleted"));
+    let plan = planned(&stand).await;
+    let report = apply(&stand, &asked(), &plan, &pace(), &mut |_: &str| {})
+        .await
+        .unwrap();
+    assert!(stand.asked().contains(&UPGRADE.to_string()));
+    assert!(
+        report
+            .not_cleaned
+            .iter()
+            .any(|said| said.contains("could not be deleted: forbidden")),
+        "{:?}",
+        report.not_cleaned
+    );
+}
+
+/// Item 191's review, finding 6: an upgrade that gives the broker its
+/// JetStream set (`ha`) and cannot list, or read, the claims a set before
+/// it left stops before it changes anything: JetStream would start on
+/// them, its old state or its old stream.
+#[tokio::test]
+async fn an_upgrade_to_ha_that_cannot_list_jetstreams_left_claims_stops_before_it_changes_anything()
+{
+    for answer in [Err("the server could not be reached"), Ok("not json")] {
+        let stand = moving_to_ha().instead(SETS_AND_CLAIMS, answer);
+        let asked = with_sets(&["resilience.profile=ha"]);
+        let plan = match check(&stand, &asked, &mut |_: &str| {}).await {
+            Checked::Upgrade(plan) => *plan,
+            _ => panic!("refused"),
+        };
+        let failed = apply(&stand, &asked, &plan, &pace(), &mut |_: &str| {})
+            .await
+            .err();
+        assert!(
+            failed
+                .as_deref()
+                .is_some_and(|failed| failed.contains("Nothing else was changed")),
+            "{answer:?}: {failed:?}"
+        );
+        assert!(
+            !stand.asked().contains(&TO_HA.to_string()),
+            "{answer:?}: upgraded: {:#?}",
+            stand.asked()
+        );
+    }
+}
+
+/// Item 191's review, finding 6: an upgrade that brings no JetStream set
+/// and cannot list the claims one left goes on, and says so with what was
+/// not cleaned up -- once, though both the delete before it and the one
+/// after the rollout could not list them.
+#[tokio::test]
+async fn an_upgrade_without_jetstream_that_cannot_list_its_left_claims_says_so_with_what_was_not_cleaned(
+) {
+    let stand = upgrading().answering(SETS_AND_CLAIMS, Err("forbidden"));
+    let plan = planned(&stand).await;
+    let report = apply(&stand, &asked(), &plan, &pace(), &mut |_: &str| {})
+        .await
+        .unwrap();
+    assert!(stand.asked().contains(&UPGRADE.to_string()));
+    let said: Vec<&String> = report
+        .not_cleaned
+        .iter()
+        .filter(|said| said.contains("JetStream volumes") && said.contains("could not be listed"))
+        .collect();
+    assert_eq!(said.len(), 1, "{:#?}", report.not_cleaned);
+}
+
+/// Whether an upgrade gives the broker its JetStream set, as the chart
+/// decides it: `broker.jetstream.replicas` where set, else the `ha`
+/// profile.
+#[test]
+fn jetstream_is_brought_as_the_chart_decides_it() {
+    assert!(jetstream_in(&json!({"resilience": {"profile": "ha"}})));
+    assert!(!jetstream_in(
+        &json!({"resilience": {"profile": "tolerant"}})
+    ));
+    assert!(!jetstream_in(&json!({})));
+    assert!(!jetstream_in(
+        &json!({"resilience": {"profile": "ha"}, "broker": {"jetstream": {"replicas": 0}}})
+    ));
+    assert!(jetstream_in(
+        &json!({"resilience": {"profile": "tolerant"}, "broker": {"jetstream": {"replicas": 3}}})
+    ));
+    assert!(jetstream_in(
+        &json!({"broker": {"jetstream": {"replicas": "3"}}})
+    ));
 }

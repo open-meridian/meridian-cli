@@ -17,6 +17,7 @@ fn install() -> Install {
         tls_secret: None,
         plain_http: false,
         archive: None,
+        shared_storage_class: None,
     }
 }
 
@@ -479,4 +480,81 @@ fn a_params_files_archive_is_ups_own_answer_and_no_field_of_the_wizards() {
     let (fields, credentials) = asked_for(PAGE);
     let refused = answers(&params, &fields, &credentials, &|_| None).unwrap_err();
     assert!(refused.iter().any(|said| said.contains("`archive`")));
+}
+
+// ── The shared storage's class (step 3d, checkpoint 5, item 30) ─────────────
+
+#[test]
+fn the_shared_storage_class_is_the_charts_plugin_storage_shared_class() {
+    // Not given, nothing is written: the chart's offers none.
+    assert!(!values_document(&install()).contains("pluginStorage"));
+    let named = Install {
+        shared_storage_class: Some("files".into()),
+        ..install()
+    };
+    let values = values_document(&named);
+    assert!(
+        values.contains("pluginStorage:\n  shared:\n    storageClassName: \"files\"\n"),
+        "{values}"
+    );
+    // Its size is the chart's, pluginStorage.shared.size (10Gi): not written.
+    assert!(!values.contains("size"), "{values}");
+}
+
+#[test]
+fn a_shared_storage_class_that_is_no_name_is_refused_naming_the_value() {
+    assert_eq!(shared_storage_class(None), Ok(None));
+    assert_eq!(
+        shared_storage_class(Some(" efs-sc ")),
+        Ok(Some("efs-sc".into()))
+    );
+    assert_eq!(
+        shared_storage_class(Some("filestore.csi.example")),
+        Ok(Some("filestore.csi.example".into()))
+    );
+    for wrong in ["", "Files", "rwx class", "-nfs", "nfs-", "a..b", "nfs/rwx"] {
+        let refused = shared_storage_class(Some(wrong)).unwrap_err();
+        assert!(
+            refused.contains("pluginStorage.shared.storageClassName"),
+            "{wrong}: {refused}"
+        );
+    }
+}
+
+#[test]
+fn a_shared_storage_class_is_said_in_one_place() {
+    assert!(names_a_shared_storage_class(
+        "pluginStorage:\n  shared:\n    storageClassName: nfs\n"
+    ));
+    assert!(names_a_shared_storage_class(
+        "pluginStorage:\n  shared:\n    storageClassName: \"\"\n"
+    ));
+    assert!(!names_a_shared_storage_class(
+        "pluginStorage:\n  storageClassName: local-path\n"
+    ));
+    assert!(!names_a_shared_storage_class("not: [yaml"));
+    assert_eq!(shared_storage_settled(Some("nfs"), None), Ok(()));
+    assert_eq!(shared_storage_settled(None, Some("cloud.yaml")), Ok(()));
+    let twice = shared_storage_settled(Some("nfs"), Some("cloud.yaml")).unwrap_err();
+    assert!(
+        twice.contains("cloud.yaml")
+            && twice.contains("pluginStorage.shared.storageClassName")
+            && twice.contains("one place"),
+        "{twice}"
+    );
+}
+
+#[test]
+fn a_shared_storage_class_this_cluster_lacks_is_refused_naming_the_value() {
+    let listed = "storageclass.storage.k8s.io/local-path\nstorageclass.storage.k8s.io/nfs-rwx\n";
+    assert_eq!(shared_storage_found("nfs-rwx", listed), Ok(()));
+    let refused = shared_storage_found("efs-sc", listed).unwrap_err();
+    assert!(
+        refused.contains("no storage class efs-sc")
+            && refused.contains("pluginStorage.shared.storageClassName"),
+        "{refused}"
+    );
+    // A name that is only the end of another's is not it.
+    assert!(shared_storage_found("rwx", listed).is_err());
+    assert!(shared_storage_found("nfs-rwx", "").is_err());
 }

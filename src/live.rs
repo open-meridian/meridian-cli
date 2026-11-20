@@ -105,7 +105,21 @@ pub fn refusal(address: &str, status: reqwest::StatusCode, body: &str) -> Failed
     let reason = said
         .and_then(|v| v["error"].as_str().map(String::from))
         .unwrap_or_else(|| body.trim().to_string());
-    Failed::Refused(format!("{status}: {reason}"))
+    Failed::Refused(format!("{status}: {}", handlers_words(&reason)))
+}
+
+/// A handler's own words, as it refused: the bus's framing of its status or
+/// reason (`[refusal-status failed-precondition fields=shards] ...`,
+/// `[refusal-reason 32 retry=3] ...`) taken off where a route passed it on
+/// whole, and nothing else changed. The conductor's refusal of a launch (step
+/// 3d, item 30) is said as the conductor said it.
+pub fn handlers_words(said: &str) -> &str {
+    ["[refusal-status ", "[refusal-reason "]
+        .iter()
+        .find_map(|framing| said.strip_prefix(framing))
+        .and_then(|rest| rest.split_once("] "))
+        .filter(|(head, _)| !head.contains('['))
+        .map_or(said, |(_, words)| words)
 }
 
 impl Deployment<'_> {

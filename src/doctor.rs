@@ -11,6 +11,7 @@
 use std::fmt;
 
 pub mod checks;
+pub mod shards;
 
 /// What one check found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +112,15 @@ pub struct Intended {
 }
 
 /// Every check, in the order somebody reads them.
-pub async fn examine(machine: &dyn Machine, intended: &Intended) -> Vec<Finding> {
+///
+/// `history` is the Resilience read's, through the session `meridian
+/// connect` keeps: asked only where a plugin runs sharded or with a standby
+/// pod (step 3d), for each shard's epoch and last takeover.
+pub async fn examine(
+    machine: &dyn Machine,
+    intended: &Intended,
+    history: &dyn shards::History,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     findings.push(checks::helm(machine).await);
     let cluster = checks::cluster(machine, &intended.namespace).await;
@@ -126,6 +135,7 @@ pub async fn examine(machine: &dyn Machine, intended: &Intended) -> Vec<Finding>
     findings.extend(checks::disk(machine).await);
     findings.push(checks::image(machine, &intended.image).await);
     findings.extend(checks::plugins(machine, &intended.namespace).await);
+    findings.extend(shards::shards(machine, &intended.namespace, history).await);
     findings.extend(checks::database(machine, &intended.namespace).await);
     findings.extend(checks::platform(machine, &intended.platform).await);
     findings

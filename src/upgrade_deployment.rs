@@ -23,7 +23,9 @@
 //! Ingress's name and the Secret its certificate is in), and where its edge
 //! plugins' archive is (`pluginArchive`), which the upgrade keeps and says so.
 
+pub mod counts;
 pub mod run;
+pub mod shards;
 pub mod watch;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -543,6 +545,61 @@ pub struct DatabaseSet {
     pub tls: bool,
 }
 
+/// The volume claims the broker's JetStream set left (item 191, ruled
+/// 2026-11-19), among `kubectl get statefulsets,persistentvolumeclaims -o
+/// json`'s items: where the release's broker runs without that set --
+/// `tolerant`, or before a switch to `ha` makes it -- each claim of its
+/// servers, `jetstream-<set>-<n>`, the set named for the broker's own,
+/// `<broker>-jetstream`. Nothing where the set is there, or the release
+/// brings no broker; never a claim of another set's, a database's or a
+/// plugin's. Deleted, a return to `ha` starts JetStream afresh, never on
+/// the state its servers kept before. A listing that is not JSON is an
+/// error, never an empty one (item 191's review, finding 6).
+pub fn jetstream_claims_left(listed: &str) -> Result<Vec<String>, String> {
+    let listed = serde_json::from_str::<serde_json::Value>(listed).map_err(|failed| {
+        format!("`kubectl get statefulsets,persistentvolumeclaims` said something that is not JSON: {failed}")
+    })?;
+    let items = listed["items"].as_array().cloned().unwrap_or_default();
+    let brokers: Vec<&str> = items
+        .iter()
+        .filter(|item| {
+            item["kind"] == "StatefulSet"
+                && item["spec"]["selector"]["matchLabels"]["meridian.dev/component"] == "broker"
+        })
+        .filter_map(|set| set["metadata"]["name"].as_str())
+        .collect();
+    let Some(broker) = brokers.iter().find(|name| !name.ends_with("-jetstream")) else {
+        return Ok(Vec::new());
+    };
+    let set = format!("{broker}-jetstream");
+    if brokers.contains(&set.as_str()) {
+        return Ok(Vec::new());
+    }
+    let servers = format!("jetstream-{set}-");
+    Ok(items
+        .iter()
+        .filter(|item| item["kind"] == "PersistentVolumeClaim")
+        .filter_map(|claim| claim["metadata"]["name"].as_str())
+        .filter(|name| {
+            name.strip_prefix(&servers)
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .map(String::from)
+        .collect())
+}
+
+/// Whether values give the broker its JetStream set, as the chart decides
+/// it (its jetstreamReplicas): `broker.jetstream.replicas` where set, else
+/// 3 under `resilience.profile: ha` and 0 otherwise (item 191's review,
+/// finding 6).
+pub fn jetstream_in(values: &serde_json::Value) -> bool {
+    match &values["broker"]["jetstream"]["replicas"] {
+        serde_json::Value::Number(n) => n.as_u64().unwrap_or(0) > 0,
+        serde_json::Value::String(n) => n.parse::<u64>().unwrap_or(0) > 0,
+        _ => values["resilience"]["profile"] == "ha",
+    }
+}
+
 /// The release's brought database, among `kubectl get deployments,
 /// statefulsets -o json`'s items: the StatefulSet whose pods are the
 /// database component.
@@ -831,19 +888,28 @@ pub fn workloads(listed: &str) -> Vec<Workload> {
                 .find(|(owner, set, _)| *owner == name && Some(*set) == revision)
                 .map(|(_, _, set)| set.to_string());
             let (spec, status) = (&item["spec"], &item["status"]);
-            let wanted = spec["replicas"].as_u64().unwrap_or(1);
-            let ready = number(&status["readyReplicas"]);
+            let replicas = spec["replicas"].as_u64().unwrap_or(1);
+            // A plugin's shards are what it wants ready; its replicas past
+            // them are standby pods, which wait unready by design and are
+            // excused from readiness, never from the new template (step
+            // 3d; as `status` counts them).
+            let shape = shards::shape(item);
+            let wanted = shape.map_or(replicas, |(shards, _)| shards.min(replicas));
+            let ready = match shape {
+                Some(_) => number(&status["readyReplicas"]).min(wanted),
+                None => number(&status["readyReplicas"]),
+            };
             let updated = number(&status["updatedReplicas"]);
             let unfinished = if number(&item["metadata"]["generation"])
                 > number(&status["observedGeneration"])
             {
                 Some("its new template is not yet seen by its controller".to_string())
-            } else if updated < wanted {
-                Some(format!("{updated} of {wanted} on the new template"))
+            } else if updated < replicas {
+                Some(format!("{updated} of {replicas} on the new template"))
             } else if ready < wanted {
                 Some(format!("{ready} of {wanted} ready"))
             } else if kind == "deployment"
-                && (number(&status["replicas"]) > wanted
+                && (number(&status["replicas"]) > replicas
                     || number(&status["availableReplicas"]) < wanted)
             {
                 Some("old pods are still being replaced".to_string())
@@ -1188,6 +1254,13 @@ pub struct Plan {
     /// `--force-conflicts`, with Helm 4's server-side apply: the chart's
     /// counts over a scale another manager made.
     pub force_conflicts: bool,
+    /// Each store whose writer groups the upgrade raises, from what runs to
+    /// what it sets: a return to the revision it was at would lower them.
+    pub raised: Vec<(&'static str, u64, u64)>,
+    /// The upgrade gives the broker its JetStream set (`ha`): JetStream's
+    /// volumes left by a set that went before must be gone first, or it
+    /// starts on them (item 191's review, finding 6).
+    pub jetstream: bool,
 }
 
 /// The same command, as somebody would type it.

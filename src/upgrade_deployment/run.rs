@@ -388,10 +388,12 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     let database = database_set(&running_listed);
     let defaults: serde_json::Value =
         serde_yaml::from_str(&super::document(&chart_values)).unwrap_or_default();
+    let chart_has_counts = super::counts::chart_has_counts(&defaults);
     let upgraded_values = std::iter::once(own.clone().unwrap_or_default())
         .chain(given)
         .fold(defaults, |held, over| merged(&held, &over));
     let patroni_move = patroni_move(database.as_ref(), &upgraded_values);
+    let jetstream = super::jetstream_in(&upgraded_values);
 
     match direction(&from, &to) {
         Direction::Down(stops) => {
@@ -468,6 +470,45 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     if let Some(set) = database.as_ref().filter(|set| set.replicas > 0) {
         findings.extend(checksums_finding(machine, asked, set, &held_pods).await);
     }
+    let counted: serde_json::Value = serde_json::from_str(&running_listed).unwrap_or_default();
+    // Leaving every standby behind while a plugin runs with shards or a
+    // standby pod (step 3d): refused, naming them.
+    if let Some(stops) = super::shards::finding(&counted, &upgraded_values) {
+        findings.push(stops);
+        return refuse(&findings, say);
+    }
+    // The book's partitions and each store's writer groups and databases
+    // (step 3d): a lowering that would strand accounts or data, and a count
+    // changed with the first start on a release that has them, are refused.
+    let mut raised = Vec::new();
+    if chart_has_counts {
+        let runs = super::counts::running(&counted);
+        let wanted = super::counts::wanted(&upgraded_values);
+        if let Some(runs) = &runs {
+            for store in super::counts::STORES {
+                let from = runs.stores[store].groups;
+                if let Some(to) = wanted.groups[store].filter(|to| *to > from) {
+                    raised.push((store, from, to));
+                }
+            }
+        }
+        let held = match &runs {
+            Some(runs) if runs.has_counts && super::counts::lowers(runs, &wanted) => {
+                partitions_held(machine, asked, &held_pods).await
+            }
+            _ => super::counts::Held::default(),
+        };
+        findings.extend(super::counts::findings(
+            &asked.release,
+            true,
+            runs.as_ref(),
+            &wanted,
+            &held,
+        ));
+        if stopped(&findings) {
+            return refuse(&findings, say);
+        }
+    }
     for finding in &findings {
         say.say(&format!("{finding}"));
     }
@@ -492,7 +533,43 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         // chart is what says each count (it reads the database's live
         // one), as Helm 3's merge let it say: forced, as there.
         force_conflicts: helm_version.is_some_and(|(major, _)| major >= 4),
+        raised,
+        jetstream,
     }))
+}
+
+/// What the lake's and the book's members say of their partitions, each
+/// from its own probe: asked only when a count that runs would go down.
+async fn partitions_held(
+    machine: &dyn Machine,
+    asked: &Asked,
+    held_pods: &[super::Pod],
+) -> super::counts::Held {
+    let mut held = super::counts::Held::default();
+    for pod in held_pods {
+        let Some(component) = pod.labels.get("meridian.dev/component") else {
+            continue;
+        };
+        let Some((store, _)) = super::counts::store_and_group(component) else {
+            continue;
+        };
+        // An older runtime takes `probe` for nothing and starts a second
+        // copy of the store: never asked of one.
+        if pod.phase != "Running" || pod.terminating || pod.job.is_some() || !pod.probes {
+            continue;
+        }
+        // A group's members run the store's own container and binary.
+        let arguments = crate::probe::exec_arguments(&asked.namespace, &pod.name, store);
+        let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        let said = match machine.run("kubectl", &arguments).await {
+            Ok(said) | Err(Failure::Said(said)) => said,
+            Err(Failure::Missing(_)) => continue,
+        };
+        if let Some(probe) = crate::probe::first_json(&said) {
+            held.read(component, &probe);
+        }
+    }
+    held
 }
 
 /// Whether the brought database has page checksums, from the conductor's
@@ -615,6 +692,70 @@ async fn kubectl_json(machine: &dyn Machine, asked: &Asked, what: &str) -> Resul
         .map_err(|failed| failed.to_string())
 }
 
+/// How long the delete before an upgrade waits for JetStream's leftover
+/// claims to go (item 191's review, finding 6). It runs only where the
+/// JetStream set is not there, so a pod still using a claim is one of a
+/// set deleted just before, terminating: the broker's pods are given
+/// Kubernetes' default grace, 30 s (the chart sets none), all at once, and
+/// a claim goes once its last pod is gone, its volume unmounted and the
+/// claim's protection let go. Twice the grace bounds both.
+pub const JETSTREAM_CLAIMS_GONE: &str = "60s";
+
+/// The volume claims the broker's JetStream set left, deleted where that
+/// set is not there ([`super::jetstream_claims_left`]; item 191): before
+/// the upgrade, so a switch to `ha` starts JetStream afresh, and after it,
+/// so a switch to `tolerant` leaves none -- a set deleted in the upgrade
+/// that first gives it its retention policy, and a deployment that switched
+/// before, keep theirs. Before the upgrade the delete waits until they are
+/// gone ([`JETSTREAM_CLAIMS_GONE`]), so a set made by the upgrade never
+/// finds one still going. What was deleted, said; an error where they
+/// could not be listed, or were found and not deleted.
+async fn jetstream_claims_deleted(
+    machine: &dyn Machine,
+    asked: &Asked,
+    watch: &mut dyn Watch,
+    wait: bool,
+) -> Result<(), String> {
+    let listed = kubectl_json(machine, asked, "statefulsets,persistentvolumeclaims")
+        .await
+        .map_err(|failed| {
+            format!(
+                "the broker's JetStream volumes left without its set could not be listed: {failed}"
+            )
+        })?;
+    let left = super::jetstream_claims_left(&listed)?;
+    if left.is_empty() {
+        return Ok(());
+    }
+    let timeout = format!("--timeout={JETSTREAM_CLAIMS_GONE}");
+    let mut arguments = vec![
+        "delete",
+        "pvc",
+        "-n",
+        asked.namespace.as_str(),
+        "--ignore-not-found",
+    ];
+    if wait {
+        arguments.extend(["--wait", timeout.as_str()]);
+    } else {
+        arguments.push("--wait=false");
+    }
+    arguments.extend(left.iter().map(String::as_str));
+    machine.run("kubectl", &arguments).await.map_err(|failed| {
+        format!(
+            "the broker's JetStream volumes left without its set ({}) could not be deleted: \
+             {failed}",
+            left.join(", ")
+        )
+    })?;
+    watch.say(&format!(
+        "  deleted the broker's JetStream volumes left without its set ({}): JetStream starts \
+         afresh when ha is taken again",
+        left.join(", ")
+    ));
+    Ok(())
+}
+
 /// How often the cluster is asked while waiting.
 pub struct Pace {
     pub poll: Duration,
@@ -640,6 +781,21 @@ pub async fn apply(
     );
     let before = restarts(&before_pods);
     let before_names: BTreeSet<String> = before_pods.into_iter().map(|pod| pod.name).collect();
+
+    // JetStream's volumes left by a set that is gone (item 191): a switch
+    // to ha never starts on them. Where the upgrade brings the set, not
+    // knowing they are gone stops it (item 191's review, finding 6);
+    // otherwise it is said with what was not cleaned up.
+    let mut not_cleaned_before = None;
+    if let Err(failed) = jetstream_claims_deleted(machine, asked, watch, true).await {
+        if plan.jetstream {
+            return Err(format!(
+                "{failed}\nThe upgrade gives the broker its JetStream set, which would start on \
+                 them. Nothing else was changed."
+            ));
+        }
+        not_cleaned_before = Some(failed);
+    }
 
     // The certificate first, so the controller has it when the Ingress
     // names it.
@@ -744,8 +900,19 @@ pub async fn apply(
 
     // Only finished Jobs of this release's earlier revisions, and only pods
     // left over from a restart, each found by its label. ReplicaSets are the
-    // chart's revisionHistoryLimit's.
+    // chart's revisionHistoryLimit's. And JetStream's volumes, where the
+    // upgrade left ha and its set kept them (item 191).
     watch.begin(Step::Cleanup);
+    let after = jetstream_claims_deleted(machine, asked, watch, false).await;
+    for failed in not_cleaned_before.into_iter().chain(after.err()) {
+        let said = format!(
+            "{failed}. The upgrade itself is done; the next `meridian upgrade-deployment` \
+             deletes them, before ha is taken again."
+        );
+        if !report.not_cleaned.contains(&said) {
+            report.not_cleaned.push(said);
+        }
+    }
     let (finished, running) = leftovers(&held_jobs, revision);
     report.left = running;
     let dead = left_by_a_restart(&held_workloads, &held_pods);
@@ -775,6 +942,16 @@ pub async fn apply(
     Ok(report)
 }
 
+/// The writer groups an upgrade raises, as a failed one says them: None
+/// where it raises none.
+fn raised_said(raised: &[(&str, u64, u64)]) -> Option<String> {
+    let said: Vec<String> = raised
+        .iter()
+        .map(|(store, from, to)| format!("{store}.writerGroups from {from} to {to}"))
+        .collect();
+    (!said.is_empty()).then(|| said.join(" and "))
+}
+
 /// One `helm upgrade` of the plan, and the wait for its migration and every
 /// workload by the rollout rules: the revision it made, and what was last
 /// read of the release's Jobs, workloads and pods.
@@ -793,14 +970,28 @@ async fn upgrade_once(
     watch.begin(Step::Apply);
     let applied = machine.run("helm", &arguments).await;
     watch.end(Step::Apply, applied.is_ok());
+    // A return to the revision it was at would lower the writer groups this
+    // upgrade raises: never suggested then (item 111). The second of two
+    // upgrades starts from the first, which raised them already.
+    let lowered_by_a_return = (from_revision == plan.from.revision)
+        .then(|| raised_said(&plan.raised))
+        .flatten();
     applied.map_err(|failed| {
         let scope = crate::status::scope(release, namespace);
-        format!(
-            "helm refused the upgrade: {failed}\n`meridian status {scope}` shows the revision \
-             it left; `meridian rollback-deployment {scope} --to-revision {}` returns it to the \
-             revision it was at.",
-            from_revision
-        )
+        match &lowered_by_a_return {
+            Some(raised) => format!(
+                "helm refused the upgrade: {failed}\n`meridian status {scope}` shows the \
+                 revision it left. This upgrade raises {raised}, so returning to revision \
+                 {from_revision} would lower them again. Fix the cause and run this upgrade \
+                 again."
+            ),
+            None => format!(
+                "helm refused the upgrade: {failed}\n`meridian status {scope}` shows the \
+                 revision it left; `meridian rollback-deployment {scope} --to-revision {}` \
+                 returns it to the revision it was at.",
+                from_revision
+            ),
+        }
     })?;
     let revision = self::release(machine, asked)
         .await
@@ -852,14 +1043,24 @@ async fn upgrade_once(
 
         if let Some(job) = now.failed {
             let scope = crate::status::scope(release, namespace);
-            return Err(format!(
-                "the migration, job/{job}, failed, and the components wait for it.\n\
-                 Its log: `meridian logs migrate {scope}`.\n\
-                 Revision {revision} stays applied. `meridian status {scope}` says the release's \
-                 state; read the log before `meridian rollback-deployment {scope}`, since a \
-                 migration that got part of the way may have changed what the older runtime \
-                 would read."
-            ));
+            return Err(match &lowered_by_a_return {
+                Some(raised) => format!(
+                    "the migration, job/{job}, failed, and the components wait for it.\n\
+                     Its log: `meridian logs migrate {scope}`.\n\
+                     Revision {revision} stays applied. `meridian status {scope}` says the \
+                     release's state. This upgrade raises {raised}, so returning to revision \
+                     {from_revision} would lower them again. Fix the cause and run this upgrade \
+                     again."
+                ),
+                None => format!(
+                    "the migration, job/{job}, failed, and the components wait for it.\n\
+                     Its log: `meridian logs migrate {scope}`.\n\
+                     Revision {revision} stays applied. `meridian status {scope}` says the \
+                     release's state; read the log before `meridian rollback-deployment \
+                     {scope}`, since a migration that got part of the way may have changed what \
+                     the older runtime would read."
+                ),
+            });
         }
         if now.waiting.is_empty() {
             watch.end(Step::Components, true);
