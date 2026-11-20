@@ -204,6 +204,45 @@ fn what_to_do_next_says_how_a_roles_plugin_is_held_to_its_suite() {
     assert!(plain.contains("with the plugin, so whoever works on it next has them too.\n"));
 }
 
+/// Scaffold equals template, for the reference template and every role's: a
+/// plugin given the template's own name is the vendored template byte for
+/// byte, every file of it and no other, but for the check workflow's version
+/// line, which names this meridian. A file the template gains that `plugin
+/// new` leaves out, or writes changed, fails here (SDK 0.37.1's data
+/// template: pacing.py, stream.py and tests/test_examples.py were left out).
+#[test]
+fn a_scaffold_given_the_templates_own_name_is_the_template_byte_for_byte() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut templates: Vec<(Option<&str>, PathBuf)> =
+        vec![(None, manifest.join("plugin-template"))];
+    for (role, _) in ROLE_TEMPLATES {
+        templates.push((Some(role), manifest.join("plugin-templates").join(role)));
+    }
+    for (role, root) in templates {
+        let label = role.unwrap_or("reference");
+        let scratch = Scratch::new(&format!("equal-{label}"));
+        let into = scratch.0.join(DISTRIBUTION);
+
+        scaffold(DISTRIBUTION, &into, role).expect("scaffolded");
+
+        assert_eq!(
+            every_file(&into),
+            every_file(&root),
+            "{label}: the same files"
+        );
+        for file in every_file(&root) {
+            let held = std::fs::read(root.join(&file)).expect("readable");
+            let written = std::fs::read(into.join(&file)).expect("written");
+            let held = if file == CHECK_WORKFLOW {
+                tracking_this_cli(std::str::from_utf8(&held).expect("UTF-8")).into_bytes()
+            } else {
+                held
+            };
+            assert!(written == held, "{label}: {file} is not the template's");
+        }
+    }
+}
+
 #[test]
 fn a_new_plugin_is_the_template_under_its_own_name() {
     let scratch = Scratch::new("named");

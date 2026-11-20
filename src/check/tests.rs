@@ -216,6 +216,19 @@ fn entry_line(plugin: &Scaffolded) -> usize {
     text[..at].matches('\n').count() + 1
 }
 
+/// The line of page.py's `@pages.route(` declaring `path`, found by its text
+/// rather than counted, so a template that moves it moves the expectation.
+fn route_line(plugin: &Scaffolded, path: &str) -> usize {
+    let text = plugin.read(&page_py());
+    let at = code_at(
+        &page_py(),
+        &text,
+        &format!("@pages.route(\n    \"{path}\",\n"),
+    )
+    .unwrap_or_else(|| panic!("the template's {path} route"));
+    text[..at].matches('\n').count() + 1
+}
+
 fn outcome(report: &Report, rule: &str) -> Outcome {
     report
         .outcomes
@@ -2777,8 +2790,9 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
                 p.write(&format!("src/{MODULE}/sweep.py"), SWEEP_LINKING);
                 (format!("src/{MODULE}/sweep.py"), 6)
             },
-            "link_account (src/checked_plugin/page.py:238) is an act called through runs_as and \
-             names no check tool, so a service account set to prepare only is refused it",
+            // {link}: the line of the template's /link route, found by its text.
+            "link_account (src/checked_plugin/page.py:{link}) is an act called through runs_as \
+             and names no check tool, so a service account set to prepare only is refused it",
         ),
         (
             "tests-exist",
@@ -2793,6 +2807,7 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
     for (rule, breaking, said) in breakages {
         let plugin = Scaffolded::tested(rule);
         let (file, line) = breaking(&plugin);
+        let said = said.replace("{link}", &route_line(&plugin, "/link").to_string());
         let report = plugin.check();
         assert_eq!(failed_rules(&report), [rule], "{}", text(&report));
         let failure = report
