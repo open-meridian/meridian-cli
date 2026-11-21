@@ -149,12 +149,13 @@ pub async fn up(
                 .is_ok_and(|values| super::names_a_shared_storage_class(&values))
         });
         super::shared_storage_settled(Some(&class), in_values.map(String::as_str))?;
+        // S9: kubectl get storageclasses
         let listed = kubectl(&install, &["get", "storageclass", "-o", "name"]).await?;
         super::shared_storage_found(&class, &listed)?;
     }
     if let Some(host) = ingress_host {
         let listed = kubectl(
-            &install,
+            &install, // S9: kubectl get ingressclasses
             &[
                 "get",
                 "ingressclass",
@@ -300,9 +301,11 @@ pub fn trusted_by(dir: &std::path::Path) -> String {
 /// can be written before Helm installs anything.
 async fn namespace(install: &super::Install) -> Result<(), String> {
     let name = install.namespace.as_str();
+    // S9: kubectl get namespaces
     if kubectl(install, &["get", "namespace", name]).await.is_ok() {
         return Ok(());
     }
+    // S9: kubectl create namespaces
     kubectl(install, &["create", "namespace", name])
         .await
         .map(|_| ())
@@ -315,6 +318,7 @@ fn read_params(path: &str) -> Result<BTreeMap<String, String>, String> {
 }
 
 async fn helm(install: &super::Install) -> Result<(), String> {
+    // S9: helm upgrade
     let mut child = tokio::process::Command::new("helm")
         .args(helm_arguments(install))
         .stdin(Stdio::piped())
@@ -345,7 +349,7 @@ async fn helm(install: &super::Install) -> Result<(), String> {
 /// which are the chart's business and change without telling this.
 async fn dashboard_service(install: &super::Install) -> Result<String, String> {
     let named = kubectl(
-        install,
+        install, // S9: kubectl get services
         &[
             "get",
             "service",
@@ -375,7 +379,7 @@ async fn dashboard_service(install: &super::Install) -> Result<String, String> {
 async fn wait_for_rollout(install: &super::Install, service: &str) -> Result<(), String> {
     let deployment = service.replace("service/", "deployment/");
     let said = kubectl(
-        install,
+        install, // S9: kubectl rollout status
         &[
             "rollout",
             "status",
@@ -414,6 +418,7 @@ async fn port_forward(
     service: &str,
     port: u16,
 ) -> Result<tokio::process::Child, String> {
+    // S9: kubectl port-forward
     let child = tokio::process::Command::new("kubectl")
         .args([
             "--namespace",

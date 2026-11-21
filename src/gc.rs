@@ -55,7 +55,7 @@ fn said(failed: Failure) -> String {
 /// The checks, and what would be done. Nothing here changes anything.
 pub async fn check(machine: &dyn Machine, asked: &Asked) -> Result<Plan, String> {
     let ns = asked.namespace.as_str();
-    let listed = machine
+    let listed = machine // S9: kubectl get statefulsets
         .run(
             "kubectl",
             &[
@@ -107,7 +107,7 @@ pub async fn check(machine: &dyn Machine, asked: &Asked) -> Result<Plan, String>
         .flatten()
         .any(|env| env["name"] == READ_ONLY);
     for (verb, resource) in [("patch", "statefulsets"), ("create", "pods/exec")] {
-        let allowed = machine
+        let allowed = machine // S9: kubectl auth can-i
             .run("kubectl", &["auth", "can-i", verb, resource, "-n", ns])
             .await;
         match allowed {
@@ -149,7 +149,7 @@ pub fn plan_text(asked: &Asked, plan: &Plan) -> String {
 }
 
 async fn rolled_out(machine: &dyn Machine, asked: &Asked, plan: &Plan) -> Result<(), String> {
-    machine
+    machine // S9: kubectl rollout status
         .run(
             "kubectl",
             &[
@@ -195,7 +195,7 @@ pub async fn apply(
         let target = target.clone();
         let container = plan.container.clone();
         async move {
-            machine
+            machine // S9: kubectl set env
                 .run(
                     "kubectl",
                     &["set", "env", &target, "-n", ns, "-c", &container, &value],
@@ -224,7 +224,7 @@ pub async fn apply(
         .await
         .map_err(|failed| stuck(format!("the registry did not restart read-only: {failed}")))?;
     say("The registry is read-only; collecting.");
-    let ran = machine
+    let ran = machine // S9: kubectl exec
         .run(
             "kubectl",
             &[
