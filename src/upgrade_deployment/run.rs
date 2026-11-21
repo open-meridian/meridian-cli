@@ -177,6 +177,24 @@ pub(crate) async fn release(
     installed(&listed, &asked.release)
 }
 
+/// `helm get <what>` of the release as it is now, as JSON.
+async fn helm_get(machine: &dyn Machine, asked: &Asked, what: &str) -> Result<String, Failure> {
+    machine
+        .run(
+            "helm",
+            &[
+                "get",
+                what,
+                &asked.release,
+                "--namespace",
+                &asked.namespace,
+                "-o",
+                "json",
+            ],
+        )
+        .await
+}
+
 async fn target(machine: &dyn Machine, asked: &Asked) -> Result<Chart, Finding> {
     let mut arguments = vec!["show", "chart", asked.chart.as_str()];
     if let Some(version) = &asked.chart_version {
@@ -275,20 +293,34 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     // The deployment's own values, of which only `image`, where it is
     // reached and where its archive is are read; the rest of them, its enrolment code among them, is
     // never kept or printed.
-    let own_read = machine
-        .run(
-            "helm",
-            &[
-                "get",
-                "values",
-                &asked.release,
-                "--namespace",
-                &asked.namespace,
-                "-o",
-                "json",
-            ],
-        )
-        .await;
+    let own_read = helm_get(machine, asked, "values").await;
+
+    // How Helm last applied the release, which is how Helm 4 applies this
+    // upgrade (its `--server-side=auto`): asked of Helm 4 alone, since
+    // Helm 3 only ever merges on the client.
+    let mut server_side = false;
+    if helm_version.is_some_and(|(major, _)| major >= 4) {
+        match helm_get(machine, asked, "metadata").await {
+            Ok(metadata) => {
+                let metadata: serde_json::Value =
+                    serde_json::from_str(&metadata).unwrap_or_default();
+                server_side = metadata["applyMethod"] == "ssa";
+            }
+            Err(failed) => {
+                findings.push(Finding::Stops {
+                    what: format!(
+                        "how Helm last applied {} could not be read: {failed}",
+                        asked.release
+                    ),
+                    fix: "The upgrade forces the chart's counts only where Helm applies on the \
+                          server, and would fail part-way on a wrong guess. `helm get metadata` \
+                          must answer for the release."
+                        .into(),
+                });
+                return refuse(&findings, say);
+            }
+        }
+    }
 
     // The person's -f files and --sets, read before anything is changed, and
     // what they change in the deployment's own values: paths only, never
@@ -527,12 +559,15 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         archive: archive_in(&own_values),
         changes,
         patroni_move,
-        // Helm 4 applies on the server, where a field another manager set
+        // Where Helm 4 applies on the server, a field another manager set
         // -- the database's replicas, scaled by first run or a restore --
         // is a conflict, and an upgrade that changes it is refused. The
         // chart is what says each count (it reads the database's live
-        // one), as Helm 3's merge let it say: forced, as there.
-        force_conflicts: helm_version.is_some_and(|(major, _)| major >= 4),
+        // one), as Helm 3's merge let it say: forced, as there. Only
+        // there: on a release last merged client-side (one Helm 3
+        // installed), Helm 4 merges client-side too, where the flag is an
+        // error it reports after the hooks, leaving a failed revision.
+        force_conflicts: server_side,
         raised,
         jetstream,
     }))

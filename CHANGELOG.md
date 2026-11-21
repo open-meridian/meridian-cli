@@ -68,6 +68,10 @@ an older one each says so and changes nothing.
   book runs more than one database (`lake.databases` or `bor.databases` above 1), before changing
   anything: each covers only a store's first database, and says which databases it would leave
   out. A backup taken where a store ran more than one database is refused at restore the same way.
+- `meridian upgrade-deployment` on Helm 4 passes `--force-conflicts` only where Helm last applied
+  the release on the server. On a release Helm 3 installed, Helm 4 merges on the client, where the
+  flag is an error: the upgrade failed after its hooks had run and left a failed revision. Where
+  how the release was last applied can't be read, the upgrade is refused before anything changes.
 
 ## 0.1.60
 

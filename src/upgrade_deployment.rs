@@ -1251,8 +1251,9 @@ pub struct Plan {
     /// The database moved under Patroni, in two upgrades this one approval
     /// covers, or the second of them alone.
     pub patroni_move: Option<PatroniMove>,
-    /// `--force-conflicts`, with Helm 4's server-side apply: the chart's
-    /// counts over a scale another manager made.
+    /// `--force-conflicts`, where Helm 4 applies on the server (the release
+    /// was last applied so): the chart's counts over a scale another manager
+    /// made.
     pub force_conflicts: bool,
     /// Each store whose writer groups the upgrade raises, from what runs to
     /// what it sets: a return to the revision it was at would lower them.

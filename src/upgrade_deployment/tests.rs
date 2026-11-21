@@ -2557,24 +2557,58 @@ async fn a_database_without_page_checksums_is_said_with_the_guided_step() {
     );
 }
 
+const METADATA: &str = "helm get metadata meridian --namespace meridian -o json";
+
 #[tokio::test]
-async fn with_helm_4_the_charts_counts_are_forced_over_a_scale_another_manager_made() {
-    let stand = healthy()
-        .instead("helm version --short", Ok("v4.2.3+g43e8b7f"))
-        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
-        .json(WORKLOADS, items(vec![]));
+async fn with_helm_4_the_charts_counts_are_forced_only_where_the_release_was_applied_server_side() {
+    let helm_4 = || {
+        healthy()
+            .instead("helm version --short", Ok("v4.2.3+g43e8b7f"))
+            .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+            .json(WORKLOADS, items(vec![]))
+    };
+    // Applied server-side last: a field another manager set is a conflict
+    // there, and the chart's counts are forced over it.
+    let stand = helm_4().json(
+        METADATA,
+        serde_json::json!({"name": "meridian", "revision": 7, "applyMethod": "ssa"}),
+    );
     let plan = planned(&stand).await;
     assert!(plan.force_conflicts);
     assert!(helm_arguments(&asked(), &plan).contains(&"--force-conflicts".to_string()));
-    // Helm 3 merges on the client and has no such flag.
-    let plan = planned(
-        &healthy()
-            .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
-            .json(WORKLOADS, items(vec![])),
-    )
+    // Merged client-side last, said or not (a release Helm 3 installed says
+    // nothing): Helm 4 merges it client-side again, where the flag is an
+    // error after the hooks have run.
+    for metadata in [
+        serde_json::json!({"name": "meridian", "revision": 7, "applyMethod": "csa"}),
+        serde_json::json!({"name": "meridian", "revision": 7}),
+    ] {
+        let plan = planned(&helm_4().json(METADATA, metadata)).await;
+        assert!(!plan.force_conflicts);
+        assert!(!helm_arguments(&asked(), &plan).contains(&"--force-conflicts".to_string()));
+    }
+    // Not read: refused, with nothing changed, rather than guessed.
+    let unread = helm_4().answering(METADATA, Err("Error: forbidden"));
+    let mut said = Vec::new();
+    let checked = check(&unread, &asked(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
     .await;
+    assert!(matches!(checked, Checked::Refused), "{said:?}");
+    assert!(
+        said.join("\n")
+            .contains("how Helm last applied meridian could not be read: Error: forbidden"),
+        "{said:?}"
+    );
+    assert!(!unread.changed_anything());
+    // Helm 3 merges on the client, has no such flag, and is not asked.
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(WORKLOADS, items(vec![]));
+    let plan = planned(&stand).await;
     assert!(!plan.force_conflicts);
     assert!(!helm_arguments(&asked(), &plan).contains(&"--force-conflicts".to_string()));
+    assert!(!stand.asked().iter().any(|c| c == METADATA));
 }
 
 // ── The counts (step 3d) ─────────────────────────────────────────────────
