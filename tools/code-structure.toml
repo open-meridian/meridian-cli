@@ -24,10 +24,10 @@ size_exempt = [
 # to, ship in plugins under Apache-2.0; the CLI itself is AGPL-3.0-or-later.
 licence_scan = ["plugin-template/*", "plugin-templates/*", "sdk-roles/*"]
 
-# S9: the shelled-out kubectl and helm calls in the CLI's own code (not its
-# tests), counted; the count may not grow.
+# S9: the kinds of kubectl and helm call in the CLI's own code (not its
+# tests), each named at its call and listed with its reason in `kinds`.
 [shellouts]
 count = ["src/*.rs"]
 skip = ["src/*tests.rs", "src/fake_http.rs"]
-baseline = "tools/shellouts-baseline.txt"
+kinds = "tools/shellout-kinds.tsv"
 

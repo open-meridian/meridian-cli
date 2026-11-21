@@ -21,9 +21,15 @@ the pre-push gate and in CI and is red on a planted violation
 - **S5 pins are immutable:** `make check-pins`. Another repository by a release or
   a full SHA, never a branch or a sibling checkout; an exception goes in
   tools/pins-allowlist.txt with its marker.
-- **S9 no cluster tool it doesn't need:** `make check-shellouts`. The count of
-  `"kubectl"` and `"helm"` calls in src/ (tests aside) may not grow; prefer the
-  deployment's API. Each call left has a reason or an INTERIM marker.
+- **S9 no cluster tool it doesn't need:** `make check-shellouts`. Every
+  `kubectl` and `helm` call in src/ (tests aside) names its kind, tool + verb +
+  resource, in a `// S9: kubectl get secrets` comment on its lines or above its
+  statement; a helper that passes its caller's arguments on is followed, and each
+  call of it names the kind instead. Each kind is listed in
+  tools/shellout-kinds.tsv with its reason or an INTERIM marker. A new kind needs
+  its reason and a `Baseline-Change:` trailer naming it; never hide a call behind
+  a helper to avoid listing it. Prefer the deployment's API. The number of kinds
+  listed with no reason only goes down.
 - **S10 licences by layer:** `make check-licences`. The scaffolds and sdk-roles
   ship in plugins under Apache-2.0: no GPL or AGPL text in them.
 - **S2 file size:** `make check-size` reports a hand-written file over 1,500 lines

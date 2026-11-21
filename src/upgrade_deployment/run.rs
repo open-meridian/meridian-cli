@@ -30,6 +30,7 @@ pub enum Checked {
 }
 
 async fn helm(machine: &dyn Machine) -> (Finding, Option<(u32, u32)>) {
+    // S9: helm version
     let said = match machine.run("helm", &["version", "--short"]).await {
         Ok(said) => said,
         Err(failed) => {
@@ -67,6 +68,7 @@ async fn helm(machine: &dyn Machine) -> (Finding, Option<(u32, u32)>) {
 }
 
 async fn cluster(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
+    // S9: kubectl cluster-info
     match machine.run("kubectl", &["cluster-info"]).await {
         Ok(_) => {}
         Err(Failure::Missing(program)) => {
@@ -92,7 +94,7 @@ async fn cluster(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
         ("create", "jobs"),
         ("delete", "jobs"),
     ] {
-        let allowed = machine
+        let allowed = machine // S9: kubectl auth can-i
             .run(
                 "kubectl",
                 &["auth", "can-i", verb, resource, "-n", namespace],
@@ -155,7 +157,7 @@ pub(crate) async fn release(
     // Every status an upgrade must refuse as well as the one it proceeds
     // from. Named, because Helm 3 lists only deployed and failed unless told
     // and Helm 4 has no --all.
-    let listed = machine
+    let listed = machine // S9: helm list
         .run(
             "helm",
             &[
@@ -192,7 +194,7 @@ async fn applied_on_server(
     arguments.extend(["--namespace", asked.namespace.as_str(), "-o", "json"]);
     // Why helm: only Helm's own record of a revision says how it was
     // applied, which is how Helm 4 applies the next one.
-    let metadata = machine.run("helm", &arguments).await?;
+    let metadata = machine.run("helm", &arguments).await?; // S9: helm get metadata
     super::applied_on_server(&metadata).map_err(Failure::Said)
 }
 
@@ -224,7 +226,7 @@ async fn target(machine: &dyn Machine, asked: &Asked) -> Result<Chart, Finding> 
     let fix = "The chart's registry could not answer for that version: check --chart-version \
                against the versions published, or leave it out for the latest; --chart names \
                the chart it was installed from.";
-    let shown = machine
+    let shown = machine // S9: helm show chart
         .run("helm", &arguments)
         .await
         .map_err(|failed| Finding::Stops {
@@ -314,7 +316,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     // The deployment's own values, of which only `image`, where it is
     // reached and where its archive is are read; the rest of them, its enrolment code among them, is
     // never kept or printed.
-    let own_read = machine
+    let own_read = machine // S9: helm get values
         .run(
             "helm",
             &[
@@ -439,13 +441,14 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
 
     // The new chart's defaults: its image, and what the values it is given
     // come to beneath the deployment's own and the person's.
-    let chart_values = machine
+    let chart_values = machine // S9: helm show values
         .run(
             "helm",
             &["show", "values", &asked.chart, "--version", &to.version],
         )
         .await
         .unwrap_or_default();
+    // S9: kubectl get deployments; kubectl get statefulsets; kubectl get replicasets
     let running_listed = kubectl_json(machine, asked, WORKLOADS)
         .await
         .unwrap_or_default();
@@ -564,6 +567,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     findings.extend(pinned);
 
     let running = workloads(&running_listed);
+    // S9: kubectl get pods
     let held_pods = kubectl_json(machine, asked, "pods")
         .await
         .map(|listed| pods(&listed))
@@ -667,6 +671,7 @@ async fn partitions_held(
         // A group's members run the store's own container and binary.
         let arguments = crate::probe::exec_arguments(&asked.namespace, &pod.name, store);
         let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        // S9: kubectl exec
         let said = match machine.run("kubectl", &arguments).await {
             Ok(said) | Err(Failure::Said(said)) => said,
             Err(Failure::Missing(_)) => continue,
@@ -701,6 +706,7 @@ async fn checksums_finding(
     }
     let arguments = crate::probe::exec_arguments(&asked.namespace, &pod.name, "conductor");
     let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    // S9: kubectl exec
     let said = match machine.run("kubectl", &arguments).await {
         Ok(said) => said,
         Err(Failure::Said(said)) => said,
@@ -822,6 +828,7 @@ async fn jetstream_claims_deleted(
     watch: &mut dyn Watch,
     wait: bool,
 ) -> Result<(), String> {
+    // S9: kubectl get statefulsets; kubectl get persistentvolumeclaims
     let listed = kubectl_json(machine, asked, "statefulsets,persistentvolumeclaims")
         .await
         .map_err(|failed| {
@@ -847,6 +854,7 @@ async fn jetstream_claims_deleted(
         arguments.push("--wait=false");
     }
     arguments.extend(left.iter().map(String::as_str));
+    // S9: kubectl delete persistentvolumeclaims
     machine.run("kubectl", &arguments).await.map_err(|failed| {
         format!(
             "the broker's JetStream volumes left without its set ({}) could not be deleted: \
@@ -880,6 +888,7 @@ pub async fn apply(
     let (release, namespace) = (asked.release.as_str(), asked.namespace.as_str());
     // Before, so a restart is counted from here and not from a pod's birth,
     // and a plugin pod made from here was made during the upgrade.
+    // S9: kubectl get pods
     let before_pods = pods(
         &kubectl_json(machine, asked, "pods")
             .await
@@ -1031,6 +1040,7 @@ pub async fn apply(
         }
         let mut arguments = vec!["delete", kind, "-n", namespace, "--ignore-not-found"];
         arguments.extend(names.iter().map(String::as_str));
+        // S9: kubectl delete jobs; kubectl delete pods
         match machine.run("kubectl", &arguments).await {
             Ok(_) => *done = names,
             Err(failed) => report.not_cleaned.push(format!(
@@ -1074,7 +1084,7 @@ async fn upgrade_once(
     let arguments = super::helm_arguments(asked, plan);
     let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
     watch.begin(Step::Apply);
-    let applied = machine.run("helm", &arguments).await;
+    let applied = machine.run("helm", &arguments).await; // S9: helm upgrade
     watch.end(Step::Apply, applied.is_ok());
     // A return to the revision it was at would lower the writer groups this
     // upgrade raises: never suggested then (item 111). The second of two
@@ -1116,16 +1126,19 @@ async fn upgrade_once(
     let deadline = Instant::now() + pace.timeout;
     let mut said_waiting = std::collections::BTreeSet::new();
     let (held_jobs, held_workloads, held_pods) = loop {
+        // S9: kubectl get jobs
         let held_jobs = jobs(
             &kubectl_json(machine, asked, "jobs")
                 .await
                 .unwrap_or_default(),
         );
+        // S9: kubectl get deployments; kubectl get statefulsets; kubectl get replicasets
         let held_workloads = workloads(
             &kubectl_json(machine, asked, WORKLOADS)
                 .await
                 .unwrap_or_default(),
         );
+        // S9: kubectl get pods
         let held_pods = pods(
             &kubectl_json(machine, asked, "pods")
                 .await

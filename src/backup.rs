@@ -1003,6 +1003,7 @@ pub async fn take_in_cluster(
         "app.kubernetes.io/instance={},meridian.dev/component=backup",
         asked.release
     );
+    // S9: kubectl get cronjobs
     let found: serde_json::Value = serde_json::from_str(
         &asked_of(
             machine,
@@ -1025,6 +1026,7 @@ pub async fn take_in_cluster(
     // Each edge plugin's storage, which the Job is given to read: the
     // launcher makes these claims as plugins launch, and the Job holds no
     // right to list them (ruling 828).
+    // S9: kubectl get persistentvolumeclaims
     let listed: serde_json::Value = serde_json::from_str(
         &asked_of(
             machine,
@@ -1045,7 +1047,7 @@ pub async fn take_in_cluster(
     .map_err(|failed| format!("kubectl's answer could not be read: {failed}"))?;
     let storage = storage_claims(&listed);
     let manifest = job_from(cronjob, &job, asked.to.is_some(), &storage)?;
-    machine
+    machine // S9: kubectl create
         .run_with_input(
             "kubectl",
             &["create", "-n", ns, "-f", "-"],
@@ -1056,6 +1058,7 @@ pub async fn take_in_cluster(
 
     let job_name = job.as_str();
     let log = until("the backup", asked.timeout, move || async move {
+        // S9: kubectl logs
         let log = asked_of(machine, &["logs", "-n", ns, &format!("job/{job_name}")])
             .await
             .unwrap_or_default();
@@ -1066,7 +1069,7 @@ pub async fn take_in_cluster(
         // of several nodes where the plugins' claims are held on different
         // ones, say.
         let pods = asked_of(
-            machine,
+            machine, // S9: kubectl get pods
             &[
                 "get",
                 "pods",
@@ -1089,7 +1092,7 @@ pub async fn take_in_cluster(
             )));
         }
         let failed = asked_of(
-            machine,
+            machine, // S9: kubectl get jobs
             &[
                 "get",
                 "job",
@@ -1147,7 +1150,7 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
 
     if let Some(to) = &asked.to {
         let pod = text(
-            "kubectl",
+            "kubectl", // S9: kubectl get pods
             &[
                 "get",
                 "pods",
@@ -1162,7 +1165,7 @@ pub async fn take(asked: &Take, unix_seconds: u64) -> Result<String, String> {
         .await?;
         let copied = copy_out(ns, pod.trim(), &written).await;
         let released = run(
-            "kubectl",
+            "kubectl", // S9: kubectl exec
             &["exec", "-n", ns, pod.trim(), "--", "touch", "/tmp/copied"],
             None,
         )
@@ -1197,7 +1200,7 @@ const COPY_READS: usize = 3;
 async fn copy_out(ns: &str, pod: &str, written: &Wrote) -> Result<Vec<u8>, String> {
     let held = format!("/work/held/{}", written.name);
     let from = if run(
-        "kubectl",
+        "kubectl", // S9: kubectl exec
         &["exec", "-n", ns, pod, "--", "test", "-f", &held],
         None,
     )
@@ -1211,7 +1214,7 @@ async fn copy_out(ns: &str, pod: &str, written: &Wrote) -> Result<Vec<u8>, Strin
     let mut said = Vec::new();
     for read in 1..=COPY_READS {
         match run(
-            "kubectl",
+            "kubectl", // S9: kubectl exec
             &["exec", "-n", ns, pod, "--", "cat", &from],
             None,
         )
@@ -1819,6 +1822,7 @@ pub async fn restore(
     };
 
     // Where, said before anything is changed.
+    // S9: kubectl config current-context
     let context = text("kubectl", &["config", "current-context"]).await?;
     let cluster = context.trim().to_string();
     step(&format!(
@@ -1827,6 +1831,7 @@ pub async fn restore(
 
     // An empty namespace, or none: no release, and nothing a deployment
     // keeps or would take up.
+    // S9: helm status
     if text("helm", &["status", &release, "-n", ns]).await.is_ok() {
         return Err(format!(
             "{ns} holds a release {release} already. Restore goes only into a namespace without \
@@ -1847,6 +1852,7 @@ pub async fn restore(
     };
     let volume = match backup_volume(ns, &full, &values) {
         None => Ok(None),
+        // S9: kubectl get persistentvolumes
         Some(name) => match text("kubectl", &["get", "pv", &name, "-o", "name"]).await {
             Ok(_) => Ok(Some(name)),
             Err(failed) if failed.contains("NotFound") || failed.contains("not found") => Ok(None),
@@ -1856,6 +1862,7 @@ pub async fn restore(
         },
     };
     let present = Present {
+        // S9: kubectl get secrets; kubectl get configmaps; kubectl get persistentvolumeclaims
         secrets: names("secrets").await,
         config_maps: names("configmaps").await,
         claims: names("persistentvolumeclaims").await,
@@ -1897,6 +1904,7 @@ pub async fn restore(
             ("patch", "pods/ephemeralcontainers"),
             ("create", "pods/exec"),
         ] {
+            // S9: kubectl auth can-i
             let allowed = text("kubectl", &["auth", "can-i", verb, resource, "-n", ns])
                 .await
                 .unwrap_or_default();
@@ -1927,6 +1935,7 @@ pub async fn restore(
     };
     let shown = with_version(&["show", "chart"]);
     let shown: Vec<&str> = shown.iter().map(String::as_str).collect();
+    // S9: helm show chart
     let chart =
         crate::upgrade_deployment::chart_of(&text("helm", &shown).await.map_err(|failed| {
             format!(
@@ -1949,12 +1958,14 @@ pub async fn restore(
     // What was chosen, against the chart restore installs.
     let show = with_version(&["show", "values"]);
     let show: Vec<&str> = show.iter().map(String::as_str).collect();
+    // S9: helm show values
     let defaults: serde_yaml::Value = serde_yaml::from_str(&crate::upgrade_deployment::document(
         &text("helm", &show).await?,
     ))
     .map_err(|failed| format!("the chart's defaults could not be read: {failed}"))?;
     let mut given = chosen(&values, &defaults);
 
+    // S9: kubectl get namespaces
     let namespace_exists = text("kubectl", &["get", "namespace", ns]).await.is_ok();
     // The brought database's standbys, as the backup's values give them.
     let standbys = {
@@ -1998,6 +2009,7 @@ pub async fn restore(
     // The volume a deleted namespace left, as approved: the object, never
     // the node's directory, which Retain keeps.
     if let Some(volume) = &plan.delete_volume {
+        // S9: kubectl delete persistentvolumes
         text("kubectl", &["delete", "pv", volume, "--wait=true"])
             .await
             .map_err(|failed| {
@@ -2009,7 +2021,7 @@ pub async fn restore(
     }
 
     if !namespace_exists {
-        text("kubectl", &["create", "namespace", ns]).await?;
+        text("kubectl", &["create", "namespace", ns]).await?; // S9: kubectl create namespaces
     }
 
     // The kept objects, before the chart, so it renders with them; the
@@ -2133,7 +2145,7 @@ pub async fn restore(
     if let Some(version) = &version {
         install.extend(["--version", version.as_str()]);
     }
-    let installed = text("helm", &install).await;
+    let installed = text("helm", &install).await; // S9: helm install
     let _ = std::fs::remove_file(&values_file);
     installed?;
     step(&format!(
@@ -2198,6 +2210,7 @@ pub async fn restore(
                 "the database's StatefulSet to exist",
                 asked.timeout,
                 move || async move {
+                    // S9: kubectl get statefulsets
                     text("kubectl", &["get", "statefulset", workload, "-n", ns])
                         .await
                         .ok()
@@ -2205,7 +2218,7 @@ pub async fn restore(
             )
             .await?;
             text(
-                "kubectl",
+                "kubectl", // S9: kubectl scale statefulsets
                 &["scale", "statefulset", workload, "-n", ns, "--replicas=1"],
             )
             .await?;
@@ -2216,7 +2229,7 @@ pub async fn restore(
                     // Over TCP: the image answers on its socket during its first,
                     // initialising start, and restarts after.
                     text(
-                        "kubectl",
+                        "kubectl", // S9: kubectl exec
                         &[
                             "exec",
                             "-n",
@@ -2239,7 +2252,7 @@ pub async fn restore(
             psql.extend_from_slice(local_commits);
             psql.extend(["psql", "-X", "-q", "-U", "postgres", "-d", "postgres"]);
             run(
-                "kubectl",
+                "kubectl", // S9: kubectl exec
                 &psql,
                 Some(provision_sql(&serving, &migrating)?.as_bytes()),
             )
@@ -2250,7 +2263,7 @@ pub async fn restore(
                     .to_string()
             })?;
             let tables = text(
-                "kubectl",
+                "kubectl", // S9: kubectl exec
                 &[
                     "exec", "-n", ns, pod, "--", "psql", "-X", "-At", "-U", "postgres", "-d",
                     &database, "-c", TABLES,
@@ -2279,6 +2292,7 @@ pub async fn restore(
                 "--exit-on-error",
                 "--single-transaction",
             ]);
+            // S9: kubectl exec
             run("kubectl", &pg_restore, Some(dump))
                 .await
                 .map_err(|failed| {
@@ -2286,7 +2300,7 @@ pub async fn restore(
                 })?;
             let restored = counts(
                 &text(
-                    "kubectl",
+                    "kubectl", // S9: kubectl exec
                     &[
                         "exec", "-n", ns, pod, "--", "psql", "-X", "-At", "-U", "postgres", "-d",
                         &database, "-c", COUNTS,
@@ -2298,7 +2312,7 @@ pub async fn restore(
             if standbys > 0 {
                 let members = format!("--replicas={}", standbys + 1);
                 text(
-                    "kubectl",
+                    "kubectl", // S9: kubectl scale statefulsets
                     &["scale", "statefulset", workload, "-n", ns, &members],
                 )
                 .await?;
@@ -2308,7 +2322,7 @@ pub async fn restore(
                     asked.timeout,
                     move || async move {
                         let listed = text(
-                            "kubectl",
+                            "kubectl", // S9: kubectl get statefulsets
                             &[
                                 "get",
                                 "statefulset",
@@ -2427,7 +2441,7 @@ pub async fn restore(
             .contains(&manifest.database.secret)
             .then_some(release.as_str());
         run(
-            "kubectl",
+            "kubectl", // S9: kubectl replace
             &["replace", "-n", ns, "-f", "-"],
             Some(
                 secret_object(name, ns, &db_secret, adopt)
@@ -2451,7 +2465,7 @@ pub async fn restore(
         asked.timeout,
         move || async move {
             text(
-                "kubectl",
+                "kubectl", // S9: kubectl get deployments
                 &["get", "deployments", "-n", ns, "-l", selector, "-o", "name"],
             )
             .await
@@ -2461,7 +2475,7 @@ pub async fn restore(
     )
     .await?;
     text(
-        "kubectl",
+        "kubectl", // S9: kubectl wait
         &[
             "wait",
             "--for=condition=Available",
@@ -2496,7 +2510,7 @@ pub async fn restore(
     let read = || async move {
         crate::upgrade_deployment::pods(
             &text(
-                "kubectl",
+                "kubectl", // S9: kubectl get pods
                 &["get", "pods", "-n", ns, "-l", launched, "-o", "json"],
             )
             .await
@@ -2572,7 +2586,7 @@ async fn fill_storage(
     create(&filler_pod(pod, ns, &claim.name, image)).await?;
     let filled = async {
         text(
-            "kubectl",
+            "kubectl", // S9: kubectl wait
             &[
                 "wait",
                 "--for=condition=Ready",
@@ -2585,7 +2599,7 @@ async fn fill_storage(
         .await
         .map_err(|failed| format!("the pod filling {} did not start: {failed}", claim.name))?;
         run(
-            "kubectl",
+            "kubectl", // S9: kubectl exec
             &[
                 "exec",
                 "-i",
@@ -2605,7 +2619,7 @@ async fn fill_storage(
         .await
         .map_err(|failed| format!("{} could not be filled: {failed}", claim.name))?;
         let held: BTreeSet<String> = text(
-            "kubectl",
+            "kubectl", // S9: kubectl exec
             &[
                 "exec",
                 "-n",
@@ -2633,6 +2647,7 @@ async fn fill_storage(
         Ok(())
     }
     .await;
+    // S9: kubectl delete pods
     let removed = text("kubectl", &["delete", "pod", pod, "-n", ns, "--wait=true"]).await;
     filled?;
     removed.map(|_| ())
@@ -2665,7 +2680,7 @@ async fn loader(
     let selector = selector_text.as_str();
     let pod = until("the conductor to run", timeout, move || async move {
         text(
-            "kubectl",
+            "kubectl", // S9: kubectl get pods
             &[
                 "get",
                 "pods",
@@ -2686,7 +2701,7 @@ async fn loader(
     .await?;
     let ephemeral = |pod: String| async move {
         text(
-            "kubectl",
+            "kubectl", // S9: kubectl get pods
             &[
                 "get",
                 "pod",
@@ -2735,7 +2750,7 @@ async fn loader(
         debug.push(flag);
     }
     debug.extend(["--", "sleep", sleep.as_str()]);
-    let added = text("kubectl", &debug).await;
+    let added = text("kubectl", &debug).await; // S9: kubectl debug
     if let Some(path) = &custom {
         let _ = std::fs::remove_file(path);
     }
@@ -2751,7 +2766,7 @@ async fn loader(
     let (pod_ref, name_ref) = (pod.as_str(), container.as_str());
     until("the loading container to run", timeout, move || async move {
         text(
-            "kubectl",
+            "kubectl", // S9: kubectl get pods
             &[
                 "get",
                 "pod",
@@ -2809,7 +2824,7 @@ async fn in_loader(
     stdin.push(b'\n');
     stdin.extend_from_slice(input);
     run(
-        "kubectl",
+        "kubectl", // S9: kubectl exec
         &[
             "exec", "-i", "-n", ns, pod, "-c", container, "--", "sh", "-c", script,
         ],
@@ -2840,7 +2855,7 @@ async fn finish_first_run(
 ) -> Result<(), String> {
     let jobs: serde_json::Value = serde_json::from_str(
         &text(
-            "kubectl",
+            "kubectl", // S9: kubectl get jobs
             &[
                 "get",
                 "jobs",
@@ -2862,7 +2877,7 @@ async fn finish_first_run(
     };
     for name in &restart {
         text(
-            "kubectl",
+            "kubectl", // S9: kubectl rollout restart
             &[
                 "rollout",
                 "restart",
@@ -2875,7 +2890,7 @@ async fn finish_first_run(
     }
     if let Some(job) = &first_run {
         text(
-            "kubectl",
+            "kubectl", // S9: kubectl delete pods
             &[
                 "delete",
                 "pod",
@@ -2890,7 +2905,7 @@ async fn finish_first_run(
         let name = job.name.as_str();
         until("first run to finish", timeout, move || async move {
             text(
-                "kubectl",
+                "kubectl", // S9: kubectl get jobs
                 &[
                     "get",
                     "job",
@@ -2908,7 +2923,7 @@ async fn finish_first_run(
         .await?;
         if !job.binding.is_empty() {
             text(
-                "kubectl",
+                "kubectl", // S9: kubectl delete rolebindings
                 &[
                     "delete",
                     "rolebinding",
@@ -2924,7 +2939,7 @@ async fn finish_first_run(
     let seconds = format!("--timeout={}s", timeout.as_secs());
     for name in &restart {
         text(
-            "kubectl",
+            "kubectl", // S9: kubectl rollout status
             &[
                 "rollout",
                 "status",
@@ -2950,7 +2965,7 @@ async fn create(object: &serde_json::Value) -> Result<(), String> {
         .unwrap_or_default()
         .to_string();
     run(
-        "kubectl",
+        "kubectl", // S9: kubectl create
         &["create", "-n", &ns, "-f", "-"],
         Some(object.to_string().as_bytes()),
     )

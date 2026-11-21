@@ -241,7 +241,7 @@ pub async fn release_workloads(
     release: &Release,
 ) -> Result<serde_json::Value, String> {
     let listed = kubectl(
-        machine,
+        machine, // S9: kubectl get deployments; kubectl get statefulsets
         &[
             "get",
             "deployments,statefulsets",
@@ -380,7 +380,7 @@ pub async fn members_now(
     set: &str,
 ) -> Result<Vec<Member>, String> {
     let listed = json(
-        machine,
+        machine, // S9: kubectl get pods
         &[
             "get",
             "pods",
@@ -413,7 +413,7 @@ async fn in_member(
         "--",
     ];
     arguments.extend_from_slice(command);
-    kubectl(machine, &arguments).await
+    kubectl(machine, &arguments).await // S9: kubectl exec
 }
 
 /// The size of the data directory on member 0, in bytes, as the act's own
@@ -441,7 +441,7 @@ pub async fn cronjob(
     set: &str,
 ) -> Result<serde_json::Value, String> {
     json(
-        machine,
+        machine, // S9: kubectl get cronjobs
         &[
             "get",
             "cronjob",
@@ -464,7 +464,7 @@ pub async fn offline_script(
     set: &str,
 ) -> Result<String, String> {
     let held = json(
-        machine,
+        machine, // S9: kubectl get configmaps
         &[
             "get",
             "configmap",
@@ -538,7 +538,7 @@ pub async fn running_deployments(
 ) -> Result<Vec<(String, u64)>, String> {
     let ns = release.namespace.as_str();
     let listed = json(
-        machine,
+        machine, // S9: kubectl get deployments
         &[
             "get",
             "deployments",
@@ -578,7 +578,7 @@ pub async fn stop_these(
     if !running.is_empty() {
         let mut arguments = vec!["scale", "deployment", "-n", ns, "--replicas=0"];
         arguments.extend(running.iter().map(|(name, _)| name.as_str()));
-        kubectl(machine, &arguments).await?;
+        kubectl(machine, &arguments).await?; // S9: kubectl scale deployments
         watch.say(&format!(
             "  stopped {} component(s): {}",
             running.len(),
@@ -592,7 +592,7 @@ pub async fn stop_these(
     let selector = release.selector();
     wait_for(pace, "every component's pods to stop", || async {
         let held = kubectl(
-            machine,
+            machine, // S9: kubectl get pods
             &["get", "pods", "-n", ns, "-l", &selector, "-o", "json"],
         )
         .await
@@ -706,7 +706,7 @@ pub async fn cronjobs_now(
 ) -> Result<Vec<(String, bool)>, String> {
     let offline = format!("{set}-offline");
     let listed = json(
-        machine,
+        machine, // S9: kubectl get cronjobs
         &[
             "get",
             "cronjobs",
@@ -750,7 +750,7 @@ async fn suspend(
 ) -> Result<(), String> {
     let patch = format!("{{\"spec\":{{\"suspend\":{suspended}}}}}");
     kubectl(
-        machine,
+        machine, // S9: kubectl patch cronjobs
         &[
             "patch",
             "cronjob",
@@ -878,7 +878,7 @@ pub async fn record_stop(
 /// A Job made from the offline CronJob that is still running, by name.
 pub async fn act_running(machine: &dyn Machine, release: &Release) -> Option<String> {
     let listed = json(
-        machine,
+        machine, // S9: kubectl get jobs
         &[
             "get",
             "jobs",
@@ -910,7 +910,7 @@ pub async fn record_stopped(
 ) -> Result<(), String> {
     let value = format!("{STOPPED}={}", stopped.to_json());
     kubectl(
-        machine,
+        machine, // S9: kubectl annotate statefulsets
         &[
             "annotate",
             "statefulset",
@@ -937,7 +937,7 @@ pub async fn recorded_stopped(
         STOPPED.replace('.', "\\.")
     );
     let said = kubectl(
-        machine,
+        machine, // S9: kubectl get statefulsets
         &[
             "get",
             "statefulset",
@@ -956,7 +956,7 @@ pub async fn recorded_stopped(
 /// The record removed, once everything has started again.
 pub async fn clear_stopped(machine: &dyn Machine, release: &Release, set: &str) {
     let _ = kubectl(
-        machine,
+        machine, // S9: kubectl annotate statefulsets
         &[
             "annotate",
             "statefulset",
@@ -1033,7 +1033,7 @@ pub async fn stop_database(
 ) -> Result<(), String> {
     let ns = release.namespace.as_str();
     kubectl(
-        machine,
+        machine, // S9: kubectl scale statefulsets
         &["scale", "statefulset", &set.name, "-n", ns, "--replicas=0"],
     )
     .await?;
@@ -1168,7 +1168,7 @@ pub async fn run_act(
         said: failed,
         cause: Vec::new(),
     })?;
-    machine
+    machine // S9: kubectl create
         .run_with_input(
             "kubectl",
             &["create", "-n", ns, "-f", "-"],
@@ -1198,7 +1198,7 @@ pub async fn run_act(
     };
     loop {
         let log = kubectl(
-            machine,
+            machine, // S9: kubectl logs
             &["logs", "-n", ns, &format!("job/{name}"), "--tail=-1"],
         )
         .await
@@ -1211,6 +1211,7 @@ pub async fn run_act(
             watch.say(&format!("  {line}"));
         }
         said = said.max(lines.len());
+        // S9: kubectl get jobs
         let status = json(machine, &["get", "job", &name, "-n", ns, "-o", "json"])
             .await
             .unwrap_or_default();
@@ -1285,6 +1286,7 @@ pub async fn standbys_to_remake(
     if !claims.is_empty() {
         let mut arguments = vec!["delete", "pvc", "-n", ns, "--ignore-not-found"];
         arguments.extend(claims.iter().map(String::as_str));
+        // S9: kubectl delete persistentvolumeclaims
         kubectl(machine, &arguments).await.map_err(|failed| {
             format!("the standbys' volumes could not be deleted, to be made again: {failed}")
         })?;
@@ -1307,6 +1309,7 @@ pub async fn standbys_to_remake(
             .collect();
         let mut arguments = vec!["delete", "configmap", "-n", ns, "--ignore-not-found"];
         arguments.extend(records.iter().map(String::as_str));
+        // S9: kubectl delete configmaps
         kubectl(machine, &arguments).await.map_err(|failed| {
             format!("Patroni's record of the old primary could not be cleared: {failed}")
         })?;
@@ -1341,7 +1344,7 @@ pub async fn start(
     if stopped.database > 0 {
         let count = format!("--replicas={}", stopped.database);
         kubectl(
-            machine,
+            machine, // S9: kubectl scale statefulsets
             &["scale", "statefulset", &set.name, "-n", ns, &count],
         )
         .await?;
@@ -1388,6 +1391,8 @@ pub async fn start(
             .await
             .unwrap_or_default()
         };
+        // S9: kubectl get deployments; kubectl get statefulsets; kubectl get replicasets
+        // S9: kubectl get pods
         let now = progress(
             0,
             &[],
@@ -1433,6 +1438,7 @@ pub async fn started_components(
             &count,
         ];
         arguments.extend(names.iter().copied());
+        // S9: kubectl scale deployments
         kubectl(machine, &arguments).await.map_err(|failed| {
             format!(
                 "the components could not be started again ({failed}): {} stay at none",
@@ -1456,7 +1462,7 @@ pub async fn probed_database(
     release: &Release,
 ) -> Option<serde_json::Value> {
     let listed = kubectl(
-        machine,
+        machine, // S9: kubectl get pods
         &[
             "get",
             "pods",
@@ -1475,6 +1481,7 @@ pub async fn probed_database(
     })?;
     let arguments = crate::probe::exec_arguments(&release.namespace, &pod.name, "conductor");
     let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    // S9: kubectl exec
     let said = match machine.run("kubectl", &arguments).await {
         Ok(said) => said,
         Err(Failure::Said(said)) => said,

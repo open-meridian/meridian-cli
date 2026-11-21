@@ -1,0 +1,64 @@
+# S9: each kind of kubectl and helm call the CLI makes (tool, verb and, for a verb that
+# takes one, the resource, by its plural name), with the reason it is a shell-out and not
+# the deployment's API. Each call names its kind in an `// S9:` comment; `make
+# check-shellouts` fails on a kind called and not listed, or listed and not called. A new
+# kind enters with its reason and a `Baseline-Change:` trailer naming it. Kinds listed
+# here without a reason (2026-11-20) may not grow in number: reasons are added over time.
+# kind	reason
+helm get manifest	the deployment is a Helm release, and Helm keeps its record: a revision's manifest, read before a rollback
+helm get metadata	the deployment is a Helm release, and Helm keeps its record: how it last applied the release, on the server or by a client-side merge
+helm get values	the deployment is a Helm release, and Helm keeps its record: the values it runs with
+helm history	the deployment is a Helm release, and Helm keeps its record: its revisions
+helm install	the deployment is a Helm release, and Helm keeps its record: a restore installs it
+helm list	the deployment is a Helm release, and Helm keeps its record: the releases in a namespace
+helm rollback	the deployment is a Helm release, and Helm keeps its record: a rollback returns to a revision
+helm show chart	the chart's name and version, read from its registry before it is installed
+helm show values	the chart's defaults, read from its registry before it is installed
+helm status	the deployment is a Helm release, and Helm keeps its record: whether it is installed
+helm uninstall	the deployment is a Helm release, and Helm keeps its record: `meridian down` uninstalls it
+helm upgrade	the deployment is a Helm release, and Helm keeps its record: installing and upgrading it
+helm version	doctor and the commands that change a deployment check the installed helm first
+kubectl annotate statefulsets
+kubectl apply
+kubectl auth can-i	this account's rights, checked before a change so that none is left half done
+kubectl cluster-info	doctor and the commands that change a deployment check the cluster answers first
+kubectl config current-context	the cluster a restore acts on, named before it acts
+kubectl create
+kubectl create namespaces	the namespace is made before the release that would answer exists
+kubectl debug
+kubectl delete configmaps
+kubectl delete jobs
+kubectl delete namespaces	`meridian down` deletes the namespace after the release, when asked
+kubectl delete persistentvolumeclaims
+kubectl delete persistentvolumes
+kubectl delete pods
+kubectl delete rolebindings
+kubectl delete secrets
+kubectl exec
+kubectl get --raw
+kubectl get configmaps
+kubectl get cronjobs
+kubectl get deployments
+kubectl get ingressclasses	the cluster's ingress classes, checked before installing
+kubectl get jobs
+kubectl get namespaces	whether the namespace exists, before there is a release to ask
+kubectl get nodes
+kubectl get persistentvolumeclaims
+kubectl get persistentvolumes
+kubectl get pods
+kubectl get replicasets
+kubectl get secrets
+kubectl get services
+kubectl get statefulsets
+kubectl get storageclasses	the cluster's storage classes, checked before installing
+kubectl logs
+kubectl patch cronjobs
+kubectl port-forward	a first-run dashboard has no public address; the way in is a forward this process holds
+kubectl replace
+kubectl rollout restart
+kubectl rollout status
+kubectl scale deployments
+kubectl scale statefulsets
+kubectl set env
+kubectl version	doctor checks the installed kubectl and the cluster's version
+kubectl wait
