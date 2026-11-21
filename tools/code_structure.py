@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The code-structure rules' checks (standing rules adopted 2026-11-20; each
-repository's CONTRIBUTING.md states them in full). One copy, the same byte for
+repository's CLAUDE.md states them). One copy, the same byte for
 byte in every repository that runs it; standard library only.
 
     python3 tools/code_structure.py interims [--write]

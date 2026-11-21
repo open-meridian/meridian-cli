@@ -123,7 +123,7 @@ PY := python3
 ci-mirror-check:
 	@$(PY) tools/ci_mirror_check.py --repo-root .
 
-# The code-structure rules (CONTRIBUTING.md, "Code structure"; adopted
+# The code-structure rules (CLAUDE.md, "Code structure"; adopted
 # 2026-11-20), each red on a planted violation (`make check-structure-selftest`):
 #   S3  generated is generated: check-vendored-template (the scaffolds and
 #       sdk-roles are meridian-python's at SDK_REV) and check-interims (the
