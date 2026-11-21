@@ -246,22 +246,9 @@ async fn launched_credentials_kept(
     from: u64,
     to: u64,
 ) -> Result<(), String> {
-    let (release, namespace) = (asked.release.as_str(), asked.namespace.as_str());
     let mut stated = Vec::new();
     for revision in [to, from] {
-        let manifest = machine
-            .run(
-                "helm",
-                &[
-                    "get",
-                    "manifest",
-                    release,
-                    "--revision",
-                    &revision.to_string(),
-                    "--namespace",
-                    namespace,
-                ],
-            )
+        let manifest = manifest_of(machine, asked, revision)
             .await
             .map_err(|failed| {
                 format!(
@@ -284,20 +271,8 @@ async fn launched_credentials_kept(
         if then.is_empty() && newest.is_empty() {
             continue;
         }
-        let live = machine
-            .run(
-                "kubectl",
-                &[
-                    "get",
-                    "secret",
-                    name,
-                    "-n",
-                    namespace,
-                    "--ignore-not-found",
-                    "-o",
-                    "json",
-                ],
-            )
+        let secret = format!("secret {name}");
+        let live = got(machine, asked, &secret, "--ignore-not-found")
             .await
             .map_err(|failed| {
                 format!(
@@ -417,19 +392,7 @@ async fn writer_groups_kept(machine: &dyn Machine, asked: &Asked, to: u64) -> Re
             said(failed)
         )
     };
-    let manifest = machine
-        .run(
-            "helm",
-            &[
-                "get",
-                "manifest",
-                release,
-                "--revision",
-                &revision,
-                "--namespace",
-                namespace,
-            ],
-        )
+    let manifest = manifest_of(machine, asked, to)
         .await
         .map_err(|failed| unread("manifest", failed))?;
     let documents: Vec<Value> = serde_yaml::Deserializer::from_str(&manifest)
@@ -545,21 +508,46 @@ pub struct Pace {
     pub timeout: Duration,
 }
 
-async fn listed(machine: &dyn Machine, asked: &Asked, what: &str) -> String {
+/// A revision's manifest, as Helm stored it.
+async fn manifest_of(
+    machine: &dyn Machine,
+    asked: &Asked,
+    revision: u64,
+) -> Result<String, Failure> {
     machine
         .run(
-            "kubectl",
+            "helm",
             &[
                 "get",
-                what,
-                "-n",
+                "manifest",
+                &asked.release,
+                "--revision",
+                &revision.to_string(),
+                "--namespace",
                 &asked.namespace,
-                "-l",
-                &asked.selector(),
-                "-o",
-                "json",
             ],
         )
+        .await
+}
+
+/// `kubectl get <what> -n <namespace> <which> -o json`: `what` a kind, or a
+/// kind and a name; `which` a selector or a flag.
+async fn got(
+    machine: &dyn Machine,
+    asked: &Asked,
+    what: &str,
+    which: &str,
+) -> Result<String, Failure> {
+    let mut arguments = vec!["get"];
+    arguments.extend(what.split(' '));
+    arguments.extend(["-n", asked.namespace.as_str()]);
+    arguments.extend(which.split(' '));
+    arguments.extend(["-o", "json"]);
+    machine.run("kubectl", &arguments).await
+}
+
+async fn listed(machine: &dyn Machine, asked: &Asked, what: &str) -> String {
+    got(machine, asked, what, &format!("-l {}", asked.selector()))
         .await
         .unwrap_or_default()
 }
