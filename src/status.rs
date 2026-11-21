@@ -583,7 +583,7 @@ pub fn revisions_from(name: &str, history: &str) -> Vec<Release> {
 
 /// The releases helm lists in a namespace, by name.
 async fn releases_in(cluster: &dyn Cluster, namespace: &str) -> Option<Vec<String>> {
-    let listed = cluster
+    let listed = cluster // S9: helm list
         .helm(&["list", "--namespace", namespace, "--all", "-o", "json"])
         .await
         .ok()?;
@@ -617,7 +617,7 @@ pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, Stri
     let ns = asked.namespace.as_str();
     let selector = selector(&asked.release);
     let workloads = json(
-        cluster,
+        cluster, // S9: kubectl get deployments; kubectl get statefulsets
         &[
             "get",
             "deployments,statefulsets",
@@ -631,7 +631,7 @@ pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, Stri
     )
     .await?;
     let pods = json(
-        cluster,
+        cluster, // S9: kubectl get pods
         &["get", "pods", "-n", ns, "-l", &selector, "-o", "json"],
     )
     .await?;
@@ -652,7 +652,7 @@ pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, Stri
             asked.release
         ));
     }
-    let release = match cluster
+    let release = match cluster // S9: helm history
         .helm(&[
             "history",
             &asked.release,
@@ -702,7 +702,7 @@ async fn memory(
     let mut usage = BTreeMap::new();
     let mut refused = None;
     for node in &nodes {
-        match cluster
+        match cluster // S9: kubectl get --raw
             .kubectl(&[
                 "get",
                 "--raw",
@@ -722,7 +722,7 @@ async fn memory(
     }
     let why = refused.unwrap_or_else(|| "no pod is on a node yet".into());
     match json(
-        cluster,
+        cluster, // S9: kubectl get --raw
         &[
             "get",
             "--raw",
@@ -1042,7 +1042,7 @@ pub async fn logs(
         }
     }
     let workloads = json(
-        cluster,
+        cluster, // S9: kubectl get deployments; kubectl get statefulsets
         &[
             "get",
             "deployments,statefulsets",
@@ -1092,7 +1092,7 @@ pub async fn logs(
     } else {
         // The release's Jobs, by component, the newest run of each.
         let jobs = json(
-            cluster,
+            cluster, // S9: kubectl get jobs
             &[
                 "get",
                 "jobs",
@@ -1163,6 +1163,7 @@ pub async fn logs(
     if let Some(flag) = &since_flag {
         arguments.push(flag);
     }
+    // S9: kubectl logs
     cluster.kubectl(&arguments).await.map_err(|failed| {
         if read.previous && failed.contains("not found") {
             format!(

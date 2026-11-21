@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The code-structure rules' checks (standing rules adopted 2026-11-20; each
-repository's CONTRIBUTING.md states them in full). One copy, the same byte for
+repository's CLAUDE.md states them). One copy, the same byte for
 byte in every repository that runs it; standard library only.
 
     python3 tools/code_structure.py interims [--write]
@@ -16,7 +16,7 @@ Each reads its settings from tools/code-structure.toml:
     roadmap_version   the version this repository is building (S4), e.g. "v31a"
     interims_register the register S4 writes from the markers
     pins_allowlist    S5's listed exceptions, each with its INTERIM marker
-    shellouts         S9: the source globs counted, and the baseline file
+    shellouts         S9: the source globs read, and the kinds file
     size_baseline     S2: the files over the limit today, with their lines
     size_exempt       S2: generated and vendored globs
     licence_scan      S10: the globs that ship under Apache-2.0
@@ -36,8 +36,13 @@ S5  A dependency on another repository is an immutable reference: a released
     pyproject.toml (git+ URLs at a full SHA) and .github/workflows (`uses:`
     at a version or a full SHA; a checkout of another repository at a full
     SHA or a version). An exception is listed with its INTERIM marker.
-S9  The CLI's shelled-out kubectl and helm calls, counted in its source; the
-    count may not grow, and a lower one lowers the baseline.
+S9  Each kubectl and helm call in the CLI's source names its kind (tool, verb
+    and, for a verb that takes one, the resource) in an `// S9:` comment,
+    and each kind is listed with its reason. A helper that passes its
+    caller's arguments on is followed to its calls. A kind called and not
+    listed fails, and so does one listed and not called. A new kind needs
+    its reason and a `Baseline-Change:` trailer naming it; the number listed
+    with no reason only goes down.
 S2  A hand-written file over 1,500 lines: a new one, or a listed one grown
     past its baseline, is reported (a warning in v31a; failing from v31b,
     where growth needs a `Size-Exception:` trailer).
@@ -259,29 +264,450 @@ def check_pins(root: Path, cfg: dict) -> list[str]:
 
 
 # ── S9 ──────────────────────────────────────────────────────────────────────
+#
+# Every kubectl or helm call names its kind, tool + verb (+ resource, for a
+# verb that takes one), in an `// S9: kubectl get secret` comment on its lines
+# or above its statement (several kinds separated by `;`), and every kind is
+# listed with its reason in the kinds file. What is a call is read from the
+# code, not trusted to the comments:
+# - a "kubectl" or "helm" string literal given to a call is a call;
+# - a function or closure that hands one of its own string or list
+#   parameters to a call's verb or resource (or as the whole argument list)
+#   is a wrapper; each call of it names its kind instead, found by name, to a
+#   fixed point. A helper can move a call; it cannot hide its kind;
+# - a tool name outside a call fails: its kind would be out of sight;
+# - each word of a named kind is in a string of that file, of a function its
+#   function calls, or of a wrapper, so a comment cannot name a kind the code
+#   does not have. A kubectl resource is listed by its plural name.
 
-SHELL_OUT = re.compile(r"\"(kubectl|helm)\"")
+TOOL_LITERAL = re.compile(r"^(kubectl|helm)$")
+KIND = re.compile(r"^(kubectl|helm)((?: -{0,2}[a-z0-9][a-z0-9-]*){1,2})$")
+ANNOTATION = re.compile(r"//\s*S9:\s*(.*)")
+WORD = re.compile(r"-{0,2}[a-z0-9][a-z0-9-]*")
+IDENT = re.compile(r"(?<![\w.:])([A-Za-z_]\w*)")
+STRINGLIKE = re.compile(r"\bstr\b|\bString\b|\bVec\b|\[")
+# The verbs that take no resource: the word after one is a name, not part of
+# its kind. Any other verb's next word is its resource.
+NO_RESOURCE = {
+    "kubectl": {"logs", "exec", "cp", "apply", "cluster-info", "version", "debug", "port-forward",
+                "run", "attach", "proxy", "drain", "cordon", "uncordon", "taint"},
+    "helm": {"install", "upgrade", "uninstall", "status", "list", "history", "rollback", "version",
+             "template", "lint", "package", "pull", "push", "test", "env"},
+}
 
 
-def shellout_count(root: Path, cfg: dict) -> int:
+# kubectl's resources, by the plural name a kind is listed under; a short or
+# singular name in the code or a comment stands for it.
+RESOURCES = {"configmaps", "cronjobs", "daemonsets", "deployments", "endpoints", "events",
+             "ingressclasses", "ingresses", "jobs", "leases", "namespaces", "networkpolicies",
+             "nodes", "persistentvolumeclaims", "persistentvolumes", "poddisruptionbudgets", "pods",
+             "replicasets", "rolebindings", "roles", "secrets", "serviceaccounts", "services",
+             "statefulsets", "storageclasses"}
+SHORT = {"cm": "configmaps", "cj": "cronjobs", "ds": "daemonsets", "deploy": "deployments",
+         "ns": "namespaces", "netpol": "networkpolicies", "pvc": "persistentvolumeclaims",
+         "pv": "persistentvolumes", "pdb": "poddisruptionbudgets", "po": "pods", "rs": "replicasets",
+         "sa": "serviceaccounts", "svc": "services", "sts": "statefulsets", "sc": "storageclasses"}
+
+
+def resource(word: str) -> str:
+    """A kubectl resource by its plural name."""
+    for name in (SHORT.get(word, word), word + "s", word + "es", word[:-1] + "ies"):
+        if name in RESOURCES:
+            return name
+    return word
+
+
+def canonical(kind: str) -> str:
+    """A kind with its kubectl resource by its plural name."""
+    words = kind.split()
+    if words[0] == "kubectl" and len(words) == 3:
+        words[2] = resource(words[2])
+    return " ".join(words)
+
+
+def rust_lex(text: str) -> tuple[str, list[tuple[int, int, str]]]:
+    """The text with comments and strings' contents blanked (offsets kept),
+    and each string literal as (start, end, content)."""
+    out, strings, i, n = list(text), [], 0, len(text)
+
+    def blank(a: int, b: int) -> None:
+        for k in range(a, b):
+            if out[k] != "\n":
+                out[k] = " "
+
+    while i < n:
+        c = text[i]
+        word_before = i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_")
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            blank(i, j)
+            i = j
+        elif text.startswith("/*", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if text.startswith("/*", j):
+                    depth, j = depth + 1, j + 2
+                elif text.startswith("*/", j):
+                    depth, j = depth - 1, j + 2
+                else:
+                    j += 1
+            blank(i, j)
+            i = j
+        elif not word_before and (m := re.match(r'b?r(#*)"', text[i:i + 260])):
+            close, start = '"' + m.group(1), i + len(m.group(0))
+            j = text.find(close, start)
+            j = n if j < 0 else j
+            strings.append((i, j + len(close), text[start:j]))
+            blank(start, j)
+            i = j + len(close)
+        elif c == '"' or (c == "b" and not word_before and text.startswith('b"', i)):
+            start = i + (2 if c == "b" else 1)
+            j = start
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            strings.append((i, j + 1, text[start:j]))
+            blank(start, j)
+            i = j + 1
+        elif c == "'" and (m := re.match(r"'(\\.[^']*|[^\\'])'", text[i:i + 12])):
+            blank(i + 1, i + len(m.group(0)) - 1)
+            i += len(m.group(0))
+        else:
+            i += 1
+    return "".join(out), strings
+
+
+def closing(code: str, i: int) -> int:
+    """The index of the bracket that closes the one at i."""
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    depth, j = 0, i
+    while j < len(code):
+        if code[j] in pairs:
+            depth += 1
+        elif code[j] in ")]}":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return len(code) - 1
+
+
+def split_top(code: str, a: int, b: int) -> list[tuple[int, int]]:
+    """code[a:b] split at the commas outside brackets, as spans."""
+    spans, depth, start = [], 0, a
+    for j in range(a, b):
+        if code[j] in "([{":
+            depth += 1
+        elif code[j] in ")]}":
+            depth -= 1
+        elif code[j] == "," and depth == 0:
+            spans.append((start, j))
+            start = j + 1
+    if code[start:b].strip():
+        spans.append((start, b))
+    return spans
+
+
+def test_regions(code: str) -> list[tuple[int, int]]:
+    regions = []
+    for m in re.finditer(r"#\[cfg\(test\)\]", code):
+        j = m.end()
+        while j < len(code) and code[j] not in "{;":
+            j += 1
+        if j < len(code) and code[j] == "{":
+            regions.append((m.start(), closing(code, j)))
+    return regions
+
+
+def parameters(parts: list[str]) -> tuple[list[tuple[str, bool]], bool]:
+    """Each parameter as (name, string-like), self aside, and whether there
+    was a self."""
+    params, method = [], False
+    for part in parts:
+        name, typed, kind = part.partition(":")
+        name = name.strip().replace("mut ", "").lstrip("&").strip()
+        if name.endswith("self"):
+            method = True
+        elif name:
+            params.append((name, bool(STRINGLIKE.search(kind)) or not typed))
+    return params, method
+
+
+def scopes(code: str) -> list[dict]:
+    """Each fn and named closure: name, whether a method, parameters, body."""
+    found = []
+    arrows = code.replace("->", "=>")
+    for m in re.finditer(r"\bfn\s+(\w+)\s*", code):
+        j = m.end()
+        if code[j:j + 1] == "<":
+            depth = 0
+            while j < len(code):
+                depth += {"<": 1, ">": -1}.get(arrows[j], 0)
+                j += 1
+                if depth == 0:
+                    break
+        if code[j:j + 1] != "(":
+            continue
+        end = closing(code, j)
+        params, method = parameters([arrows[a:b] for a, b in split_top(arrows, j + 1, end)])
+        k = end
+        while k < len(code) and code[k] not in "{;":
+            k += 1
+        if k < len(code) and code[k] == "{":
+            line_start = code.rfind("\n", 0, m.start()) + 1
+            public = re.search(r"\bpub\b", code[line_start:m.start()]) is not None
+            found.append({"name": m.group(1), "method": method, "params": params,
+                          "span": (k, closing(code, k)), "within": None if public or method else "module"})
+    for m in re.finditer(r"\blet\s+(?:mut\s+)?(\w+)\s*=\s*(?:move\s+)?\|([^|]*)\|", code):
+        params, _ = parameters(m.group(2).split(","))
+        j, depth = m.end(), 0
+        while j < len(code) and not (code[j] == ";" and depth == 0):
+            depth += 1 if code[j] in "([{" else -1 if code[j] in ")]}" else 0
+            j += 1
+        found.append({"name": m.group(1), "method": False, "params": params, "span": (m.end(), j),
+                      "within": (m.start(), j)})
+    for closure in found:
+        if isinstance(closure["within"], tuple):
+            around = [s for s in found if not isinstance(s["within"], tuple)
+                      and s["span"][0] <= closure["within"][0] <= s["span"][1]]
+            if around:
+                closure["within"] = min((s["span"] for s in around), key=lambda s: s[1] - s[0])
+    return found
+
+
+def kind_names(code: str, strings: dict[int, str], spans: list[tuple[int, int]], tool: str) -> set[str]:
+    """The names that reach a call's kind: a list given in place gives those
+    in its verb's place and, for a verb that takes one, its resource's; any
+    other argument gives all of its own."""
+    names: set[str] = set()
+
+    def idents(a: int, b: int) -> None:
+        names.update(IDENT.findall(code[a:b]))
+        names.update(n for s, c in strings.items() if a <= s < b for n in re.findall(r"\{(\w+)", c))
+
+    for a, b in spans:
+        if not re.match(r"\s*&?\s*(?:vec!\s*)?\[", code[a:b]):
+            idents(a, b)
+            continue
+        open_at = code.index("[", a)
+        places = 2
+        for n, (ea, eb) in enumerate(split_top(code, open_at + 1, closing(code, open_at))):
+            if n >= places:
+                break
+            lead = ea + len(code[ea:eb]) - len(code[ea:eb].lstrip())
+            if lead not in strings:
+                idents(ea, eb)
+            elif strings[lead].startswith("-"):
+                break
+            elif n == 0 and strings[lead] in NO_RESOURCE.get(tool, set()):
+                places = 1
+    return names
+
+
+def shellout_sites(root: Path, cfg: dict) -> tuple[list[dict], list[str], dict, dict]:
+    """Each call that must name its kind, the findings on the way, the
+    wrappers ((name, method): tools and parameter places), and the files."""
     spec = cfg["shellouts"]
-    count = 0
+    files = {}
     for path in tracked(root):
         if matches(path, spec["count"]) and not matches(path, spec.get("skip", [])):
-            count += len(SHELL_OUT.findall(text_of(root, path) or ""))
-    return count
+            text = text_of(root, path) or ""
+            code, strings = rust_lex(text)
+            files[path] = {"text": text, "code": code, "strings": strings, "tests": test_regions(code),
+                           "scopes": scopes(code), "at": {s: c for s, _, c in strings}}
+
+    def in_tests(f: dict, i: int) -> bool:
+        return any(a <= i <= b for a, b in f["tests"])
+
+    def scope_of(f: dict, i: int) -> dict | None:
+        inside = [s for s in f["scopes"] if s["span"][0] <= i <= s["span"][1]]
+        return min(inside, key=lambda s: s["span"][1] - s["span"][0]) if inside else None
+
+    findings: list[str] = []
+    literal_sites = []
+    for path, f in files.items():
+        code = f["code"]
+        for start, end, content in f["strings"]:
+            if not TOOL_LITERAL.match(content) or in_tests(f, start):
+                continue
+            line = code.count("\n", 0, start) + 1
+            j, depth = start - 1, 0
+            while j >= 0 and not (code[j] in "([{;" and depth == 0):
+                depth += 1 if code[j] in ")]}" else -1 if code[j] in "([{" else 0
+                j -= 1
+            if j < 0 or code[j] != "(":
+                findings.append(f"S9: {path}:{line}: \"{content}\" outside a call: give it to the "
+                                "call, so its kind is named where it is made")
+                continue
+            close = closing(code, j)
+            if re.search(r"\bnew\s*$", code[:j]):
+                lists, single, k = [], [], close + 1
+                while m := re.match(r"\s*\.\s*(\w+)\s*\(", code[k:]):
+                    o = k + m.end() - 1
+                    {"args": lists, "arg": single}.get(m.group(1), []).append((o + 1, closing(code, o)))
+                    k = closing(code, o) + 1
+                spans = lists + single[:2]
+            else:
+                spans = [s for s in split_top(code, j + 1, close) if s[0] >= end][:1]
+            last = max([close] + [b for _, b in spans])
+            literal_sites.append({"path": path, "at": start, "line": line, "tools": {content},
+                                  "spans": spans, "wrapper": None, "last": code.count("\n", 0, last) + 1})
+
+    wrappers: dict[tuple[str, bool], dict] = {}
+    while True:
+        sites = list(literal_sites)
+        for path, f in files.items():
+            code = f["code"]
+            for (name, method, within), wrapper in wrappers.items():
+                # A closure is called within its function; a private fn within
+                # its module and the modules under it; the rest anywhere.
+                if within and not (path == within[0] or (len(within) == 2 and path.startswith(within[1]))):
+                    continue
+                for m in re.finditer(rf"\b{name}\b(?=\s*\()", code):
+                    i = m.start()
+                    before = code[max(0, i - 300):i]
+                    dot = re.search(r"\.\s*$", before) is not None
+                    if (in_tests(f, i) or re.search(r"\bfn\s+$", before)
+                            or (within and len(within) == 3 and not within[1] <= i <= within[2])
+                            or (method and not (dot or re.search(r"\bSelf\s*::\s*$", before)))
+                            or (not method and dot)):
+                        continue
+                    o = code.index("(", m.end())
+                    args = split_top(code, o + 1, closing(code, o))
+                    last = code.count("\n", 0, closing(code, o)) + 1
+                    shift = 1 if method and not dot else 0
+                    sites.append({"path": path, "at": i, "line": code.count("\n", 0, i) + 1,
+                                  "tools": wrapper["tools"], "wrapper": name, "last": last,
+                                  "spans": [s for n, s in enumerate(args) if n - shift in wrapper["places"]]})
+        grown, required = False, []
+        for site in sites:
+            f = files[site["path"]]
+            scope = scope_of(f, site["at"])
+            names: set[str] = set()
+            for tool in site["tools"]:
+                names |= kind_names(f["code"], f["at"], site["spans"], tool)
+            places = {n for n, (p, stringlike) in enumerate(scope["params"]) if stringlike and p in names} \
+                if scope else set()
+            if not places:
+                required.append(site)
+                continue
+            if scope["within"] == "module":
+                stem = site["path"].removesuffix(".rs").removesuffix("/mod")
+                within = (site["path"], "" if stem in ("src/main", "src/lib") else stem + "/")
+            else:
+                within = (site["path"], *scope["within"]) if scope["within"] else None
+            known = wrappers.setdefault((scope["name"], scope["method"], within),
+                                        {"tools": set(), "places": set()})
+            if not (site["tools"] <= known["tools"] and places <= known["places"]):
+                known["tools"] |= site["tools"]
+                known["places"] |= places
+                grown = True
+        if not grown:
+            break
+    return required, list(dict.fromkeys(findings)), wrappers, files
+
+
+def annotations_at(text: str, line: int, last: int) -> list[str]:
+    """The kinds named for a call from this line to that: in an `// S9:`
+    comment on its lines, on the lines of its statement above it, or just
+    above that."""
+    lines = text.splitlines()
+    named = [kind.strip() for raw in lines[line:last] if (m := ANNOTATION.search(raw))
+             for kind in m.group(1).split(";") if kind.strip()]
+    k = line - 1
+    while k >= 0:
+        raw = lines[k]
+        if k < line - 1:
+            code = re.sub(r"//.*", "", raw).rstrip()
+            if code and (code.endswith((";", "{", "}")) or ("=>" in code and code.endswith(","))):
+                break
+        if m := ANNOTATION.search(raw):
+            named += [kind.strip() for kind in m.group(1).split(";") if kind.strip()]
+        k -= 1
+    return named
+
+
+def read_kinds(text: str) -> dict[str, str]:
+    """The kinds file: kind, a tab, and its reason (empty where none yet)."""
+    kinds = {}
+    for line in text.splitlines():
+        if line.strip() and not line.startswith("#"):
+            kind, _, reason = line.partition("\t")
+            kinds[kind.strip()] = reason.strip()
+    return kinds
+
+
+def shellout_kinds(root: Path, cfg: dict) -> tuple[dict[str, list[str]], list[str]]:
+    """Each kind named at a call, with its places, and the findings. A kind's
+    words are looked for in the strings of the call's file, of the functions
+    its function calls, and, for a wrapper's call, of the wrappers."""
+    required, findings, wrappers, files = shellout_sites(root, cfg)
+
+    def words_of(f: dict, a: int, b: int) -> set[str]:
+        return {w for start, _, c in f["strings"] if a <= start <= b for w in WORD.findall(c.lower())}
+
+    by_name: dict[str, set[str]] = {}
+    wrapper_words: set[str] = set()
+    for f in files.values():
+        for s in f["scopes"]:
+            found = words_of(f, *s["span"])
+            by_name.setdefault(s["name"], set()).update(found)
+            if any(k[:2] == (s["name"], s["method"]) for k in wrappers):
+                wrapper_words |= found
+    used: dict[str, list[str]] = {}
+    for site in required:
+        f = files[site["path"]]
+        place = f"{site['path']}:{site['line']}"
+        named = annotations_at(f["text"], site["line"], site["last"])
+        what = f"this call of `{site['wrapper']}`" if site["wrapper"] else "this call"
+        if not named:
+            findings.append(f"S9: {place}: {what} names no kind; add `// S9: <tool> <verb> [<resource>]` "
+                            "on its lines or above its statement")
+            continue
+        words = words_of(f, 0, len(f["code"]))
+        inside = [s for s in f["scopes"] if s["span"][0] <= site["at"] <= s["span"][1]]
+        for s in inside:
+            for called in set(re.findall(r"\b(\w+)\s*\(", f["code"][s["span"][0]:s["span"][1]])):
+                words |= by_name.get(called, set())
+        if site["wrapper"]:
+            words |= wrapper_words
+        words |= {resource(w) for w in words}
+        for kind in named:
+            m = KIND.match(kind)
+            if not m:
+                findings.append(f"S9: {place}: `{kind}` is not a kind: <kubectl|helm> <verb> [<resource>]")
+            elif m.group(1) not in site["tools"]:
+                findings.append(f"S9: {place}: `{kind}` names {m.group(1)}; {what} runs "
+                                f"{' or '.join(sorted(site['tools']))}")
+            elif canonical(kind) != kind:
+                findings.append(f"S9: {place}: write `{kind}` as `{canonical(kind)}`, by the "
+                                "resource's plural name")
+            elif missing := [w for w in m.group(2).split() if resource(w) not in words]:
+                findings.append(f"S9: {place}: `{kind}`: {', '.join(missing)} is in no string of "
+                                f"{site['path']} or of what it calls")
+            else:
+                used.setdefault(kind, []).append(place)
+    return used, findings
 
 
 def check_shellouts(root: Path, cfg: dict) -> list[str]:
-    baseline = int((root / cfg["shellouts"]["baseline"]).read_text().split()[0])
-    count = shellout_count(root, cfg)
-    if count > baseline:
-        return [f"S9: {count} shelled-out kubectl and helm calls, above the baseline of {baseline} "
-                f"({cfg['shellouts']['baseline']}): call the deployment's API instead"]
-    if count < baseline:
-        return [f"S9: {count} shelled-out kubectl and helm calls, below the baseline of {baseline}: "
-                f"lower {cfg['shellouts']['baseline']} to {count}, with a `{TRAILER}` trailer"]
-    return []
+    listed_at = cfg["shellouts"]["kinds"]
+    listed = read_kinds(text_of(root, listed_at) or "")
+    used, findings = shellout_kinds(root, cfg)
+    for kind, places in sorted(used.items()):
+        if kind not in listed:
+            findings.append(f"S9: {places[0]}: `{kind}` is not in {listed_at}: call the deployment's API "
+                            f"instead, or list it with its reason and a `{TRAILER}` trailer naming it")
+    for kind in listed:
+        if not KIND.match(kind):
+            findings.append(f"S9: {listed_at}: `{kind}` is not a kind: <kubectl|helm> <verb> [<resource>]")
+        elif canonical(kind) != kind:
+            findings.append(f"S9: {listed_at}: `{kind}` is listed as `{canonical(kind)}`, by the "
+                            "resource's plural name")
+        elif kind not in used:
+            findings.append(f"S9: {listed_at}: `{kind}` is no longer called: remove it, with a "
+                            f"`{TRAILER}` trailer")
+    return findings
 
 
 # ── S2 ──────────────────────────────────────────────────────────────────────
@@ -359,19 +785,31 @@ def check_baselines(root: Path, cfg: dict, base: str) -> list[str]:
         if cfg.get(key):
             files.append(cfg[key])
     if cfg.get("shellouts"):
-        files.append(cfg["shellouts"]["baseline"])
+        files.append(cfg["shellouts"]["kinds"])
     if not git(root, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"):
         return [f"the base {base} is not a commit here, so what changed cannot be read: fetch it"]
     changed = set(git(root, "diff", "--name-only", f"{base}...HEAD").split())
     watched = [f for f in files if f in changed and f != cfg["interims_register"]]
     failures = []
-    if watched and TRAILER not in git(root, "log", "--format=%B", f"{base}..HEAD"):
+    trailers = [line for line in git(root, "log", "--format=%B", f"{base}..HEAD").splitlines()
+                if line.startswith(TRAILER)]
+    if watched and not trailers:
         failures.append(f"{', '.join(watched)} changed with no `{TRAILER}` trailer saying why")
-    if cfg.get("shellouts") and cfg["shellouts"]["baseline"] in watched:
-        before = git(root, "show", f"{base}:{cfg['shellouts']['baseline']}").split()
-        after = (root / cfg["shellouts"]["baseline"]).read_text().split()
-        if before and after and int(after[0]) > int(before[0]):
-            failures.append(f"S9: the baseline rose from {before[0]} to {after[0]}; it only goes down")
+    kinds_at = cfg.get("shellouts", {}).get("kinds")
+    was = git(root, "show", f"{base}:{kinds_at}") if kinds_at in watched else ""
+    if was:
+        before, after = read_kinds(was), read_kinds(text_of(root, kinds_at) or "")
+        for kind in sorted(set(after) - set(before)):
+            if not after[kind]:
+                failures.append(f"S9: {kinds_at}: `{kind}` is new and gives no reason; a new kind "
+                                "enters with its reason")
+            if not any(kind in line for line in trailers):
+                failures.append(f"S9: `{kind}` is new in {kinds_at} with no `{TRAILER}` trailer line "
+                                "naming it")
+        unexplained = [sum(1 for reason in kinds.values() if not reason) for kinds in (before, after)]
+        if unexplained[1] > unexplained[0]:
+            failures.append(f"S9: {kinds_at} lists {unexplained[1]} kinds with no reason, up from "
+                            f"{unexplained[0]}; that number only goes down")
     # A baseline new on this branch starts at today's figures: nothing to rise from.
     was = git(root, "show", f"{base}:{cfg['size_baseline']}")
     if cfg["size_baseline"] in watched and was:
@@ -380,8 +818,6 @@ def check_baselines(root: Path, cfg: dict, base: str) -> list[str]:
         for path, lines in read_size_baseline(root, cfg).items():
             if lines > old.get(path, 0):
                 failures.append(f"S2: {cfg['size_baseline']} raises {path} to {lines}; it only goes down")
-    trailers = [line for line in git(root, "log", "--format=%B", f"{base}..HEAD").splitlines()
-                if line.startswith(TRAILER)]
     for place, was, now in moved_interims(root, cfg, base):
         if not any(f"INTERIM({was})" in line for line in trailers):
             failures.append(f"S4: {place}: INTERIM({was}) moved to INTERIM({now}) with no "
@@ -410,16 +846,20 @@ def self_test() -> int:
                "pins_allowlist": "tools/pins.txt", "notice": True,
                "licence_scan": ["src/*"], "size_exempt": ["gen/*"],
                "shellouts": {"count": ["src/*.rs"], "skip": ["src/*tests.rs"],
-                             "baseline": "tools/shellouts.txt"}}
+                             "kinds": "tools/kinds.tsv"}}
 
         def write(path: str, text: str) -> None:
             (root / path).parent.mkdir(parents=True, exist_ok=True)
             (root / path).write_text(text, encoding="utf-8")
             subprocess.run(["git", "-C", str(root), "add", path], check=True)
 
-        write("src/a.rs", 'run("kubectl", &[]);\n// INTERIM(v33): the conductor\'s API, then gone\n')
-        write("src/a_tests.rs", 'run("helm", &[]);\n')
-        write("tools/shellouts.txt", "1\n")
+        a_rs = ('fn pods(m: &M, ns: &str) {{\n    // S9: kubectl get pods\n'
+                '    m.run("kubectl", &["get", "pods", "-n", ns]);\n}}\n'
+                '// INTERIM({}): the conductor\'s API, then gone\n'
+                '#[cfg(test)]\nmod tests {{\n    fn t(m: &M) {{ m.run("helm", &["list"]); }}\n}}\n')
+        write("src/a.rs", a_rs.format("v33"))
+        write("src/a_tests.rs", 'run("helm", &["list"]);\n')
+        write("tools/kinds.tsv", "# kind\treason\nkubectl get pods\tthe pods' state\n")
         write("tools/size.tsv", "# path\tlines\nsrc/big.py\t1600\n")
         write("src/big.py", "x\n" * 1600)
         write("tools/pins.txt", "")
@@ -431,7 +871,7 @@ def self_test() -> int:
         subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
 
         expect("S4 holds on a later marker", check_interims(root, cfg, False) == [])
-        expect("S9 holds at its baseline, tests not counted", check_shellouts(root, cfg) == [])
+        expect("S9 holds on a named, listed kind; tests not counted", check_shellouts(root, cfg) == [])
         expect("S5 holds on a SHA and a version", check_pins(root, cfg) == [])
         expect("S2 is quiet at its baseline", check_size(root, cfg) == [])
         expect("S10 holds", check_licences(root, cfg) == [])
@@ -444,13 +884,47 @@ def self_test() -> int:
         (root / "src/b.rs").unlink()
         subprocess.run(["git", "-C", str(root), "rm", "-q", "--cached", "src/b.rs"], check=True)
 
-        write("src/c.rs", 'run("helm", &["list"]);\n')
-        expect("S9: one more call fails", any("above the baseline" in f for f in check_shellouts(root, cfg)))
+        def s9(name: str, text: str, wanted: str) -> None:
+            write("src/c.rs", text)
+            expect(f"S9: {name}", any(wanted in f for f in check_shellouts(root, cfg)))
+            write("src/c.rs", "")
+
+        s9("a call that names no kind fails", 'fn c(m: &M) { m.run("helm", &["list"]); }\n',
+           "src/c.rs:1: this call names no kind")
+        s9("a kind not listed fails", 'fn c(m: &M) {\n    // S9: helm list\n    m.run("helm", &["list"]);\n}\n',
+           "`helm list` is not in tools/kinds.tsv")
+        s9("a kind the code does not have fails",
+           'fn c(m: &M) {\n    // S9: kubectl get pods\n    m.run("kubectl", &["get", "secrets"]);\n}\n',
+           "`kubectl get pods`: pods is in no string")
+        s9("a kind named by its singular fails",
+           'fn c(m: &M) {\n    // S9: kubectl get pod\n    m.run("kubectl", &["get", "pod"]);\n}\n',
+           "write `kubectl get pod` as `kubectl get pods`")
+        s9("a helper's call names its kind",
+           'fn kube(m: &M, args: &[&str]) -> S { m.run("kubectl", args) }\n'
+           'fn c(m: &M) { kube(m, &["get", "secrets"]); }\n', "src/c.rs:2: this call of `kube` names no kind")
+        s9("a helper's helper's call names its kind",
+           'fn kube(m: &M, args: &[&str]) -> S { m.run("kubectl", args) }\n'
+           'fn again(m: &M, args: &[&str]) -> S { kube(m, args) }\n'
+           'fn c(m: &M) { again(m, &["get", "secrets"]); }\n', "src/c.rs:3: this call of `again`")
+        s9("a helper given the resource names it at its call",
+           'fn listed(m: &M, what: &str) -> S { m.run("kubectl", &["get", what, "-o", "json"]) }\n'
+           'fn c(m: &M) { listed(m, "secrets"); }\n', "src/c.rs:2: this call of `listed`")
+        s9("a closure's call names its kind",
+           'fn c(m: &M) {\n    // S9: kubectl get pods\n    let k = |args: &[&str]| m.run("kubectl", args);\n'
+           '    k(&["get", "secrets"]);\n}\n', "src/c.rs:4: this call of `k`")
+        s9("a tool's name outside a call fails", 'const K: &str = "kubectl";\n', "outside a call")
+        write("src/c.rs", 'fn listed(m: &M, what: &str) -> S { m.run("kubectl", &["get", what, "-o", "json"]) }\n'
+                          'fn c(m: &M) {\n    // S9: kubectl get pods\n    listed(m, "pods");\n}\n')
+        expect("S9: a helper's call that names its kind holds", check_shellouts(root, cfg) == [])
         write("src/c.rs", "")
         write("src/a.rs", "// INTERIM(v33): the conductor's API, then gone\n")
-        expect("S9: one fewer asks to lower the baseline",
-               any("below the baseline" in f for f in check_shellouts(root, cfg)))
-        write("src/a.rs", 'run("kubectl", &[]);\n// INTERIM(v33): the conductor\'s API, then gone\n')
+        expect("S9: a kind no longer called fails",
+               any("`kubectl get pods` is no longer called" in f for f in check_shellouts(root, cfg)))
+        write("src/a.rs", a_rs.format("v33"))
+        write("tools/kinds.tsv", "kubectl get pod\tthe pods' state\n")
+        expect("S9: a kind listed by its singular fails",
+               any("listed as `kubectl get pods`" in f for f in check_shellouts(root, cfg)))
+        write("tools/kinds.tsv", "# kind\treason\nkubectl get pods\tthe pods' state\n")
 
         write("Cargo.toml", '[dependencies]\nc = { git = "https://x/c", branch = "main" }\n'
                             'd = { path = "../d" }\n')
@@ -490,7 +964,7 @@ def self_test() -> int:
         expect("S10: a missing NOTICE fails", any("NOTICE" in f for f in check_licences(root, cfg)))
 
         env = ["-c", "user.name=t", "-c", "user.email=t@t"]
-        write("tools/shellouts.txt", "1\n")
+        write("tools/kinds.tsv", "kubectl get pods\tthe pods' state\nhelm list\t\n")
         subprocess.run(["git", *env, "-C", str(root), "commit", "-qm", "base"], check=True)
         write("tools/more.tsv", "")
         subprocess.run(["git", *env, "-C", str(root), "commit", "-qm", "empty"], check=True)
@@ -505,20 +979,38 @@ def self_test() -> int:
                         "grow\n\nBaseline-Change: grew"], check=True)
         expect("S2: a baseline entry may not rise, trailer or not",
                any("raises src/big.py to 1800" in f for f in check_baselines(root, cfg_new, "HEAD~1")))
-        write("tools/shellouts.txt", "2\n")
-        subprocess.run(["git", *env, "-C", str(root), "commit", "-qm", "raise it"], check=True)
+        write("tools/kinds.tsv", "kubectl get pods\tthe pods' state\nhelm list\t\nhelm history\twhy\n")
+        subprocess.run(["git", *env, "-C", str(root), "commit", "-qm", "add a kind"], check=True)
         found = check_baselines(root, cfg, "HEAD~1")
         expect("a baseline changed with no trailer fails", any("no `Baseline-Change:`" in f for f in found))
-        expect("a ratchet's baseline may not rise", any("only goes down" in f for f in found))
-        write("tools/shellouts.txt", "0\n")
-        subprocess.run(["git", *env, "-C", str(root), "commit", "-qm",
-                        "lower it\n\nBaseline-Change: two calls moved to the API"], check=True)
-        expect("a lowered baseline with its trailer holds", check_baselines(root, cfg, "HEAD~1") == [])
+        expect("S9: a new kind without a trailer naming it fails",
+               any("`helm history` is new in tools/kinds.tsv with no" in f for f in found))
+        subprocess.run(["git", *env, "-C", str(root), "commit", "-q", "--amend", "-m",
+                        "add a kind\n\nBaseline-Change: helm history, the release's revisions"], check=True)
+        expect("S9: a new kind with its reason and a trailer naming it holds",
+               check_baselines(root, cfg, "HEAD~1") == [])
+        write("tools/kinds.tsv", "kubectl get pods\tthe pods' state\nhelm list\t\nhelm history\t\n")
+        subprocess.run(["git", *env, "-C", str(root), "commit", "-q", "--amend", "-m",
+                        "add a kind\n\nBaseline-Change: helm history"], check=True)
+        found = check_baselines(root, cfg, "HEAD~1")
+        expect("S9: a new kind with no reason fails, trailer or not",
+               any("`helm history` is new and gives no reason" in f for f in found))
+        expect("S9: the number of kinds with no reason may not rise",
+               any("2 kinds with no reason, up from 1" in f for f in found))
+        write("tools/kinds.tsv", "kubectl get pods\t\nhelm list\t\n")
+        subprocess.run(["git", *env, "-C", str(root), "commit", "-q", "--amend", "-m",
+                        "drop a reason\n\nBaseline-Change: kubectl get pods"], check=True)
+        expect("S9: a reason taken away counts against the ratchet",
+               any("2 kinds with no reason, up from 1" in f for f in check_baselines(root, cfg, "HEAD~1")))
+        write("tools/kinds.tsv", "kubectl get pods\tthe pods' state\n")
+        subprocess.run(["git", *env, "-C", str(root), "commit", "-q", "--amend", "-m",
+                        "lower it\n\nBaseline-Change: helm list moved to the API"], check=True)
+        expect("a kind removed, with its trailer, holds", check_baselines(root, cfg, "HEAD~1") == [])
         expect("a base that is not there fails rather than passing unread",
                any("not a commit here" in f for f in check_baselines(root, cfg, "origin/nowhere")))
 
         def move(version: str, message: str) -> None:
-            write("src/a.rs", f'run("kubectl", &[]);\n// INTERIM({version}): the conductor\'s API, then gone\n')
+            write("src/a.rs", a_rs.format(version))
             check_interims(root, cfg, write=True)
             subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
             subprocess.run(["git", *env, "-C", str(root), "commit", "-qm", message], check=True)

@@ -401,7 +401,7 @@ pub async fn held(
     release: &str,
     namespace: &str,
 ) -> Option<String> {
-    let said = machine
+    let said = machine // S9: kubectl get secrets
         .run(
             "kubectl",
             &[
@@ -427,7 +427,7 @@ pub async fn write_secret(
     namespace: &str,
     leaf: &Leaf,
 ) -> Result<(), String> {
-    machine
+    machine // S9: kubectl apply
         .run_with_input(
             "kubectl",
             &[

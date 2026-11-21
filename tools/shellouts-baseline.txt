@@ -1,2 +1,0 @@
-102
-# S9: shelled-out kubectl and helm calls in src/ (not tests) on 2026-11-20. Only goes down.

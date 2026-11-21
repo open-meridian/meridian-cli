@@ -64,11 +64,11 @@ fn said(failed: Failure) -> String {
 
 /// The checks, and the plan where they pass. Nothing here changes anything.
 pub async fn check(machine: &dyn Machine, asked: &Asked) -> Result<Plan, String> {
-    machine
+    machine // S9: helm version
         .run("helm", &["version", "--short"])
         .await
         .map_err(|failed| format!("helm does not run here: {}", said(failed)))?;
-    machine
+    machine // S9: kubectl cluster-info
         .run("kubectl", &["cluster-info"])
         .await
         .map_err(|failed| {
@@ -78,7 +78,7 @@ pub async fn check(machine: &dyn Machine, asked: &Asked) -> Result<Plan, String>
                 said(failed)
             )
         })?;
-    let history = machine
+    let history = machine // S9: helm history
         .run(
             "helm",
             &[
@@ -199,6 +199,7 @@ fn sets(writers: &Writers, store: &str, name: &str) -> bool {
 /// lake's writes in a stream, or the running lake does; the book's where
 /// that revision is ha or the running book keeps a lease.
 async fn writer_groups_kept(machine: &dyn Machine, asked: &Asked, to: u64) -> Result<(), String> {
+    // S9: kubectl get deployments
     let live: Value =
         serde_json::from_str(&listed(machine, asked, "deployments").await).unwrap_or_default();
     let running = writers(live["items"].as_array().map(Vec::as_slice).unwrap_or(&[]));
@@ -215,7 +216,7 @@ async fn writer_groups_kept(machine: &dyn Machine, asked: &Asked, to: u64) -> Re
             said(failed)
         )
     };
-    let manifest = machine
+    let manifest = machine // S9: helm get manifest
         .run(
             "helm",
             &[
@@ -250,7 +251,7 @@ async fn writer_groups_kept(machine: &dyn Machine, asked: &Asked, to: u64) -> Re
         };
         if !kept {
             if ha.is_none() {
-                let values = machine
+                let values = machine // S9: helm get values
                     .run(
                         "helm",
                         &[
@@ -372,7 +373,7 @@ pub async fn apply(
 ) -> Result<String, String> {
     let (release, namespace) = (asked.release.as_str(), asked.namespace.as_str());
     let to = plan.to.revision.to_string();
-    machine
+    machine // S9: helm rollback
         .run(
             "helm",
             &[
@@ -393,7 +394,7 @@ pub async fn apply(
                 said(failed)
             )
         })?;
-    let made = machine
+    let made = machine // S9: helm history
         .run(
             "helm",
             &[
@@ -420,6 +421,8 @@ pub async fn apply(
     let deadline = Instant::now() + pace.timeout;
     let mut said_waiting = std::collections::BTreeSet::new();
     loop {
+        // S9: kubectl get jobs; kubectl get deployments; kubectl get statefulsets
+        // S9: kubectl get replicasets; kubectl get pods
         let now = progress(
             plan.to.revision,
             &jobs(&listed(machine, asked, "jobs").await),

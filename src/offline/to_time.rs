@@ -596,7 +596,7 @@ async fn archive_now(machine: &dyn Machine, release: &Release, set: &str, pace: 
         let member = primary.name.clone();
         async move {
             super::kubectl(
-                machine,
+                machine, // S9: kubectl exec
                 &[
                     "exec",
                     "-n",
