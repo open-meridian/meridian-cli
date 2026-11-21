@@ -69,6 +69,11 @@ an older one each says so and changes nothing.
   anything: each covers only a store's first database, and says which databases it would leave
   out. A backup taken where a store ran more than one database is refused at restore the same way.
 
+### Fixed
+
+- `meridian rollback-deployment` refuses a rollback that would put back a launched plugin's old
+  credential or remove a live one, and names the plugins to stop first. (#29)
+
 ## 0.1.60
 
 - `meridian restore --to-time` follows the timeline that held the time. Each restore starts a
