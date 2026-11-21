@@ -1778,22 +1778,71 @@ pub fn launched_instances(workloads: &serde_json::Value) -> Option<Vec<String>> 
     Some(instances)
 }
 
-/// The refusal of an upgrade Helm would merge on the client over a release
-/// it applied on the server at `revision`, while launched plugins hold a
-/// credential (`launched`; None where they could not be listed). The chart
-/// leaves the launched plugins' credentials to the broker once Helm has
-/// applied their Secret on the server, and a client-side merge then takes
-/// out the keys the last manifest stated (review-134-29, F2).
-pub fn client_side_after_server_side(
-    release: &str,
-    revision: u64,
-    launched: Option<&[String]>,
-) -> Finding {
+/// The Secret the broker keeps launched plugins' credentials in, by the end
+/// of its name: `<release>-meridian-runtime-broker-launched`.
+const LAUNCHED_SECRET: &str = "-launched";
+
+/// What is read of a list of Secrets: each one's name and who manages its
+/// fields. Nothing of what a Secret holds is kept.
+#[derive(serde::Deserialize)]
+struct SecretsListed {
+    items: Vec<SecretListed>,
+}
+
+#[derive(serde::Deserialize)]
+struct SecretListed {
+    metadata: SecretMetadata,
+}
+
+#[derive(serde::Deserialize)]
+struct SecretMetadata {
+    name: String,
+    #[serde(default, rename = "managedFields")]
+    managed_fields: Vec<ManagedFields>,
+}
+
+#[derive(serde::Deserialize)]
+struct ManagedFields {
+    #[serde(default)]
+    operation: String,
+    #[serde(default, rename = "fieldsV1")]
+    fields: serde_json::Value,
+}
+
+/// Whether Helm ever applied the launched plugins' Secret on the server,
+/// from the release's Secrets as `kubectl get secrets -o json
+/// --show-managed-fields` lists them: a server-side apply leaves an `Apply`
+/// entry in the Secret's managed fields, and Helm's owns the annotation that
+/// names the release. A client-side merge never leaves one. Anything that is
+/// not that list is an error, never a guess; nothing of the answer is
+/// repeated in it.
+pub fn launched_secret_applied_on_server(secrets: &str) -> Result<bool, String> {
+    let listed: SecretsListed = serde_json::from_str(secrets)
+        .map_err(|_| "`kubectl get secrets` did not answer in its JSON".to_string())?;
+    Ok(listed
+        .items
+        .iter()
+        .filter(|secret| secret.metadata.name.ends_with(LAUNCHED_SECRET))
+        .flat_map(|secret| &secret.metadata.managed_fields)
+        .any(|managed| {
+            managed.operation == "Apply"
+                && !managed.fields["f:metadata"]["f:annotations"]["f:meta.helm.sh/release-name"]
+                    .is_null()
+        }))
+}
+
+/// The refusal of an upgrade Helm would merge on the client over a launched
+/// plugins' Secret it once applied on the server, while launched plugins
+/// hold a credential (`launched`; None where they could not be listed). The
+/// chart leaves the launched plugins' credentials to the broker once Helm
+/// has applied their Secret on the server, and a client-side merge then
+/// takes out the keys the last manifest stated.
+pub fn client_side_after_server_side(release: &str, launched: Option<&[String]>) -> Finding {
     let before = format!(
-        "Helm would merge this upgrade on the client, and it applied {release} on the server at \
-         revision {revision}"
+        "Helm would merge this upgrade on the client, and the Secret that keeps {release}'s \
+         launched plugins' credentials was applied on the server before"
     );
-    let why = "A merge on the client over a release once applied on the server can take the \
+    let why = "A merge on the client over a Secret once applied on the server can take the \
                launched plugins' credentials away under them.";
     let Some(launched) = launched else {
         return Finding::Stops {

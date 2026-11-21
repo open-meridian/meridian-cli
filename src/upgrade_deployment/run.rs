@@ -179,43 +179,57 @@ pub(crate) async fn release(
     installed(&listed, &asked.release)
 }
 
-/// Whether Helm applied the release on the server: at `revision`, or at its
-/// newest where none is named. Asked of Helm 4, which records it.
-async fn applied_on_server(
-    machine: &dyn Machine,
-    asked: &Asked,
-    revision: Option<u64>,
-) -> Result<bool, Failure> {
-    let numbered = revision.map(|revision| revision.to_string());
-    let mut arguments = vec!["get", "metadata", asked.release.as_str()];
-    if let Some(revision) = &numbered {
-        arguments.extend(["--revision", revision.as_str()]);
-    }
-    arguments.extend(["--namespace", asked.namespace.as_str(), "-o", "json"]);
+/// Whether Helm applied the release's newest revision on the server. Asked
+/// of Helm 4, which records it.
+async fn applied_on_server(machine: &dyn Machine, asked: &Asked) -> Result<bool, Failure> {
     // Why helm: only Helm's own record of a revision says how it was
     // applied, which is how Helm 4 applies the next one.
-    let metadata = machine.run("helm", &arguments).await?; // S9: helm get metadata
+    let metadata = machine // S9: helm get metadata
+        .run(
+            "helm",
+            &[
+                "get",
+                "metadata",
+                &asked.release,
+                "--namespace",
+                &asked.namespace,
+                "-o",
+                "json",
+            ],
+        )
+        .await?;
     super::applied_on_server(&metadata).map_err(Failure::Said)
 }
 
-/// The newest revision before `newest` that Helm applied on the server, of
-/// those it still keeps: asked one by one, newest first, to where Helm says
-/// there is no such revision.
-async fn last_applied_on_server(
+/// Whether Helm ever applied on the server the Secret that keeps the
+/// launched plugins' credentials. Why it could not be read otherwise, with
+/// nothing of what the release's Secrets hold.
+async fn launched_secret_applied_on_server(
     machine: &dyn Machine,
     asked: &Asked,
-    newest: u64,
-) -> Result<Option<u64>, (u64, Failure)> {
-    for revision in (1..newest).rev() {
-        match applied_on_server(machine, asked, Some(revision)).await {
-            Ok(true) => return Ok(Some(revision)),
-            Ok(false) => {}
-            // Helm's own words for a revision it no longer keeps.
-            Err(Failure::Said(said)) if said.contains("release: not found") => break,
-            Err(failed) => return Err((revision, failed)),
-        }
-    }
-    Ok(None)
+) -> Result<bool, String> {
+    // Why kubectl: Helm keeps how it applied only the revisions it still
+    // has, and Helm 3 keeps none of it. The Secret's managed fields, which
+    // only the cluster holds, say whether a server-side apply of Helm's
+    // still owns it.
+    let listed = machine // S9: kubectl get secrets
+        .run(
+            "kubectl",
+            &[
+                "get",
+                "secrets",
+                "-n",
+                &asked.namespace,
+                "-l",
+                &asked.selector(),
+                "-o",
+                "json",
+                "--show-managed-fields",
+            ],
+        )
+        .await
+        .map_err(|failed| failed.to_string())?;
+    super::launched_secret_applied_on_server(&listed)
 }
 
 async fn target(machine: &dyn Machine, asked: &Asked) -> Result<Chart, Finding> {
@@ -338,7 +352,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     let helm_4 = helm_version.is_some_and(|(major, _)| major >= 4);
     let mut server_side = false;
     if helm_4 {
-        match applied_on_server(machine, asked, None).await {
+        match applied_on_server(machine, asked).await {
             Ok(applied) => server_side = applied,
             Err(failed) => {
                 findings.push(Finding::Stops {
@@ -452,10 +466,12 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     let running_listed = kubectl_json(machine, asked, WORKLOADS)
         .await
         .unwrap_or_default();
-    // A merge on the client over a release once applied on the server,
-    // while launched plugins hold a credential: refused, naming them. Helm 4
-    // alone is asked; what Helm 3 last did to the release it cannot say.
-    if helm_4 && !server_side {
+    // A merge on the client -- Helm 3's always, Helm 4's where it last
+    // merged so -- over a launched plugins' Secret that Helm once applied on
+    // the server, while launched plugins hold a credential: refused, naming
+    // them. The Secret is asked, not Helm's history: a revision Helm no
+    // longer keeps, or a rollback to one Helm 3 made, hides it there.
+    if helm_version.is_some() && !server_side {
         let launched = serde_json::from_str::<serde_json::Value>(&running_listed)
             .ok()
             .and_then(|listed| super::launched_instances(&listed));
@@ -463,27 +479,26 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
             .as_ref()
             .is_none_or(|launched| !launched.is_empty())
         {
-            match last_applied_on_server(machine, asked, from.revision).await {
-                Ok(None) => {}
-                Ok(Some(revision)) => {
+            match launched_secret_applied_on_server(machine, asked).await {
+                Ok(false) => {}
+                Ok(true) => {
                     findings.push(super::client_side_after_server_side(
                         &asked.release,
-                        revision,
                         launched.as_deref(),
                     ));
                     return refuse(&findings, say);
                 }
-                Err((revision, failed)) => {
+                Err(unread) => {
                     findings.push(Finding::Stops {
                         what: format!(
-                            "how Helm applied {} at revision {revision} could not be read: \
-                             {failed}",
+                            "whether the Secret that keeps {}'s launched plugins' credentials \
+                             was ever applied on the server could not be read: {unread}",
                             asked.release
                         ),
                         fix: "Helm would merge this upgrade on the client, which is refused \
-                              over a release once applied on the server while plugins are \
-                              launched. `helm get metadata --revision` must answer for each \
-                              revision Helm keeps."
+                              over a Secret once applied on the server while plugins are \
+                              launched. `kubectl get secrets` must answer for the release's \
+                              namespace."
                             .into(),
                     });
                     return refuse(&findings, say);
