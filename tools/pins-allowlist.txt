@@ -1,0 +1,2 @@
+# S5 exceptions: the finding text, then " # " and its INTERIM marker. A change carries `Baseline-Change:`.
+uses open-meridian/meridian-core/.github/actions/licence-check@main # INTERIM(v31b): the shared suggestion-licence action is read at core's main in every public repository's copy (licence.yaml, the same everywhere); pinned to a core SHA in all of them in one sweep
