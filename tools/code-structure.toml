@@ -1,0 +1,33 @@
+# The code-structure rules' settings (CONTRIBUTING.md, "Code structure");
+# tools/code_structure.py reads them. A change to a baseline or an allowlist
+# named here carries a `Baseline-Change:` trailer saying why.
+repository = "open-meridian/meridian-cli"
+
+# S4: the version this repository is building. A marker INTERIM(vNN) at or
+# before it fails.
+roadmap_version = "v31a"
+interims_register = "tools/interims.tsv"
+
+# S5: exceptions, each with its INTERIM(vNN) marker.
+pins_allowlist = "tools/pins-allowlist.txt"
+# The scaffolds are meridian-python's, vendored at SDK_REV: their pins are the SDK's.
+pins_skip = ["plugin-template/*", "plugin-templates/*"]
+
+# S2: files over 1,500 lines today, and what is generated or vendored.
+size_baseline = "tools/size-baseline.tsv"
+size_exempt = [
+  "Cargo.lock", "LICENSE", "src/check/*.json",
+  "plugin-template/*", "plugin-templates/*", "sdk-roles/*",
+]
+
+# S10: the scaffolds `plugin new` writes, and the SDK modules they are held
+# to, ship in plugins under Apache-2.0; the CLI itself is AGPL-3.0-or-later.
+licence_scan = ["plugin-template/*", "plugin-templates/*", "sdk-roles/*"]
+
+# S9: the shelled-out kubectl and helm calls in the CLI's own code (not its
+# tests), counted; the count may not grow.
+[shellouts]
+count = ["src/*.rs"]
+skip = ["src/*tests.rs", "src/fake_http.rs"]
+baseline = "tools/shellouts-baseline.txt"
+
