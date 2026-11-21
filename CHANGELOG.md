@@ -74,6 +74,10 @@ an older one each says so and changes nothing.
   again. Before, Helm 4 refused the rollback part-way and left the release at a failed revision,
   which `upgrade-deployment` then refused; Helm 3 put the old credential back under the running
   plugin.
+- `meridian rollback-deployment` refuses the same way where the release's newest revision keeps the
+  credential of a plugin launched after the revision returned to, and that revision keeps none:
+  Helm would take the credential away under the running plugin. Both refusals are checked again
+  after the plan is approved, just before the rollback.
 
 ## 0.1.60
 

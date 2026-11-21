@@ -8,6 +8,8 @@ use crate::doctor::Answered;
 #[derive(Default)]
 struct Stand {
     answers: HashMap<String, Result<String, String>>,
+    /// What a command answers once it has been asked that many times.
+    later: HashMap<String, (usize, Result<String, String>)>,
     asked: Mutex<Vec<String>>,
 }
 
@@ -16,6 +18,16 @@ impl Stand {
         self.answers.insert(
             command.to_string(),
             answer.map(String::from).map_err(String::from),
+        );
+        self
+    }
+
+    /// `answer` from the asking after the first `times`: what changed in
+    /// the cluster meanwhile.
+    fn answering_after(mut self, times: usize, command: &str, answer: Result<&str, &str>) -> Self {
+        self.later.insert(
+            command.to_string(),
+            (times, answer.map(String::from).map_err(String::from)),
         );
         self
     }
@@ -29,8 +41,18 @@ impl Stand {
 impl Machine for Stand {
     async fn run(&self, program: &str, arguments: &[&str]) -> Result<String, Failure> {
         let command = format!("{program} {}", arguments.join(" "));
-        self.asked.lock().unwrap().push(command.clone());
-        match self.answers.get(&command) {
+        let before = {
+            let mut asked = self.asked.lock().unwrap();
+            let before = asked.iter().filter(|c| **c == command).count();
+            asked.push(command.clone());
+            before
+        };
+        let later = self
+            .later
+            .get(&command)
+            .filter(|(times, _)| before >= *times)
+            .map(|(_, answer)| answer);
+        match later.or(self.answers.get(&command)) {
             Some(answer) => answer.clone().map_err(Failure::Said),
             None if program == "kubectl" && arguments[0] == "get" => Ok(r#"{"items": []}"#.into()),
             None => Err(Failure::Said(format!("nothing scripted for `{command}`"))),
@@ -68,6 +90,8 @@ fn stand() -> Stand {
             "helm get manifest meridian --revision 11 --namespace meridian",
             Ok(""),
         )
+        // The newest revision's: what Helm merges a rollback against.
+        .answering(MANIFEST_13, Ok(""))
 }
 
 fn asked(to: Option<u64>) -> Asked {
@@ -193,6 +217,7 @@ async fn it_rolls_back_and_waits_for_the_components() {
 const LIVE: &str =
     "kubectl get deployments -n meridian -l app.kubernetes.io/instance=meridian -o json";
 const MANIFEST_12: &str = "helm get manifest meridian --revision 12 --namespace meridian";
+const MANIFEST_13: &str = "helm get manifest meridian --revision 13 --namespace meridian";
 const VALUES_12: &str = "helm get values meridian --revision 12 --namespace meridian --all -o json";
 
 /// A store's group-0 writer Deployment, as `kubectl get -o json` lists it.
@@ -437,7 +462,8 @@ fn held(data: &[(&str, &str)]) -> String {
 #[tokio::test]
 async fn a_revision_holding_a_credential_made_again_since_is_refused_before_helm_rollback() {
     // tiingo and tradier were stopped and launched again since revision 12;
-    // alpaca's credential is as it was; kalshi was launched after it.
+    // alpaca's credential is as it was; kalshi was launched after revision
+    // 13 was made, so no revision states its credential and Helm leaves it.
     let stand = stand()
         .answering(
             MANIFEST_12,
@@ -511,7 +537,169 @@ async fn a_credential_as_it_was_or_of_a_plugin_stopped_since_rolls_back_as_befor
     let stand = self::stand()
         .answering(MANIFEST_12, Ok(&then))
         .answering(LAUNCHED, Err("Error: forbidden"));
-    assert!(check(&stand, &asked(None)).await.unwrap_err().contains(
-        "Can't read which launched plugins hold a credential now (Error: forbidden), so can't tell"
-    ));
+    let refused = check(&stand, &asked(None)).await.unwrap_err();
+    assert!(
+        refused.contains(
+            "Can't read which launched plugins hold a credential now (Error: forbidden), so \
+             can't tell whether returning to revision 12 would put an old one back"
+        ),
+        "{refused}"
+    );
+    // The newest revision's manifest is read too, and refused the same way.
+    let stand = self::stand()
+        .answering(MANIFEST_12, Ok(&then))
+        .answering(MANIFEST_13, Err("Error: release: not found"));
+    let refused = check(&stand, &asked(None)).await.unwrap_err();
+    assert!(
+        refused.contains(
+            "Can't read revision 13's manifest (Error: release: not found), so can't tell \
+             whether returning to revision 12 would put back a launched plugin's old credential"
+        ),
+        "{refused}"
+    );
+    assert!(!stand.asked().iter().any(|c| c.starts_with("helm rollback")));
+}
+
+#[tokio::test]
+async fn a_plugin_launched_since_the_revision_is_refused_before_helm_rollback() {
+    // kalshi was launched between revision 12 and revision 13: revision 13's
+    // manifest states its credential, revision 12's states none, and the
+    // Secret holds it. Helm takes out what the newest manifest states and
+    // the one it returns to does not. alpaca's is in both, as it was.
+    let alpaca = [
+        ("alpaca.password", "YWxwYWNhLXRoZW4="),
+        ("alpaca.url", "bmF0czovL2FscGFjYS10aGVu"),
+    ];
+    let with_kalshi = [
+        alpaca[0],
+        alpaca[1],
+        ("kalshi.password", "a2Fsc2hpLW5vdw=="),
+        ("kalshi.url", "bmF0czovL2thbHNoaS1ub3c="),
+    ];
+    let stand = stand()
+        .answering(MANIFEST_12, Ok(&manifest_with_credentials(&alpaca)))
+        .answering(MANIFEST_13, Ok(&manifest_with_credentials(&with_kalshi)))
+        .answering(LAUNCHED, Ok(&held(&with_kalshi)));
+    let refused = check(&stand, &asked(None)).await.unwrap_err();
+    assert!(
+        refused.contains(
+            "revision 12 keeps no credential for what was launched after it was made, and \
+             revision 13 does: kalshi. Returning to revision 12 would take the credential away \
+             under a plugin that runs on it. Stop it first, roll back, and launch it again"
+        ),
+        "{refused}"
+    );
+    assert!(
+        refused.ends_with("  meridian plugin stop kalshi"),
+        "{refused}"
+    );
+    for value in ["a2Fsc2hp", "bmF0czovL", "alpaca", "made again"] {
+        assert!(!refused.contains(value), "{value} in: {refused}");
+    }
+    assert!(!stand.asked().iter().any(|c| c.starts_with("helm rollback")));
+
+    // Stopped since: the Secret holds no credential of kalshi's to lose.
+    let stopped = self::stand()
+        .answering(MANIFEST_12, Ok(&manifest_with_credentials(&alpaca)))
+        .answering(MANIFEST_13, Ok(&manifest_with_credentials(&with_kalshi)))
+        .answering(LAUNCHED, Ok(&held(&alpaca)));
+    assert_eq!(check(&stopped, &asked(None)).await.unwrap().to.revision, 12);
+
+    // Revision 12 states no key at all (its chart stated none, or nothing
+    // was launched then): the newest revision's alone is enough to refuse.
+    let none_then = self::stand()
+        .answering(MANIFEST_13, Ok(&manifest_with_credentials(&with_kalshi)))
+        .answering(LAUNCHED, Ok(&held(&with_kalshi)));
+    let refused = check(&none_then, &asked(None)).await.unwrap_err();
+    assert!(
+        refused.contains("revision 13 does: alpaca, kalshi."),
+        "{refused}"
+    );
+    assert!(
+        refused.ends_with("  meridian plugin stop alpaca\n  meridian plugin stop kalshi"),
+        "{refused}"
+    );
+
+    // Both at once, each said, every instance to stop named once.
+    let both = self::stand()
+        .answering(MANIFEST_12, Ok(&manifest_with_credentials(&alpaca)))
+        .answering(MANIFEST_13, Ok(&manifest_with_credentials(&with_kalshi)))
+        .answering(
+            LAUNCHED,
+            Ok(&held(&[
+                ("alpaca.password", "YWxwYWNhLW5vdw=="),
+                ("alpaca.url", "bmF0czovL2FscGFjYS1ub3c="),
+                with_kalshi[2],
+                with_kalshi[3],
+            ])),
+        );
+    let refused = check(&both, &asked(None)).await.unwrap_err();
+    assert!(
+        refused.contains("one has been made again since: alpaca."),
+        "{refused}"
+    );
+    assert!(refused.contains("revision 13 does: kalshi."), "{refused}");
+    assert!(
+        refused.ends_with(
+            "Stop them first, roll back, and launch them again (a stopped plugin has no \
+             credential to lose):\n  meridian plugin stop alpaca\n  meridian plugin stop kalshi"
+        ),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_credential_that_changes_after_the_checks_is_refused_before_helm_rollback() {
+    let then = [
+        ("tiingo.password", "dGlpbmdvLXRoZW4="),
+        ("tiingo.url", "bmF0czovL3RpaW5nby10aGVu"),
+    ];
+    // As it was at the checks; made again while the plan waited for its
+    // approval (the Secret is asked for once by the checks).
+    let stand = stand()
+        .answering(MANIFEST_12, Ok(&manifest_with_credentials(&then)))
+        .answering(LAUNCHED, Ok(&held(&then)))
+        .answering_after(
+            1,
+            LAUNCHED,
+            Ok(&held(&[
+                ("tiingo.password", "dGlpbmdvLW5vdw=="),
+                ("tiingo.url", "bmF0czovL3RpaW5nby1ub3c="),
+            ])),
+        )
+        .answering(
+            "helm rollback meridian 12 --namespace meridian --timeout 10m",
+            Ok("Rollback was a success! Happy Helming!"),
+        );
+    let plan = check(&stand, &asked(None)).await.unwrap();
+    let pace = Pace {
+        poll: Duration::from_millis(1),
+        timeout: Duration::from_secs(5),
+    };
+    let refused = apply(&stand, &asked(None), &plan, &pace, &mut |_: &str| {})
+        .await
+        .unwrap_err();
+    assert!(
+        refused.starts_with("this changed after the first check, and nothing was rolled back:"),
+        "{refused}"
+    );
+    assert!(
+        refused.contains("one has been made again since: tiingo."),
+        "{refused}"
+    );
+    assert!(!stand.asked().iter().any(|c| c.starts_with("helm rollback")));
+
+    // Unchanged since the checks: it rolls back.
+    let stand = self::stand()
+        .answering(MANIFEST_12, Ok(&manifest_with_credentials(&then)))
+        .answering(LAUNCHED, Ok(&held(&then)))
+        .answering(
+            "helm rollback meridian 12 --namespace meridian --timeout 10m",
+            Ok("Rollback was a success! Happy Helming!"),
+        );
+    let plan = check(&stand, &asked(None)).await.unwrap();
+    assert!(apply(&stand, &asked(None), &plan, &pace, &mut |_: &str| {})
+        .await
+        .is_ok());
+    assert_eq!(stand.asked().iter().filter(|c| *c == LAUNCHED).count(), 2);
 }
