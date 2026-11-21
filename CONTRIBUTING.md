@@ -55,7 +55,8 @@ reduction lowers it.
   repository's roadmap version is in `tools/code-structure.toml`; a marker
   for that version or an earlier one fails the build, so the stop-gap is
   removed before the version ships. Moving a marker to a later version
-  needs the product owner's word and a commit trailer saying so.
+  needs the product owner's word and a `Baseline-Change:` trailer naming
+  the marker (`make check-baselines` fails a move without one).
 - **Pins are immutable.** This repository depends on another by an
   immutable reference: a released artefact or a full commit SHA, never a
   branch name or a sibling checkout. `make check-pins` reads `Cargo.toml`

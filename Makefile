@@ -136,7 +136,8 @@ ci-mirror-check:
 #       Apache-2.0, carry no GPL or AGPL text.
 #   S2  check-size: files over 1,500 lines reported, a warning until v31b.
 #   check-baselines: a baseline or allowlist changes only with a
-#       `Baseline-Change:` trailer, and a ratchet only goes down.
+#       `Baseline-Change:` trailer, and a ratchet only goes down; an
+#       INTERIM marker moved to a later version needs that trailer naming it.
 # tools/code_structure.py is the same in every repository that runs it.
 check-structure: check-structure-selftest check-interims check-pins check-licences check-shellouts \
                  check-size check-baselines

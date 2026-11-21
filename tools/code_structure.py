@@ -25,7 +25,11 @@ Each reads its settings from tools/code-structure.toml:
 S4  INTERIM(vNN): reason. A marker is `INTERIM(` then a version (v31a, v32),
     `):` and a reason. A marker whose version is the roadmap version or
     earlier fails: its stop-gap was due. The register is generated from the
-    markers and a stale one fails, as a generated file does (S3).
+    markers and a stale one fails, as a generated file does (S3). Moving a
+    marker to a later version needs the product owner's word and a
+    `Baseline-Change:` trailer naming the marker (`baselines` reads the
+    register at the base: a marker of the same file and reason at a later
+    version now has moved).
 S5  A dependency on another repository is an immutable reference: a released
     version or a full commit SHA, never a branch or a sibling checkout. Read
     in Cargo.toml (git rev, no branch or tag, no path outside the repo),
@@ -137,6 +141,26 @@ def check_interims(root: Path, cfg: dict, write: bool) -> list[str]:
         failures.append(f"S4: {cfg['interims_register']} is not the markers' register; run "
                         "`python3 tools/code_structure.py interims --write`")
     return failures
+
+
+def moved_interims(root: Path, cfg: dict, base: str) -> list[tuple[str, str, str]]:
+    """Each marker now at a later version than the base's register held it,
+    as (place, version then, version now). A marker is the same one when its
+    file and reason are."""
+    then: dict[tuple[str, str], str] = {}
+    for line in git(root, "show", f"{base}:{cfg['interims_register']}").splitlines():
+        parts = line.split("\t")
+        if line.startswith("#") or len(parts) != 3:
+            continue
+        version, place, reason = parts
+        then[(place.rsplit(":", 1)[0], reason)] = version
+    found, _ = markers(root, tracked(root), [cfg["interims_register"], "tools/code_structure.py"])
+    moved = []
+    for version, place, reason in found:
+        was = then.get((place.rsplit(":", 1)[0], reason))
+        if was and version_key(version) > version_key(was):
+            moved.append((place, was, version))
+    return moved
 
 
 # ── S5 ──────────────────────────────────────────────────────────────────────
@@ -356,6 +380,13 @@ def check_baselines(root: Path, cfg: dict, base: str) -> list[str]:
         for path, lines in read_size_baseline(root, cfg).items():
             if lines > old.get(path, 0):
                 failures.append(f"S2: {cfg['size_baseline']} raises {path} to {lines}; it only goes down")
+    named = [line for line in git(root, "log", "--format=%B", f"{base}..HEAD").splitlines()
+             if line.startswith(TRAILER) and "INTERIM" in line]
+    if not named:
+        for place, was, now in moved_interims(root, cfg, base):
+            failures.append(f"S4: {place}: INTERIM({was}) moved to INTERIM({now}) with no "
+                            f"`{TRAILER}` trailer naming the INTERIM marker; moving a marker's "
+                            "version needs the product owner's word and a trailer saying so")
     return failures
 
 
@@ -485,6 +516,26 @@ def self_test() -> int:
         expect("a lowered baseline with its trailer holds", check_baselines(root, cfg, "HEAD~1") == [])
         expect("a base that is not there fails rather than passing unread",
                any("not a commit here" in f for f in check_baselines(root, cfg, "origin/nowhere")))
+
+        def move(version: str, message: str) -> None:
+            write("src/a.rs", f'run("kubectl", &[]);\n// INTERIM({version}): the conductor\'s API, then gone\n')
+            check_interims(root, cfg, write=True)
+            subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+            subprocess.run(["git", *env, "-C", str(root), "commit", "-qm", message], check=True)
+
+        move("v34", "later")
+        expect("S4: a marker moved to a later version with no trailer fails",
+               any("INTERIM(v33) moved to INTERIM(v34)" in f for f in check_baselines(root, cfg, "HEAD~1")))
+        subprocess.run(["git", *env, "-C", str(root), "commit", "-q", "--amend", "-m",
+                        "later\n\nBaseline-Change: the size baseline, lowered"], check=True)
+        expect("S4: a trailer that names no INTERIM marker does not cover a move",
+               any("moved to INTERIM(v34)" in f for f in check_baselines(root, cfg, "HEAD~1")))
+        subprocess.run(["git", *env, "-C", str(root), "commit", "-q", "--amend", "-m",
+                        "later\n\nBaseline-Change: INTERIM(v33) to v34, on the product owner's word"],
+                       check=True)
+        expect("S4: a marker moved with its trailer holds", check_baselines(root, cfg, "HEAD~1") == [])
+        move("v32", "sooner")
+        expect("S4: a marker brought sooner needs no trailer", check_baselines(root, cfg, "HEAD~1") == [])
 
     for name in failed:
         print(f"FAIL  {name}", file=sys.stderr)

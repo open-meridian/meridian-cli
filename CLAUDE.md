@@ -16,7 +16,8 @@ the pre-push gate and in CI and is red on a planted violation
 - **S4 interims name their end:** every stop-gap carries `INTERIM(vNN): reason`;
   `make check-interims` fails on one due at `roadmap_version`
   (tools/code-structure.toml). Moving a marker's version needs the product owner's
-  word and a trailer.
+  word and a `Baseline-Change:` trailer naming the marker; `make check-baselines`
+  fails a move without one.
 - **S5 pins are immutable:** `make check-pins`. Another repository by a release or
   a full SHA, never a branch or a sibling checkout; an exception goes in
   tools/pins-allowlist.txt with its marker.
