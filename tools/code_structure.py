@@ -380,12 +380,12 @@ def check_baselines(root: Path, cfg: dict, base: str) -> list[str]:
         for path, lines in read_size_baseline(root, cfg).items():
             if lines > old.get(path, 0):
                 failures.append(f"S2: {cfg['size_baseline']} raises {path} to {lines}; it only goes down")
-    named = [line for line in git(root, "log", "--format=%B", f"{base}..HEAD").splitlines()
-             if line.startswith(TRAILER) and "INTERIM" in line]
-    if not named:
-        for place, was, now in moved_interims(root, cfg, base):
+    trailers = [line for line in git(root, "log", "--format=%B", f"{base}..HEAD").splitlines()
+                if line.startswith(TRAILER)]
+    for place, was, now in moved_interims(root, cfg, base):
+        if not any(f"INTERIM({was})" in line for line in trailers):
             failures.append(f"S4: {place}: INTERIM({was}) moved to INTERIM({now}) with no "
-                            f"`{TRAILER}` trailer naming the INTERIM marker; moving a marker's "
+                            f"`{TRAILER}` trailer line naming INTERIM({was}); moving a marker's "
                             "version needs the product owner's word and a trailer saying so")
     return failures
 
@@ -529,6 +529,11 @@ def self_test() -> int:
         subprocess.run(["git", *env, "-C", str(root), "commit", "-q", "--amend", "-m",
                         "later\n\nBaseline-Change: the size baseline, lowered"], check=True)
         expect("S4: a trailer that names no INTERIM marker does not cover a move",
+               any("moved to INTERIM(v34)" in f for f in check_baselines(root, cfg, "HEAD~1")))
+        subprocess.run(["git", *env, "-C", str(root), "commit", "-q", "--amend", "-m",
+                        "later\n\nBaseline-Change: INTERIM(v40) to v41, on the product owner's word"],
+                       check=True)
+        expect("S4: a trailer naming another marker does not cover a move",
                any("moved to INTERIM(v34)" in f for f in check_baselines(root, cfg, "HEAD~1")))
         subprocess.run(["git", *env, "-C", str(root), "commit", "-q", "--amend", "-m",
                         "later\n\nBaseline-Change: INTERIM(v33) to v34, on the product owner's word"],
