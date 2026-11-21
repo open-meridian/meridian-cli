@@ -47,7 +47,7 @@ kubectl get persistentvolumeclaims
 kubectl get persistentvolumes
 kubectl get pods
 kubectl get replicasets
-kubectl get secrets
+kubectl get secrets	what only the cluster holds of a Secret, checked before a change: that it is there, its certificate, who manages its fields, a credential compared and never said
 kubectl get services
 kubectl get statefulsets
 kubectl get storageclasses	the cluster's storage classes, checked before installing

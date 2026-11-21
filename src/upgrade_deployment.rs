@@ -1782,25 +1782,7 @@ pub fn launched_instances(workloads: &serde_json::Value) -> Option<Vec<String>> 
 /// of its name: `<release>-meridian-runtime-broker-launched`.
 const LAUNCHED_SECRET: &str = "-launched";
 
-/// What is read of a list of Secrets: each one's name and who manages its
-/// fields. Nothing of what a Secret holds is kept.
-#[derive(serde::Deserialize)]
-struct SecretsListed {
-    items: Vec<SecretListed>,
-}
-
-#[derive(serde::Deserialize)]
-struct SecretListed {
-    metadata: SecretMetadata,
-}
-
-#[derive(serde::Deserialize)]
-struct SecretMetadata {
-    name: String,
-    #[serde(default, rename = "managedFields")]
-    managed_fields: Vec<ManagedFields>,
-}
-
+/// One manager's entry in a Secret's managed fields.
 #[derive(serde::Deserialize)]
 struct ManagedFields {
     #[serde(default)]
@@ -1810,25 +1792,29 @@ struct ManagedFields {
 }
 
 /// Whether Helm ever applied the launched plugins' Secret on the server,
-/// from the release's Secrets as `kubectl get secrets -o json
-/// --show-managed-fields` lists them: a server-side apply leaves an `Apply`
-/// entry in the Secret's managed fields, and Helm's owns the annotation that
-/// names the release. A client-side merge never leaves one. Anything that is
-/// not that list is an error, never a guess; nothing of the answer is
-/// repeated in it.
+/// from the release's Secrets as kubectl lists them for this: one line
+/// each, its name, a tab, and its managed fields as JSON. A server-side
+/// apply leaves an `Apply` entry there, and Helm's owns the annotation that
+/// names the release; a client-side merge never leaves one. Nothing a Secret
+/// holds is asked for. Anything that is not that list is an error, never a
+/// guess; nothing of the answer is repeated in it.
 pub fn launched_secret_applied_on_server(secrets: &str) -> Result<bool, String> {
-    let listed: SecretsListed = serde_json::from_str(secrets)
-        .map_err(|_| "`kubectl get secrets` did not answer in its JSON".to_string())?;
-    Ok(listed
-        .items
-        .iter()
-        .filter(|secret| secret.metadata.name.ends_with(LAUNCHED_SECRET))
-        .flat_map(|secret| &secret.metadata.managed_fields)
-        .any(|managed| {
-            managed.operation == "Apply"
-                && !managed.fields["f:metadata"]["f:annotations"]["f:meta.helm.sh/release-name"]
-                    .is_null()
-        }))
+    let unread = || "`kubectl get secrets` did not answer as it was asked to".to_string();
+    let mut applied = false;
+    for line in secrets.lines().filter(|line| !line.trim().is_empty()) {
+        let (name, managed) = line.split_once('\t').ok_or_else(unread)?;
+        let managed: Vec<ManagedFields> = match managed.trim() {
+            "" => Vec::new(),
+            managed => serde_json::from_str(managed).map_err(|_| unread())?,
+        };
+        applied |= name.ends_with(LAUNCHED_SECRET)
+            && managed.iter().any(|managed| {
+                managed.operation == "Apply"
+                    && !managed.fields["f:metadata"]["f:annotations"]["f:meta.helm.sh/release-name"]
+                        .is_null()
+            });
+    }
+    Ok(applied)
 }
 
 /// The refusal of an upgrade Helm would merge on the client over a launched
