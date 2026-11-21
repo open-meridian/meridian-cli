@@ -179,6 +179,7 @@ pub async fn read(
             .find(|item| item["kind"] == "StatefulSet" && item["metadata"]["name"] == set.name)
             .and_then(stopped_on);
         let members = members(pods, &set.name);
+        // S9: kubectl get nodes
         let ready_nodes = match cluster.kubectl(&["get", "nodes", "-o", "json"]).await {
             Ok(said) => nodes_ready(&serde_json::from_str(&said).unwrap_or_default()),
             Err(_) => BTreeMap::new(),
@@ -232,7 +233,7 @@ pub async fn read(
         }
         let arguments = crate::probe::exec_arguments(ns, name, container);
         let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-        let said = cluster.kubectl_printed(&arguments).await;
+        let said = cluster.kubectl_printed(&arguments).await; // S9: kubectl exec
         let probe = said.as_deref().ok().and_then(crate::probe::first_json);
         found.probes.push(match probe {
             Some(probe) => Probed {
@@ -263,7 +264,7 @@ pub async fn read(
         "app.kubernetes.io/instance={},meridian.dev/component=database-scrub",
         asked.release
     );
-    if let Ok(listed) = cluster
+    if let Ok(listed) = cluster // S9: kubectl get jobs
         .kubectl(&["get", "jobs", "-n", ns, "-l", &selector, "-o", "json"])
         .await
     {
@@ -280,7 +281,7 @@ pub async fn read(
             })
             .and_then(|job| job["metadata"]["name"].as_str().map(String::from));
         if let Some(job) = newest {
-            if let Ok(log) = cluster
+            if let Ok(log) = cluster // S9: kubectl logs
                 .kubectl_printed(&["logs", "-n", ns, &format!("job/{job}"), "--tail=200"])
                 .await
             {

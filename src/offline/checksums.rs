@@ -201,7 +201,7 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
 
     // A backup comes first, and there must be one to take.
     let backups = super::kubectl(
-        machine,
+        machine, // S9: kubectl get cronjobs
         &[
             "get",
             "cronjob",

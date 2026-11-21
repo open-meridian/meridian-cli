@@ -62,7 +62,7 @@ pub async fn down(asked: &Down) -> Result<String, String> {
     let (release, namespace) = (asked.release.as_str(), asked.namespace.as_str());
     // Read before it is gone: where it was reached.
     let values = run(
-        "helm",
+        "helm", // S9: helm get values
         &[
             "get",
             "values",
@@ -87,13 +87,13 @@ pub async fn down(asked: &Down) -> Result<String, String> {
 
     let mut said = String::new();
     if present {
-        run("helm", &["uninstall", release, "--namespace", namespace]).await?;
+        run("helm", &["uninstall", release, "--namespace", namespace]).await?; // S9: helm uninstall
         said.push_str(&format!("Uninstalled {release} from {namespace}.\n"));
     }
     if certificate && !asked.delete_namespace {
         let secret = crate::authority::secret_name(release);
         run(
-            "kubectl",
+            "kubectl", // S9: kubectl delete secrets
             &[
                 "delete",
                 "secret",
@@ -109,7 +109,7 @@ pub async fn down(asked: &Down) -> Result<String, String> {
         ));
     }
     if asked.delete_namespace {
-        run("kubectl", &["delete", "namespace", namespace]).await?;
+        run("kubectl", &["delete", "namespace", namespace]).await?; // S9: kubectl delete namespaces
         said.push_str(&format!(
             "Deleted the namespace {namespace}, and everything in it: the database the deployment \
              brought, with its data, and the deployment's key. The platform refuses it a new \

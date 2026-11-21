@@ -131,13 +131,16 @@ ci-mirror-check:
 #   S4  check-interims: INTERIM(vNN): reason, none due at roadmap_version.
 #   S5  check-pins: Cargo.toml and the workflows pin other repositories by a
 #       release or a full SHA; exceptions listed with their marker.
-#   S9  check-shellouts: the kubectl and helm calls in src/ may not grow.
+#   S9  check-shellouts: each kubectl and helm call in src/ names its kind
+#       (`// S9: kubectl get secrets`), and each kind is listed with its
+#       reason in tools/shellout-kinds.tsv.
 #   S10 check-licences: the scaffolds and sdk-roles, which plugins ship under
 #       Apache-2.0, carry no GPL or AGPL text.
 #   S2  check-size: files over 1,500 lines reported, a warning until v31b.
 #   check-baselines: a baseline or allowlist changes only with a
 #       `Baseline-Change:` trailer, and a ratchet only goes down; an
-#       INTERIM marker moved to a later version needs that trailer naming it.
+#       INTERIM marker moved to a later version needs that trailer naming it,
+#       and so does a new S9 kind, which also gives its reason.
 # tools/code_structure.py is the same in every repository that runs it.
 check-structure: check-structure-selftest check-interims check-pins check-licences check-shellouts \
                  check-size check-baselines

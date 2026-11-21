@@ -63,10 +63,19 @@ reduction lowers it.
   and every workflow (`uses:`, and the `ref:` of a checkout of another
   repository). An exception is listed in `tools/pins-allowlist.txt` with
   its interim marker.
-- **The CLI calls no cluster tool it doesn't have to.** The number of
-  shelled-out `kubectl` and `helm` calls in its code may not grow
-  (`make check-shellouts`, against `tools/shellouts-baseline.txt`). Each
-  one left has a reason, or an interim marker naming when it goes.
+- **The CLI calls no cluster tool it doesn't have to.** Each `kubectl` and
+  `helm` call in its code names its kind (the tool, the verb and, for a
+  verb that takes one, the resource by its plural name) in a comment on
+  the call's lines or above its statement, such as
+  `// S9: kubectl get secrets`. A function that passes its caller's
+  arguments on to `kubectl` or `helm` is followed, and each call of it
+  names the kind instead. Each kind is listed in `tools/shellout-kinds.tsv`
+  with the reason it is not the deployment's API, or an interim marker
+  naming when it goes. `make check-shellouts` fails on a kind that is
+  called and not listed, or listed and not called. A new kind enters with
+  its reason and a `Baseline-Change:` trailer naming it. Kinds listed
+  without a reason may not grow in number. No call is moved behind a
+  helper to keep it off the list.
 - **Licences by layer.** The CLI is AGPL-3.0-or-later. The plugin scaffolds
   it writes, and the SDK modules they are held to, are Apache-2.0, so a
   plugin built from them stays its author's: no GPL or AGPL code enters

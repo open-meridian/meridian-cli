@@ -436,7 +436,7 @@ pub fn release_in(listed: &Value) -> Option<String> {
 /// The checks above, for the plugins launched in `namespace`. Nothing where
 /// none runs there.
 pub async fn shards(machine: &dyn Machine, namespace: &str, history: &dyn History) -> Vec<Finding> {
-    let workloads = match machine
+    let workloads = match machine // S9: kubectl get deployments
         .run(
             "kubectl",
             &["get", "deployments", "-n", namespace, "-o", "json"],
@@ -454,6 +454,7 @@ pub async fn shards(machine: &dyn Machine, namespace: &str, history: &dyn Histor
     let mut findings = Vec::new();
 
     if held.iter().any(|one| one.keeps_storage) {
+        // S9: kubectl get pods
         let nodes = match machine
             .run("kubectl", &["get", "pods", "-n", namespace, "-o", "json"])
             .await
@@ -475,7 +476,7 @@ pub async fn shards(machine: &dyn Machine, namespace: &str, history: &dyn Histor
 /// The class, read from the release's own values; None, and why, where it
 /// cannot be.
 async fn shared_class_of(machine: &dyn Machine, namespace: &str) -> (Option<String>, String) {
-    let listed = match machine
+    let listed = match machine // S9: helm list
         .run("helm", &["list", "-n", namespace, "-o", "json"])
         .await
     {
@@ -494,7 +495,7 @@ async fn shared_class_of(machine: &dyn Machine, namespace: &str) -> (Option<Stri
             ),
         );
     };
-    match machine
+    match machine // S9: helm get values
         .run(
             "helm",
             &["get", "values", &release, "-n", namespace, "-o", "json"],

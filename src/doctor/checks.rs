@@ -16,6 +16,7 @@ const MANIFEST_TYPES: &str = "application/vnd.oci.image.index.v1+json,\
 const HELM_MINIMUM: (u32, u32) = crate::upgrade_deployment::HELM_MINIMUM;
 
 pub async fn helm(machine: &dyn Machine) -> Finding {
+    // S9: helm version
     let said = match machine.run("helm", &["version", "--short"]).await {
         Ok(said) => said,
         Err(failed) => {
@@ -64,6 +65,7 @@ pub fn version(said: &str) -> Option<(u32, u32)> {
 }
 
 pub async fn cluster(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
+    // S9: kubectl cluster-info
     let reachable = match machine.run("kubectl", &["cluster-info"]).await {
         Ok(_) => Finding::Fine("a cluster is reachable".into()),
         // Two failures with two fixes. Telling somebody to check KUBECONFIG on
@@ -94,7 +96,7 @@ pub async fn cluster(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
         ("secrets", "hold what the wizard writes"),
         ("jobs", "migrate and set itself up"),
     ] {
-        let allowed = machine
+        let allowed = machine // S9: kubectl auth can-i
             .run(
                 "kubectl",
                 &["auth", "can-i", "create", resource, "-n", namespace],
@@ -136,6 +138,7 @@ pub const KUBERNETES_MINIMUM: (u32, u32) = (1, 33);
 pub async fn kubernetes(machine: &dyn Machine) -> Finding {
     // kubectl exits non-zero when it cannot reach the server, having said
     // its own version: nothing about the cluster's.
+    // S9: kubectl version
     let said = match machine.run("kubectl", &["version", "-o", "json"]).await {
         Ok(said) => said,
         Err(failed) => {
@@ -186,7 +189,7 @@ pub fn server_version(said: &str) -> Option<(u32, u32)> {
 }
 
 pub async fn storage_class(machine: &dyn Machine) -> Finding {
-    match machine
+    match machine // S9: kubectl get storageclasses
         .run("kubectl", &["get", "storageclass", "-o", "name"])
         .await
     {
@@ -507,7 +510,7 @@ pub async fn disk(machine: &dyn Machine) -> Vec<Finding> {
             why,
         }]
     };
-    let listed = match machine
+    let listed = match machine // S9: kubectl get nodes
         .run("kubectl", &["get", "nodes", "-o", "json"])
         .await
     {
@@ -556,6 +559,7 @@ pub async fn disk(machine: &dyn Machine) -> Vec<Finding> {
     let mut unread: std::collections::BTreeMap<String, Vec<String>> = Default::default();
     for node in nodes.iter().filter(|node| node.pressure.is_empty()) {
         let path = format!("/api/v1/nodes/{}/proxy/stats/summary", node.name);
+        // S9: kubectl get --raw
         let spaces = match machine.run("kubectl", &["get", "--raw", &path]).await {
             Ok(summary) => spaces(&summary),
             Err(failed) => {
@@ -626,7 +630,7 @@ pub async fn disk(machine: &dyn Machine) -> Vec<Finding> {
 /// as before an install, there is nothing to say.
 pub async fn plugins(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
     use crate::upgrade_deployment::{pods, to_relaunch};
-    let listed = match machine
+    let listed = match machine // S9: kubectl get pods
         .run("kubectl", &["get", "pods", "-n", namespace, "-o", "json"])
         .await
     {
@@ -693,7 +697,7 @@ pub async fn plugins(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
 /// there, or where its probe does not say.
 pub async fn database(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
     use crate::upgrade_deployment::{database_set_of, pods};
-    let Ok(listed) = machine
+    let Ok(listed) = machine // S9: kubectl get pods
         .run(
             "kubectl",
             &[
@@ -719,6 +723,7 @@ pub async fn database(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
     };
     let arguments = crate::probe::exec_arguments(namespace, &conductor.name, "conductor");
     let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    // S9: kubectl exec
     let said = match machine.run("kubectl", &arguments).await {
         Ok(said) => said,
         Err(Failure::Said(said)) => said,
@@ -732,7 +737,7 @@ pub async fn database(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
         return Vec::new();
     };
     // Brought where the deployment runs its own database's StatefulSet.
-    let brought = match machine
+    let brought = match machine // S9: kubectl get statefulsets
         .run(
             "kubectl",
             &["get", "statefulsets", "-n", namespace, "-o", "json"],
