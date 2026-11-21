@@ -158,7 +158,9 @@ pub async fn check(machine: &dyn Machine, asked: &Asked) -> Result<Plan, String>
         ));
     }
     writer_groups_kept(machine, asked, to.revision).await?;
-    launched_credentials_kept(machine, asked, from.revision, to.revision).await?;
+    launched_credentials_kept(machine, asked, from.revision, to.revision)
+        .await
+        .map_err(NotKept::said)?;
     Ok(Plan { from, to })
 }
 
@@ -215,6 +217,22 @@ fn credentials_launched_since(newest: &Keys, then: &Keys, live: &Value) -> Vec<S
         .collect()
 }
 
+/// Why the launched plugins' credentials are not known to be kept.
+enum NotKept {
+    /// What says it could not be read.
+    Unread(String),
+    /// The rollback would put one back or take one away.
+    Refused(String),
+}
+
+impl NotKept {
+    fn said(self) -> String {
+        match self {
+            NotKept::Unread(said) | NotKept::Refused(said) => said,
+        }
+    }
+}
+
 /// Each named once, in order.
 fn once(mut instances: Vec<String>) -> Vec<String> {
     instances.sort();
@@ -245,18 +263,18 @@ async fn launched_credentials_kept(
     asked: &Asked,
     from: u64,
     to: u64,
-) -> Result<(), String> {
+) -> Result<(), NotKept> {
     let mut stated = Vec::new();
     for revision in [to, from] {
         let manifest = manifest_of(machine, asked, revision)
             .await
             .map_err(|failed| {
-                format!(
+                NotKept::Unread(format!(
                     "Can't read revision {revision}'s manifest ({}), so can't tell whether \
                      returning to revision {to} would put back a launched plugin's old \
                      credential or take one away",
                     said(failed)
-                )
+                ))
             })?;
         stated.push(launched_stated(&manifest));
     }
@@ -274,11 +292,11 @@ async fn launched_credentials_kept(
         let live = launched_held(machine, asked, name)
             .await
             .map_err(|unread| {
-                format!(
+                NotKept::Unread(format!(
                     "Can't read which launched plugins hold a credential now ({unread}), so \
                      can't tell whether returning to revision {to} would put an old one back or \
                      take one away"
-                )
+                ))
             })?;
         made_again.extend(credentials_made_again(then, &live));
         launched_since.extend(credentials_launched_since(newest, then, &live));
@@ -317,11 +335,11 @@ async fn launched_credentials_kept(
         .map(|instance| format!("  meridian plugin stop {instance}"))
         .collect::<Vec<_>>()
         .join("\n");
-    Err(format!(
+    Err(NotKept::Refused(format!(
         "{} Stop {them} first, roll back, and launch {them} again (a stopped plugin has no \
          credential to lose):\n{stops}",
         refused.join(" "),
-    ))
+    )))
 }
 
 /// Set on the lake's members while its writes are kept in a stream.
@@ -551,7 +569,12 @@ async fn launched_held(machine: &dyn Machine, asked: &Asked, name: &str) -> Resu
             ],
         )
         .await
-        .map_err(said)?;
+        .map_err(|failed| match failed {
+            Failure::Missing(_) => said(failed),
+            // What a failed kubectl said is its output and its error
+            // together, and its output can be the Secret: left out.
+            Failure::Said(_) => "kubectl could not get the Secret".to_string(),
+        })?;
     if held.trim().is_empty() {
         return Ok(Value::Null);
     }
@@ -580,6 +603,20 @@ async fn listed(machine: &dyn Machine, asked: &Asked, what: &str) -> String {
         .unwrap_or_default()
 }
 
+/// `helm history`'s arguments for the release's newest revision alone.
+fn newest_revision<'a>(release: &'a str, namespace: &'a str) -> [&'a str; 8] {
+    [
+        "history",
+        release,
+        "--namespace",
+        namespace,
+        "--max",
+        "1",
+        "-o",
+        "json",
+    ]
+}
+
 /// The rollback, then the wait. What it came to, or where it stopped.
 pub async fn apply(
     machine: &dyn Machine,
@@ -591,12 +628,42 @@ pub async fn apply(
     let (release, namespace) = (asked.release.as_str(), asked.namespace.as_str());
     let to = plan.to.revision.to_string();
     // Checked again here, as near the rollback as it can be: the plan was
-    // shown and approved since the first check, and a plugin launched or
-    // launched again meanwhile has a credential the first check never saw.
+    // shown and approved since the first check. A release that has a newer
+    // revision now is not the one the plan and its checks were made from.
+    let newest = machine // S9: helm history
+        .run("helm", &newest_revision(release, namespace))
+        .await
+        .map_err(said)
+        .and_then(|history| {
+            revisions_from(release, &history)
+                .pop()
+                .map(|newest| newest.revision)
+                .ok_or_else(|| "Helm lists no revision".to_string())
+        })
+        .map_err(|unread| {
+            format!(
+                "Can't read {release}'s newest revision ({unread}), so can't tell whether it is \
+                 still revision {}, which this plan was made from. Nothing was rolled back.",
+                plan.from.revision
+            )
+        })?;
+    if newest != plan.from.revision {
+        return Err(format!(
+            "{release} is at revision {newest} now, and this plan was made from revision {}. \
+             Nothing was rolled back: run `meridian rollback-deployment -n {namespace}` again \
+             for a plan from revision {newest}.",
+            plan.from.revision
+        ));
+    }
+    // And a plugin launched or launched again meanwhile has a credential
+    // the first check never saw.
     launched_credentials_kept(machine, asked, plan.from.revision, plan.to.revision)
         .await
-        .map_err(|refused| {
-            format!("this changed after the first check, and nothing was rolled back: {refused}")
+        .map_err(|not_kept| match not_kept {
+            NotKept::Unread(unread) => format!("{unread}. Nothing was rolled back."),
+            NotKept::Refused(refused) => format!(
+                "this changed after the first check, and nothing was rolled back: {refused}"
+            ),
         })?;
     machine // S9: helm rollback
         .run(
@@ -620,19 +687,7 @@ pub async fn apply(
             )
         })?;
     let made = machine // S9: helm history
-        .run(
-            "helm",
-            &[
-                "history",
-                release,
-                "--namespace",
-                namespace,
-                "--max",
-                "1",
-                "-o",
-                "json",
-            ],
-        )
+        .run("helm", &newest_revision(release, namespace))
         .await
         .ok()
         .and_then(|history| revisions_from(release, &history).pop())

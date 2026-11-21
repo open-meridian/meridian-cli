@@ -79,6 +79,10 @@ const REVISIONS: &str = r#"[
   {"revision": 13, "status": "failed", "chart": "meridian-runtime-0.1.308", "app_version": "77aa01c", "description": "Upgrade \"meridian\" failed: timed out waiting for the condition"}
 ]"#;
 
+const NEWEST: &str = "helm history meridian --namespace meridian --max 1 -o json";
+const STILL_13: &str =
+    r#"[{"revision": 13, "status": "failed", "chart": "meridian-runtime-0.1.308"}]"#;
+
 fn stand() -> Stand {
     Stand::default()
         .answering("helm version --short", Ok("v3.16.2+g13654a5"))
@@ -98,6 +102,8 @@ fn stand() -> Stand {
         )
         // The newest revision's: what Helm merges a rollback against.
         .answering(MANIFEST_13, Ok(""))
+        // Asked again just before the rollback: still the newest.
+        .answering(NEWEST, Ok(STILL_13))
 }
 
 fn asked(to: Option<u64>) -> Asked {
@@ -176,15 +182,19 @@ async fn what_cannot_be_rolled_back_to_is_refused_before_anything_changes() {
 
 #[tokio::test]
 async fn it_rolls_back_and_waits_for_the_components() {
-    let stand = stand()
-        .answering(
-            "helm rollback meridian 12 --namespace meridian --timeout 10m",
-            Ok("Rollback was a success! Happy Helming!"),
-        )
-        .answering(
-            "helm history meridian --namespace meridian --max 1 -o json",
-            Ok(r#"[{"revision": 14, "status": "deployed", "chart": "meridian-runtime-0.1.307"}]"#),
-        );
+    let rolling = || {
+        stand()
+            .answering(
+                "helm rollback meridian 12 --namespace meridian --timeout 10m",
+                Ok("Rollback was a success! Happy Helming!"),
+            )
+            .answering_after(
+                1,
+                NEWEST,
+                Ok(r#"[{"revision": 14, "status": "deployed", "chart": "meridian-runtime-0.1.307"}]"#),
+            )
+    };
+    let stand = rolling();
     let plan = check(&stand, &asked(None)).await.unwrap();
     let pace = Pace {
         poll: Duration::from_millis(1),
@@ -206,7 +216,7 @@ async fn it_rolls_back_and_waits_for_the_components() {
         .contains(&"helm rollback meridian 12 --namespace meridian --timeout 10m".to_string()));
 
     // The older revision's migration failing is said, with what to read.
-    let failing = stand.answering(
+    let failing = rolling().answering(
         "kubectl get jobs -n meridian -l app.kubernetes.io/instance=meridian -o json",
         Ok(r#"{"items": [{"metadata": {"name": "meridian-migrate-12"},
                 "status": {"conditions": [{"type": "Failed", "status": "True"}]}}]}"#),
@@ -546,8 +556,8 @@ async fn a_credential_as_it_was_or_of_a_plugin_stopped_since_rolls_back_as_befor
     let refused = check(&stand, &asked(None)).await.unwrap_err();
     assert!(
         refused.contains(
-            "Can't read which launched plugins hold a credential now (Error: forbidden), so \
-             can't tell whether returning to revision 12 would put an old one back"
+            "Can't read which launched plugins hold a credential now (kubectl could not get the \
+             Secret), so can't tell whether returning to revision 12 would put an old one back"
         ),
         "{refused}"
     );
@@ -776,6 +786,96 @@ async fn a_launched_secret_that_cannot_be_read_as_json_is_refused_and_not_taken_
     assert_eq!(check(&none, &asked(None)).await.unwrap().to.revision, 12);
 }
 
+#[tokio::test]
+async fn a_release_that_moved_on_since_the_plan_is_refused_before_helm_rollback() {
+    // Revision 13 was the newest at the checks. An upgrade made revision 14
+    // while the plan waited for its approval, with kalshi launched: the plan
+    // is of a release that is no longer there.
+    let kalshi = [
+        ("kalshi.password", "a2Fsc2hp"),
+        ("kalshi.url", "bmF0czovL2thbHNoaQ=="),
+    ];
+    let rollback = "helm rollback meridian 12 --namespace meridian --timeout 10m";
+    let pace = Pace {
+        poll: Duration::from_millis(1),
+        timeout: Duration::from_secs(5),
+    };
+    let stand = stand()
+        .answering_after(
+            0,
+            NEWEST,
+            Ok(r#"[{"revision": 14, "status": "deployed", "chart": "meridian-runtime-0.1.309"}]"#),
+        )
+        .answering(
+            "helm get manifest meridian --revision 14 --namespace meridian",
+            Ok(&manifest_with_credentials(&kalshi)),
+        )
+        .answering(LAUNCHED, Ok(&held(&kalshi)))
+        .answering(rollback, Ok("Rollback was a success! Happy Helming!"));
+    let plan = check(&stand, &asked(None)).await.unwrap();
+    assert_eq!(plan.from.revision, 13);
+    let refused = apply(&stand, &asked(None), &plan, &pace, &mut |_: &str| {})
+        .await
+        .unwrap_err();
+    assert!(
+        refused.contains(
+            "meridian is at revision 14 now, and this plan was made from revision 13. Nothing \
+             was rolled back"
+        ),
+        "{refused}"
+    );
+    assert!(!stand.asked().iter().any(|c| c.starts_with("helm rollback")));
+
+    // The newest revision not read, or read as nothing: refused the same
+    // way, and it says it could not be read.
+    for answer in [Err("Error: forbidden"), Ok("[]"), Ok("not json")] {
+        let stand = self::stand()
+            .answering(NEWEST, answer)
+            .answering(rollback, Ok("Rollback was a success! Happy Helming!"));
+        let plan = check(&stand, &asked(None)).await.unwrap();
+        let refused = apply(&stand, &asked(None), &plan, &pace, &mut |_: &str| {})
+            .await
+            .unwrap_err();
+        assert!(
+            refused.contains("Can't read meridian's newest revision"),
+            "{refused}"
+        );
+        assert!(refused.contains("Nothing was rolled back"), "{refused}");
+        assert!(!stand.asked().iter().any(|c| c.starts_with("helm rollback")));
+    }
+}
+
+#[tokio::test]
+async fn a_secret_not_read_just_before_the_rollback_says_so_and_not_that_it_changed() {
+    let then = [
+        ("tiingo.password", "dGlpbmdvLXRoZW4="),
+        ("tiingo.url", "bmF0czovL3RpaW5nby10aGVu"),
+    ];
+    let stand = stand()
+        .answering(MANIFEST_12, Ok(&manifest_with_credentials(&then)))
+        .answering(LAUNCHED, Ok(&held(&then)))
+        .answering_after(1, LAUNCHED, Err("Error from server (Forbidden)"))
+        .answering(
+            "helm rollback meridian 12 --namespace meridian --timeout 10m",
+            Ok("Rollback was a success! Happy Helming!"),
+        );
+    let plan = check(&stand, &asked(None)).await.unwrap();
+    let pace = Pace {
+        poll: Duration::from_millis(1),
+        timeout: Duration::from_secs(5),
+    };
+    let refused = apply(&stand, &asked(None), &plan, &pace, &mut |_: &str| {})
+        .await
+        .unwrap_err();
+    assert!(!refused.contains("this changed"), "{refused}");
+    assert!(
+        refused.starts_with("Can't read which launched plugins hold a credential now"),
+        "{refused}"
+    );
+    assert!(refused.ends_with("Nothing was rolled back."), "{refused}");
+    assert!(!stand.asked().iter().any(|c| c.starts_with("helm rollback")));
+}
+
 /// A value no test's refusal, failure or progress line may hold: planted as
 /// every credential the rollback reads.
 const PLANTED: &str = "UExBTlRFRC1TRUNSRVQtVkFMVUU=";
@@ -816,6 +916,11 @@ async fn no_launched_credential_reaches_a_refusal_a_failure_or_a_progress_line()
     said.push(check(&cut, &asked(None)).await.unwrap_err());
     let failing = base().answering(LAUNCHED, Err("Error from server (Forbidden)"));
     said.push(check(&failing, &asked(None)).await.unwrap_err());
+    // kubectl failing with the Secret on its output: a failed command's
+    // answer is its output and its error together.
+    let repeating = format!("{}error: write: broken pipe", held(&now));
+    let repeating = base().answering(LAUNCHED, Err(&repeating));
+    said.push(check(&repeating, &asked(None)).await.unwrap_err());
     // Passed at the checks, refused just before the rollback.
     let changed = base()
         .answering(LAUNCHED, Ok(&held(&then)))
@@ -841,7 +946,7 @@ async fn no_launched_credential_reaches_a_refusal_a_failure_or_a_progress_line()
         said.extend(lines);
         said.push(ended.unwrap_or_else(|failed| failed));
     }
-    assert!(said.len() >= 7, "{said:?}");
+    assert!(said.len() >= 8, "{said:?}");
     for line in &said {
         for planted in [PLANTED, PLANTED_NOW, "PLANTED-SECRET"] {
             assert!(!line.contains(planted), "a credential in: {line}");
