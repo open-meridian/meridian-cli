@@ -250,6 +250,8 @@ fn healthy() -> Stand {
         .answering("kubectl auth can-i delete jobs -n meridian", Ok("yes"))
         .json(NODES, nodes(false))
         .json(SUMMARY, disk(62, 98))
+        // The release has no Secret that was ever applied on the server.
+        .answering(SECRETS, Ok(""))
         .answering(SHOW_LATEST, Ok(&shown("0.1.182", "9c5d480")))
         .answering(
             SHOW_VALUES,
@@ -938,7 +940,9 @@ fn upgrading() -> Stand {
     healthy()
         .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
         .json(LIST, listed(8, "deployed", "0.1.182", "9c5d480"))
-        // Read for the plan, then while waiting: mid-rollout, then done.
+        // Read for the plan, again before the upgrade, then while waiting:
+        // mid-rollout, then done.
+        .json(WORKLOADS, items(vec![old("conductor"), old("launcher"), database()]))
         .json(WORKLOADS, items(vec![old("conductor"), old("launcher"), database()]))
         .json(
             WORKLOADS,
@@ -2557,24 +2561,440 @@ async fn a_database_without_page_checksums_is_said_with_the_guided_step() {
     );
 }
 
+const METADATA: &str = "helm get metadata meridian --namespace meridian -o json";
+
 #[tokio::test]
-async fn with_helm_4_the_charts_counts_are_forced_over_a_scale_another_manager_made() {
-    let stand = healthy()
-        .instead("helm version --short", Ok("v4.2.3+g43e8b7f"))
-        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
-        .json(WORKLOADS, items(vec![]));
+async fn with_helm_4_the_charts_counts_are_forced_only_where_the_release_was_applied_server_side() {
+    let helm_4 = || {
+        healthy()
+            .instead("helm version --short", Ok("v4.2.3+g43e8b7f"))
+            .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+            .json(WORKLOADS, items(vec![]))
+    };
+    // Applied server-side last: a field another manager set is a conflict
+    // there, and the chart's counts are forced over it.
+    let stand = helm_4().json(
+        METADATA,
+        serde_json::json!({"name": "meridian", "revision": 7, "applyMethod": "ssa"}),
+    );
     let plan = planned(&stand).await;
     assert!(plan.force_conflicts);
     assert!(helm_arguments(&asked(), &plan).contains(&"--force-conflicts".to_string()));
-    // Helm 3 merges on the client and has no such flag.
-    let plan = planned(
-        &healthy()
-            .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
-            .json(WORKLOADS, items(vec![])),
-    )
+    // Merged client-side last, said or not (a release Helm 3 installed says
+    // nothing): Helm 4 merges it client-side again, where the flag is an
+    // error after the hooks have run.
+    for metadata in [
+        serde_json::json!({"name": "meridian", "revision": 7, "applyMethod": "csa"}),
+        serde_json::json!({"name": "meridian", "revision": 7}),
+    ] {
+        let plan = planned(&helm_4().json(METADATA, metadata)).await;
+        assert!(!plan.force_conflicts);
+        assert!(!helm_arguments(&asked(), &plan).contains(&"--force-conflicts".to_string()));
+    }
+    // Not read: refused, with nothing changed, rather than guessed.
+    let unread = helm_4().answering(METADATA, Err("Error: forbidden"));
+    let mut said = Vec::new();
+    let checked = check(&unread, &asked(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
     .await;
+    assert!(matches!(checked, Checked::Refused), "{said:?}");
+    assert!(
+        said.join("\n")
+            .contains("how Helm last applied meridian could not be read: Error: forbidden"),
+        "{said:?}"
+    );
+    assert!(!unread.changed_anything());
+    // Helm 3 merges on the client, has no such flag, and is not asked.
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(WORKLOADS, items(vec![]));
+    let plan = planned(&stand).await;
     assert!(!plan.force_conflicts);
     assert!(!helm_arguments(&asked(), &plan).contains(&"--force-conflicts".to_string()));
+    assert!(!stand.asked().iter().any(|c| c == METADATA));
+}
+
+#[tokio::test]
+async fn metadata_helm_4_gives_that_cannot_be_read_as_its_json_refuses_the_upgrade() {
+    for answer in [
+        "",
+        "WARNING: Kubernetes configuration file is group-readable",
+        "[]",
+        r#"{"name": "meridian", "applyMethod": 4}"#,
+    ] {
+        let stand = healthy()
+            .instead("helm version --short", Ok("v4.2.3+g43e8b7f"))
+            .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+            .json(WORKLOADS, items(vec![]))
+            .answering(METADATA, Ok(answer));
+        let mut said = Vec::new();
+        let checked = check(&stand, &asked(), &mut |line: &str| {
+            said.push(line.to_string())
+        })
+        .await;
+        assert!(matches!(checked, Checked::Refused), "{answer:?}: {said:?}");
+        assert!(
+            said.join("\n").contains(
+                "how Helm last applied meridian could not be read: `helm get metadata` did not \
+                 answer in its JSON"
+            ),
+            "{said:?}"
+        );
+        assert!(!stand.changed_anything());
+    }
+}
+
+/// A plugin the launcher launched, as its Deployment is listed among the
+/// release's workloads.
+fn launched(instance: &str) -> serde_json::Value {
+    json!({
+        "kind": "Deployment",
+        "metadata": {
+            "name": format!("om-plugin-{instance}"),
+            "labels": {
+                "app.kubernetes.io/instance": "meridian",
+                "meridian.dev/launched": "true",
+                "meridian.dev/instance": instance,
+            },
+        },
+        "spec": { "replicas": 1, "template": { "spec": { "containers": [] } } },
+        "status": {},
+    })
+}
+
+const SECRETS: &str = "kubectl get secrets -n meridian -l app.kubernetes.io/instance=meridian -o jsonpath={range .items[*]}{.metadata.name}{\"\\t\"}{.metadata.managedFields}{\"\\n\"}{end} --show-managed-fields";
+
+/// A Secret as the cluster lists it for the check: its name, a tab, and its
+/// managed fields, one entry per `managers`. "helm apply" is Helm's
+/// server-side apply, which owns the annotation that names the release;
+/// "other apply" another manager's; anything else a client-side write.
+fn secret_listed(name: &str, managers: &[&str]) -> String {
+    let managed = |manager: &&str| match *manager {
+        "helm apply" => json!({
+            "manager": "helm",
+            "operation": "Apply",
+            "fieldsV1": {
+                "f:metadata": { "f:annotations": { "f:meta.helm.sh/release-name": {} } },
+                "f:data": { "f:tiingo.password": {} },
+            },
+        }),
+        "other apply" => json!({
+            "manager": "kubectl",
+            "operation": "Apply",
+            "fieldsV1": { "f:metadata": { "f:labels": { "f:note": {} } } },
+        }),
+        manager => json!({
+            "manager": manager,
+            "operation": "Update",
+            "fieldsV1": {
+                "f:metadata": { "f:annotations": { "f:meta.helm.sh/release-name": {} } },
+                "f:data": { "f:tiingo.password": {} },
+            },
+        }),
+    };
+    let managed: Vec<serde_json::Value> = managers.iter().map(managed).collect();
+    format!("{name}\t{}\n", json!(managed))
+}
+
+/// The Secret the broker keeps the launched plugins' credentials in.
+fn launched_secret(managers: &[&str]) -> String {
+    secret_listed("meridian-meridian-runtime-broker-launched", managers)
+}
+
+/// A Secret of the release's that is not the launched plugins'.
+fn another_secret(managers: &[&str]) -> String {
+    secret_listed("meridian-meridian-runtime-key", managers)
+}
+
+/// A stand whose Helm merges this upgrade on the client: Helm 3, which only
+/// ever does, and Helm 4 over a newest revision merged so (a revision Helm 3
+/// made says nothing of how).
+fn merging_on_the_client(helm: u32, workloads: Vec<serde_json::Value>) -> Stand {
+    let stand = healthy()
+        .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+        .json(WORKLOADS, items(workloads));
+    if helm < 4 {
+        return stand;
+    }
+    stand
+        .instead("helm version --short", Ok("v4.2.3+g43e8b7f"))
+        .json(METADATA, json!({"name": "meridian", "revision": 7}))
+}
+
+#[tokio::test]
+async fn a_client_side_merge_over_a_launched_secret_once_applied_on_the_server_is_refused_while_plugins_are_launched(
+) {
+    let refused = |stand: Stand| async move {
+        let mut said = Vec::new();
+        let checked = check(&stand, &asked(), &mut |line: &str| {
+            said.push(line.to_string())
+        })
+        .await;
+        assert!(matches!(checked, Checked::Refused), "{said:?}");
+        assert!(!stand.changed_anything());
+        // The Secret says it: no earlier revision is asked of Helm, which
+        // may keep none that was applied on the server.
+        assert!(!stand.asked().iter().any(|c| c.contains("--revision")));
+        said.join("\n")
+    };
+    for helm in [3, 4] {
+        // Applied on the server once, written by the broker since, and two
+        // plugins are launched.
+        let stand = merging_on_the_client(helm, vec![launched("tiingo"), launched("alpaca")])
+            .instead(
+                SECRETS,
+                Ok(&[
+                    another_secret(&["helm"]),
+                    launched_secret(&["helm apply", "unknown"]),
+                ]
+                .concat()),
+            );
+        let said = refused(stand).await;
+        assert!(
+            said.contains(
+                "Helm would merge this upgrade on the client, and the Secret that keeps \
+                 meridian's launched plugins' credentials was applied on the server before, \
+                 while 2 launched plugins hold a credential: alpaca, tiingo"
+            ),
+            "helm {helm}: {said}"
+        );
+        assert!(
+            said.contains(
+                "Stop them, upgrade, and launch them again (a stopped plugin has no credential \
+                 to lose):\n  meridian plugin stop alpaca\n  meridian plugin stop tiingo"
+            ),
+            "helm {helm}: {said}"
+        );
+
+        // Nothing launched: no credential to lose, and no Secret asked for.
+        let none = merging_on_the_client(helm, vec![]);
+        planned(&none).await;
+        assert!(!none.asked().iter().any(|c| c.contains("secret")));
+
+        // Launched, and the Secret was only ever merged on the client; or
+        // an apply that is not Helm's wrote it; or another Secret of the
+        // release's was applied on the server, not it; or it has no managed
+        // fields; or there is none.
+        for secrets in [
+            launched_secret(&["helm", "unknown"]),
+            launched_secret(&["helm", "other apply"]),
+            [another_secret(&["helm apply"]), launched_secret(&["helm"])].concat(),
+            "meridian-meridian-runtime-broker-launched\t\n".to_string(),
+            String::new(),
+        ] {
+            let merged = merging_on_the_client(helm, vec![launched("tiingo")])
+                .instead(SECRETS, Ok(&secrets));
+            let plan = planned(&merged).await;
+            assert!(!plan.force_conflicts);
+            assert!(merged.asked().iter().any(|c| c == SECRETS));
+        }
+
+        // The Secrets not listed, or not as they were asked for: refused
+        // rather than taken for never applied on the server.
+        for answer in [
+            Err("Error: forbidden"),
+            Ok("meridian-meridian-runtime-broker-launched"),
+            Ok("meridian-meridian-runtime-broker-launched\tmap[manager:helm]"),
+            Ok("meridian-meridian-runtime-broker-launched\t{\"operation\": \"Apply\"}"),
+            Ok("meridian-meridian-runtime-broker-launched\t[{\"operation\": 4}]"),
+        ] {
+            let unread =
+                merging_on_the_client(helm, vec![launched("tiingo")]).instead(SECRETS, answer);
+            let said = refused(unread).await;
+            assert!(
+                said.contains(
+                    "whether the Secret that keeps meridian's launched plugins' credentials was \
+                     ever applied on the server could not be read"
+                ),
+                "helm {helm}: {said}"
+            );
+        }
+
+        // The workloads not listed: who is launched is not known, so a
+        // Secret once applied on the server refuses.
+        let unlisted = merging_on_the_client(helm, vec![])
+            .instead(WORKLOADS, Err("Error: forbidden"))
+            .instead(SECRETS, Ok(&launched_secret(&["helm apply"])));
+        let said = refused(unlisted).await;
+        assert!(
+            said.contains(
+                "was applied on the server before, and which plugins are launched could not be \
+                 listed"
+            ),
+            "helm {helm}: {said}"
+        );
+    }
+
+    // Helm 4 over a newest revision applied on the server applies there
+    // again: nothing is merged on the client, and no Secret is asked for.
+    let server = merging_on_the_client(4, vec![launched("tiingo")])
+        .instead(METADATA, Ok(r#"{"revision": 7, "applyMethod": "ssa"}"#));
+    assert!(planned(&server).await.force_conflicts);
+    assert!(!server.asked().iter().any(|c| c.contains("secret")));
+}
+
+#[tokio::test]
+async fn a_helm_whose_version_cannot_be_read_is_asked_how_it_applies_and_skips_no_check() {
+    // Not the `--short` shape: no version is read from it. It is not known
+    // to be Helm 3, so it is asked how it last applied the release, and a
+    // merge on the client is checked against the Secret as any other.
+    let unversioned = |metadata: serde_json::Value| {
+        healthy()
+            .instead(
+                "helm version --short",
+                Ok(r#"version.BuildInfo{Version:"v4.3.2"}"#),
+            )
+            .json(LIST, listed(7, "deployed", "0.1.180", "845bd06"))
+            .json(WORKLOADS, items(vec![launched("tiingo")]))
+            .json(METADATA, metadata)
+            .instead(SECRETS, Ok(&launched_secret(&["helm apply", "unknown"])))
+    };
+    let stand = unversioned(json!({"revision": 7, "applyMethod": "csa"}));
+    let mut said = Vec::new();
+    let checked = check(&stand, &asked(), &mut |line: &str| {
+        said.push(line.to_string())
+    })
+    .await;
+    let said = said.join("\n");
+    assert!(matches!(checked, Checked::Refused), "{said}");
+    assert!(
+        said.contains("while 1 launched plugin holds a credential: tiingo"),
+        "{said}"
+    );
+    assert!(!stand.changed_anything());
+
+    // Applied on the server last: the chart's counts are forced, as for a
+    // Helm known to be 4.
+    let server = unversioned(json!({"revision": 7, "applyMethod": "ssa"}));
+    assert!(planned(&server).await.force_conflicts);
+}
+
+#[tokio::test]
+async fn what_changed_after_the_checks_is_refused_before_anything_changes() {
+    for helm in [3, 4] {
+        // Nothing launched at the checks; tiingo launched while the plan
+        // waited for its approval, over a Secret Helm once applied on the
+        // server.
+        let stand = merging_on_the_client(helm, vec![])
+            .json(WORKLOADS, items(vec![launched("tiingo")]))
+            .instead(SECRETS, Ok(&launched_secret(&["helm apply", "unknown"])))
+            .answering(UPGRADE, Ok("upgraded"));
+        let plan = planned(&stand).await;
+        let refused = apply(&stand, &asked(), &plan, &pace(), &mut |_: &str| {})
+            .await
+            .expect_err("a plugin launched since the checks");
+        assert!(
+            refused.contains("nothing was changed")
+                && refused.contains("while 1 launched plugin holds a credential: tiingo"),
+            "helm {helm}: {refused}"
+        );
+        assert!(!stand.changed_anything(), "{:?}", stand.asked());
+        assert!(!stand.asked().iter().any(|c| c.starts_with("kubectl apply")));
+    }
+
+    // Helm 4: merged on the client at the checks, applied on the server by
+    // another upgrade since. The plan was made without `--force-conflicts`.
+    let stand = merging_on_the_client(4, vec![])
+        .json(METADATA, json!({"revision": 8, "applyMethod": "ssa"}))
+        .answering(UPGRADE, Ok("upgraded"));
+    let plan = planned(&stand).await;
+    assert!(!plan.force_conflicts);
+    let refused = apply(&stand, &asked(), &plan, &pace(), &mut |_: &str| {})
+        .await
+        .expect_err("applied another way since the checks");
+    assert!(
+        refused.contains("how Helm last applied meridian changed after the checks")
+            && refused.contains("Nothing was changed"),
+        "{refused}"
+    );
+    assert!(!stand.changed_anything(), "{:?}", stand.asked());
+
+    // And not read again: refused, saying so.
+    let stand = merging_on_the_client(4, vec![])
+        .answering(METADATA, Err("Error: forbidden"))
+        .answering(UPGRADE, Ok("upgraded"));
+    let plan = planned(&stand).await;
+    let refused = apply(&stand, &asked(), &plan, &pace(), &mut |_: &str| {})
+        .await
+        .expect_err("not read again");
+    assert!(
+        refused.contains("how Helm last applied meridian could not be read: Error: forbidden")
+            && refused.contains("nothing was changed"),
+        "{refused}"
+    );
+    assert!(!stand.changed_anything(), "{:?}", stand.asked());
+}
+
+#[tokio::test]
+async fn no_value_the_upgrades_checks_read_reaches_what_is_said() {
+    // The check asks for each Secret's name and managed fields, never what
+    // it holds. Whatever comes back, a value in it is not said: in a
+    // refusal, a failure to read, a plan or a command. Nor is a value of
+    // Helm's own answers.
+    const PLANTED: &str = "UExBTlRFRC1TRUNSRVQtVkFMVUU=";
+    let merging = |helm: u32| {
+        merging_on_the_client(helm, vec![launched("tiingo")]).instead(
+            OWN_VALUES,
+            Ok(
+                &json!({ "deployment": { "id": "DEP-X", "enrolmentCode": PLANTED },
+                        "ingress": { "enabled": true, "host": "meridian.localhost" } })
+                .to_string(),
+            ),
+        )
+    };
+    let named = "meridian-meridian-runtime-broker-launched";
+    let mut stands = Vec::new();
+    for helm in [3, 4] {
+        // Refused: once applied on the server, a value among its fields.
+        let applied = launched_secret(&["helm apply", "unknown"]).replace("unknown", PLANTED);
+        stands.push((true, merging(helm).instead(SECRETS, Ok(&applied))));
+        // Refused: a Secret listed whole and cut short, the value in it.
+        let whole = format!("{{\"items\": [{{\"data\": {{\"tiingo.password\": \"{PLANTED}\"");
+        stands.push((true, merging(helm).instead(SECRETS, Ok(&whole))));
+        // Refused: managed fields that are not a list, the value in them.
+        let not_a_list = format!("{named}\t{{\"data\": {{\"tiingo.password\": \"{PLANTED}\"}}}}");
+        stands.push((true, merging(helm).instead(SECRETS, Ok(&not_a_list))));
+        // Planned.
+        let merged = launched_secret(&["helm", "unknown"]).replace("unknown", PLANTED);
+        stands.push((false, merging(helm).instead(SECRETS, Ok(&merged))));
+    }
+    // Refused: Helm 4's metadata that is not JSON, the value in it.
+    stands.push((
+        true,
+        merging(4).instead(METADATA, Ok(&format!("{{\"labels\": \"{PLANTED}"))),
+    ));
+    // Planned: Helm 4 applying on the server, the value in its metadata.
+    stands.push((
+        false,
+        merging(4).instead(
+            METADATA,
+            Ok(
+                &json!({"revision": 7, "applyMethod": "ssa", "labels": {"note": PLANTED}})
+                    .to_string(),
+            ),
+        ),
+    ));
+    for (refuses, stand) in &stands {
+        let mut said = Vec::new();
+        let checked = check(stand, &asked(), &mut |line: &str| {
+            said.push(line.to_string())
+        })
+        .await;
+        if let Checked::Upgrade(plan) = &checked {
+            said.push(plan_text(&asked(), plan));
+            said.extend(helm_arguments(&asked(), plan));
+        }
+        assert_eq!(matches!(checked, Checked::Refused), *refuses, "{said:?}");
+        for line in said.iter().chain(&stand.asked()) {
+            assert!(!line.contains("UExBTlRFRC"), "a planted value in: {line}");
+        }
+        // No Secret is asked for whole: its name and managed fields alone.
+        for command in stand.asked().iter().filter(|c| c.contains("secret")) {
+            assert_eq!(command, SECRETS);
+            assert!(!command.contains("-o json "), "{command}");
+        }
+    }
 }
 
 // ── The counts (step 3d) ─────────────────────────────────────────────────

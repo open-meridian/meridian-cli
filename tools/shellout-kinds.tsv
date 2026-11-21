@@ -6,6 +6,7 @@
 # here without a reason (2026-11-20) may not grow in number: reasons are added over time.
 # kind	reason
 helm get manifest	the deployment is a Helm release, and Helm keeps its record: a revision's manifest, read before a rollback
+helm get metadata	the deployment is a Helm release, and Helm keeps its record: how it last applied the release, on the server or by a client-side merge
 helm get values	the deployment is a Helm release, and Helm keeps its record: the values it runs with
 helm history	the deployment is a Helm release, and Helm keeps its record: its revisions
 helm install	the deployment is a Helm release, and Helm keeps its record: a restore installs it
@@ -46,7 +47,7 @@ kubectl get persistentvolumeclaims
 kubectl get persistentvolumes
 kubectl get pods
 kubectl get replicasets
-kubectl get secrets
+kubectl get secrets	what only the cluster holds of a Secret, checked before a change: that it is there, its certificate, who manages its fields, a credential compared and never said
 kubectl get services
 kubectl get statefulsets
 kubectl get storageclasses	the cluster's storage classes, checked before installing

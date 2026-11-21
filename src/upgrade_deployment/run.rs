@@ -179,6 +179,64 @@ pub(crate) async fn release(
     installed(&listed, &asked.release)
 }
 
+/// Whether Helm applied the release's newest revision on the server. Asked
+/// of Helm 4, which records it.
+async fn applied_on_server(machine: &dyn Machine, asked: &Asked) -> Result<bool, Failure> {
+    // Why helm: only Helm's own record of a revision says how it was
+    // applied, which is how Helm 4 applies the next one.
+    let metadata = machine // S9: helm get metadata
+        .run(
+            "helm",
+            &[
+                "get",
+                "metadata",
+                &asked.release,
+                "--namespace",
+                &asked.namespace,
+                "-o",
+                "json",
+            ],
+        )
+        .await?;
+    super::applied_on_server(&metadata).map_err(Failure::Said)
+}
+
+/// Each Secret's name and managed fields, one line each: what a Secret
+/// holds is never asked for.
+const LAUNCHED_SECRET_MANAGERS: &str =
+    r#"jsonpath={range .items[*]}{.metadata.name}{"\t"}{.metadata.managedFields}{"\n"}{end}"#;
+
+/// Whether Helm ever applied on the server the Secret that keeps the
+/// launched plugins' credentials. Why it could not be read otherwise, with
+/// nothing of what the release's Secrets hold.
+async fn launched_secret_applied_on_server(
+    machine: &dyn Machine,
+    asked: &Asked,
+) -> Result<bool, String> {
+    // Why kubectl: Helm keeps how it applied only the revisions it still
+    // has, and Helm 3 keeps none of it. The Secret's managed fields, which
+    // only the cluster holds, say whether a server-side apply of Helm's
+    // still owns it.
+    let listed = machine // S9: kubectl get secrets
+        .run(
+            "kubectl",
+            &[
+                "get",
+                "secrets",
+                "-n",
+                &asked.namespace,
+                "-l",
+                &asked.selector(),
+                "-o",
+                LAUNCHED_SECRET_MANAGERS,
+                "--show-managed-fields",
+            ],
+        )
+        .await
+        .map_err(|failed| failed.to_string())?;
+    super::launched_secret_applied_on_server(&listed)
+}
+
 async fn target(machine: &dyn Machine, asked: &Asked) -> Result<Chart, Finding> {
     let mut arguments = vec!["show", "chart", asked.chart.as_str()];
     if let Some(version) = &asked.chart_version {
@@ -205,6 +263,70 @@ async fn target(machine: &dyn Machine, asked: &Asked) -> Result<Chart, Finding> 
 
 /// Every check, said in the order made, and what would be done if they all
 /// pass. Nothing here changes anything.
+/// Whether Helm applies this upgrade on the server, or what stops it. Made
+/// among the checks, and again just before the upgrade.
+///
+/// Helm 4 applies a release as it last applied it (its
+/// `--server-side=auto`), so that is asked of Helm unless it is known to be
+/// Helm 3, which only ever merges on the client; a version that could not
+/// be read is asked too. Not read, or not read as what Helm says, it stops
+/// the upgrade rather than be guessed.
+///
+/// A merge on the client over a launched plugins' Secret that Helm once
+/// applied on the server, while launched plugins hold a credential
+/// (`workloads`, as listed), stops it too, naming them. The Secret is
+/// asked, not Helm's history: a revision Helm no longer keeps, or a
+/// rollback to one Helm 3 made, hides it there.
+async fn applies_on_server(
+    machine: &dyn Machine,
+    asked: &Asked,
+    helm_version: Option<(u32, u32)>,
+    workloads: &str,
+) -> Result<bool, Finding> {
+    let helm_3 = helm_version.is_some_and(|(major, _)| major < 4);
+    if !helm_3 {
+        let applied = applied_on_server(machine, asked)
+            .await
+            .map_err(|failed| Finding::Stops {
+                what: format!(
+                    "how Helm last applied {} could not be read: {failed}",
+                    asked.release
+                ),
+                fix: "The upgrade forces the chart's counts only where Helm applies on the \
+                      server, and would fail part-way on a wrong guess. `helm get metadata` \
+                      must answer for the release."
+                    .into(),
+            })?;
+        if applied {
+            return Ok(true);
+        }
+    }
+    let launched = serde_json::from_str::<serde_json::Value>(workloads)
+        .ok()
+        .and_then(|listed| super::launched_instances(&listed));
+    if launched.as_ref().is_some_and(Vec::is_empty) {
+        return Ok(false);
+    }
+    match launched_secret_applied_on_server(machine, asked).await {
+        Ok(false) => Ok(false),
+        Ok(true) => Err(super::client_side_after_server_side(
+            &asked.release,
+            launched.as_deref(),
+        )),
+        Err(unread) => Err(Finding::Stops {
+            what: format!(
+                "whether the Secret that keeps {}'s launched plugins' credentials was ever \
+                 applied on the server could not be read: {unread}",
+                asked.release
+            ),
+            fix: "Helm would merge this upgrade on the client, which is refused over a Secret \
+                  once applied on the server while plugins are launched. `kubectl get secrets` \
+                  must answer for the release's namespace."
+                .into(),
+        }),
+    }
+}
+
 pub async fn check(machine: &dyn Machine, asked: &Asked, watch: &mut dyn Watch) -> Checked {
     watch.begin(Step::Checks);
     let checked = checks_made(machine, asked, watch).await;
@@ -388,6 +510,13 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     let running_listed = kubectl_json(machine, asked, WORKLOADS)
         .await
         .unwrap_or_default();
+    let server_side = match applies_on_server(machine, asked, helm_version, &running_listed).await {
+        Ok(server_side) => server_side,
+        Err(stops) => {
+            findings.push(stops);
+            return refuse(&findings, say);
+        }
+    };
     let database = database_set(&running_listed);
     let defaults: serde_json::Value =
         serde_yaml::from_str(&super::document(&chart_values)).unwrap_or_default();
@@ -531,12 +660,15 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
         archive: archive_in(&own_values),
         changes,
         patroni_move,
-        // Helm 4 applies on the server, where a field another manager set
+        // Where Helm 4 applies on the server, a field another manager set
         // -- the database's replicas, scaled by first run or a restore --
         // is a conflict, and an upgrade that changes it is refused. The
         // chart is what says each count (it reads the database's live
-        // one), as Helm 3's merge let it say: forced, as there.
-        force_conflicts: helm_version.is_some_and(|(major, _)| major >= 4),
+        // one), as Helm 3's merge let it say: forced, as there. Only
+        // there: on a release last merged client-side (one Helm 3
+        // installed), Helm 4 merges client-side too, where the flag is an
+        // error it reports after the hooks, leaving a failed revision.
+        force_conflicts: server_side,
         raised,
         jetstream,
     }))
@@ -780,6 +912,29 @@ pub async fn apply(
     watch: &mut dyn Watch,
 ) -> Result<Report, String> {
     let (release, namespace) = (asked.release.as_str(), asked.namespace.as_str());
+    // Asked again here, before anything changes: the plan was shown and
+    // approved since the checks, and a plugin launched meanwhile, or a
+    // release Helm applied another way meanwhile, is one they never saw.
+    let (_, helm_version) = helm(machine).await;
+    // S9: kubectl get deployments; kubectl get statefulsets; kubectl get replicasets
+    let workloads = kubectl_json(machine, asked, WORKLOADS)
+        .await
+        .unwrap_or_default();
+    match applies_on_server(machine, asked, helm_version, &workloads).await {
+        Ok(server_side) if server_side == plan.force_conflicts => {}
+        Ok(_) => {
+            return Err(format!(
+                "how Helm last applied {release} changed after the checks, and this plan was \
+                 made for the other way. Nothing was changed: run `meridian upgrade-deployment \
+                 -n {namespace}` again."
+            ))
+        }
+        Err(stops) => {
+            return Err(format!(
+                "this changed after the checks, and nothing was changed:\n{stops}"
+            ))
+        }
+    }
     // Before, so a restart is counted from here and not from a pod's birth,
     // and a plugin pod made from here was made during the upgrade.
     // S9: kubectl get pods
