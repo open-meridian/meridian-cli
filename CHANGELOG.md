@@ -72,6 +72,10 @@ an older one each says so and changes nothing.
   the release on the server. On a release Helm 3 installed, Helm 4 merges on the client, where the
   flag is an error: the upgrade failed after its hooks had run and left a failed revision. Where
   how the release was last applied can't be read, the upgrade is refused before anything changes.
+- `meridian upgrade-deployment` on Helm 4 refuses, before anything changes, an upgrade Helm would
+  merge on the client over a release that an earlier revision applied on the server, while launched
+  plugins hold a credential: that merge can take the credentials away under the running plugins. It
+  names the plugins and the way through: stop them, upgrade, launch them again.
 
 ## 0.1.60
 

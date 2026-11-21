@@ -177,22 +177,43 @@ pub(crate) async fn release(
     installed(&listed, &asked.release)
 }
 
-/// `helm get <what>` of the release as it is now, as JSON.
-async fn helm_get(machine: &dyn Machine, asked: &Asked, what: &str) -> Result<String, Failure> {
-    machine
-        .run(
-            "helm",
-            &[
-                "get",
-                what,
-                &asked.release,
-                "--namespace",
-                &asked.namespace,
-                "-o",
-                "json",
-            ],
-        )
-        .await
+/// Whether Helm applied the release on the server: at `revision`, or at its
+/// newest where none is named. Asked of Helm 4, which records it.
+async fn applied_on_server(
+    machine: &dyn Machine,
+    asked: &Asked,
+    revision: Option<u64>,
+) -> Result<bool, Failure> {
+    let numbered = revision.map(|revision| revision.to_string());
+    let mut arguments = vec!["get", "metadata", asked.release.as_str()];
+    if let Some(revision) = &numbered {
+        arguments.extend(["--revision", revision.as_str()]);
+    }
+    arguments.extend(["--namespace", asked.namespace.as_str(), "-o", "json"]);
+    // Why helm: only Helm's own record of a revision says how it was
+    // applied, which is how Helm 4 applies the next one.
+    let metadata = machine.run("helm", &arguments).await?;
+    super::applied_on_server(&metadata).map_err(Failure::Said)
+}
+
+/// The newest revision before `newest` that Helm applied on the server, of
+/// those it still keeps: asked one by one, newest first, to where Helm says
+/// there is no such revision.
+async fn last_applied_on_server(
+    machine: &dyn Machine,
+    asked: &Asked,
+    newest: u64,
+) -> Result<Option<u64>, (u64, Failure)> {
+    for revision in (1..newest).rev() {
+        match applied_on_server(machine, asked, Some(revision)).await {
+            Ok(true) => return Ok(Some(revision)),
+            Ok(false) => {}
+            // Helm's own words for a revision it no longer keeps.
+            Err(Failure::Said(said)) if said.contains("release: not found") => break,
+            Err(failed) => return Err((revision, failed)),
+        }
+    }
+    Ok(None)
 }
 
 async fn target(machine: &dyn Machine, asked: &Asked) -> Result<Chart, Finding> {
@@ -293,19 +314,30 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     // The deployment's own values, of which only `image`, where it is
     // reached and where its archive is are read; the rest of them, its enrolment code among them, is
     // never kept or printed.
-    let own_read = helm_get(machine, asked, "values").await;
+    let own_read = machine
+        .run(
+            "helm",
+            &[
+                "get",
+                "values",
+                &asked.release,
+                "--namespace",
+                &asked.namespace,
+                "-o",
+                "json",
+            ],
+        )
+        .await;
 
     // How Helm last applied the release, which is how Helm 4 applies this
     // upgrade (its `--server-side=auto`): asked of Helm 4 alone, since
-    // Helm 3 only ever merges on the client.
+    // Helm 3 only ever merges on the client. Not read, or not read as what
+    // Helm says, it is refused here rather than guessed.
+    let helm_4 = helm_version.is_some_and(|(major, _)| major >= 4);
     let mut server_side = false;
-    if helm_version.is_some_and(|(major, _)| major >= 4) {
-        match helm_get(machine, asked, "metadata").await {
-            Ok(metadata) => {
-                let metadata: serde_json::Value =
-                    serde_json::from_str(&metadata).unwrap_or_default();
-                server_side = metadata["applyMethod"] == "ssa";
-            }
+    if helm_4 {
+        match applied_on_server(machine, asked, None).await {
+            Ok(applied) => server_side = applied,
             Err(failed) => {
                 findings.push(Finding::Stops {
                     what: format!(
@@ -417,6 +449,45 @@ async fn checks_made(machine: &dyn Machine, asked: &Asked, say: &mut dyn Watch) 
     let running_listed = kubectl_json(machine, asked, WORKLOADS)
         .await
         .unwrap_or_default();
+    // A merge on the client over a release once applied on the server,
+    // while launched plugins hold a credential: refused, naming them. Helm 4
+    // alone is asked; what Helm 3 last did to the release it cannot say.
+    if helm_4 && !server_side {
+        let launched = serde_json::from_str::<serde_json::Value>(&running_listed)
+            .ok()
+            .and_then(|listed| super::launched_instances(&listed));
+        if launched
+            .as_ref()
+            .is_none_or(|launched| !launched.is_empty())
+        {
+            match last_applied_on_server(machine, asked, from.revision).await {
+                Ok(None) => {}
+                Ok(Some(revision)) => {
+                    findings.push(super::client_side_after_server_side(
+                        &asked.release,
+                        revision,
+                        launched.as_deref(),
+                    ));
+                    return refuse(&findings, say);
+                }
+                Err((revision, failed)) => {
+                    findings.push(Finding::Stops {
+                        what: format!(
+                            "how Helm applied {} at revision {revision} could not be read: \
+                             {failed}",
+                            asked.release
+                        ),
+                        fix: "Helm would merge this upgrade on the client, which is refused \
+                              over a release once applied on the server while plugins are \
+                              launched. `helm get metadata --revision` must answer for each \
+                              revision Helm keeps."
+                            .into(),
+                    });
+                    return refuse(&findings, say);
+                }
+            }
+        }
+    }
     let database = database_set(&running_listed);
     let defaults: serde_json::Value =
         serde_yaml::from_str(&super::document(&chart_values)).unwrap_or_default();
