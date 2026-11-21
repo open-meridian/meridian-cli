@@ -271,18 +271,15 @@ async fn launched_credentials_kept(
         if then.is_empty() && newest.is_empty() {
             continue;
         }
-        let secret = format!("secret {name}");
-        let live = got(machine, asked, &secret, "--ignore-not-found")
+        let live = launched_held(machine, asked, name)
             .await
-            .map_err(|failed| {
+            .map_err(|unread| {
                 format!(
-                    "Can't read which launched plugins hold a credential now ({}), so can't tell \
-                     whether returning to revision {to} would put an old one back or take one \
-                     away",
-                    said(failed)
+                    "Can't read which launched plugins hold a credential now ({unread}), so \
+                     can't tell whether returning to revision {to} would put an old one back or \
+                     take one away"
                 )
             })?;
-        let live: Value = serde_json::from_str(&live).unwrap_or_default();
         made_again.extend(credentials_made_again(then, &live));
         launched_since.extend(credentials_launched_since(newest, then, &live));
     }
@@ -514,6 +511,8 @@ async fn manifest_of(
     asked: &Asked,
     revision: u64,
 ) -> Result<String, Failure> {
+    // Why helm: `helm rollback` applies a stored manifest without rendering,
+    // and only Helm's own record says what that manifest states.
     machine
         .run(
             "helm",
@@ -530,24 +529,52 @@ async fn manifest_of(
         .await
 }
 
-/// `kubectl get <what> -n <namespace> <which> -o json`: `what` a kind, or a
-/// kind and a name; `which` a selector or a flag.
-async fn got(
-    machine: &dyn Machine,
-    asked: &Asked,
-    what: &str,
-    which: &str,
-) -> Result<String, Failure> {
-    let mut arguments = vec!["get"];
-    arguments.extend(what.split(' '));
-    arguments.extend(["-n", asked.namespace.as_str()]);
-    arguments.extend(which.split(' '));
-    arguments.extend(["-o", "json"]);
-    machine.run("kubectl", &arguments).await
+/// The launched plugins' Secret, by name, as the cluster holds it now: null
+/// where there is none. Why it could not be read otherwise, with nothing of
+/// what it holds: its values are compared by the caller and never said.
+async fn launched_held(machine: &dyn Machine, asked: &Asked, name: &str) -> Result<Value, String> {
+    // Why kubectl: a stored manifest's credential is compared with the one
+    // in the broker's Secret now, which only the cluster holds.
+    let held = machine
+        .run(
+            "kubectl",
+            &[
+                "get",
+                "secret",
+                name,
+                "-n",
+                &asked.namespace,
+                "--ignore-not-found",
+                "-o",
+                "json",
+            ],
+        )
+        .await
+        .map_err(said)?;
+    if held.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    // The parser's own words are left out: nothing of the answer is repeated.
+    serde_json::from_str(&held).map_err(|_| "kubectl's answer is not JSON".to_string())
 }
 
+/// The release's own `what`, by its label, as the cluster holds them now:
+/// nothing where they could not be listed.
 async fn listed(machine: &dyn Machine, asked: &Asked, what: &str) -> String {
-    got(machine, asked, what, &format!("-l {}", asked.selector()))
+    machine
+        .run(
+            "kubectl",
+            &[
+                "get",
+                what,
+                "-n",
+                &asked.namespace,
+                "-l",
+                &asked.selector(),
+                "-o",
+                "json",
+            ],
+        )
         .await
         .unwrap_or_default()
 }

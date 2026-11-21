@@ -11,6 +11,8 @@ struct Stand {
     /// What a command answers once it has been asked that many times.
     later: HashMap<String, (usize, Result<String, String>)>,
     asked: Mutex<Vec<String>>,
+    /// Each command's arguments as they were given, one by one.
+    arguments: Mutex<Vec<Vec<String>>>,
 }
 
 impl Stand {
@@ -41,6 +43,10 @@ impl Stand {
 impl Machine for Stand {
     async fn run(&self, program: &str, arguments: &[&str]) -> Result<String, Failure> {
         let command = format!("{program} {}", arguments.join(" "));
+        self.arguments
+            .lock()
+            .unwrap()
+            .push(arguments.iter().map(|each| each.to_string()).collect());
         let before = {
             let mut asked = self.asked.lock().unwrap();
             let before = asked.iter().filter(|c| **c == command).count();
@@ -702,4 +708,149 @@ async fn a_credential_that_changes_after_the_checks_is_refused_before_helm_rollb
         .await
         .is_ok());
     assert_eq!(stand.asked().iter().filter(|c| *c == LAUNCHED).count(), 2);
+}
+
+#[tokio::test]
+async fn the_launched_secret_is_asked_for_by_its_name_as_one_argument() {
+    // A name is whatever the stored manifest says. It is given to kubectl
+    // whole, never cut at its spaces into arguments of its own.
+    let name = "meridian --all-namespaces -launched";
+    let manifest = format!(
+        "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: \"{name}\"\n\
+         data:\n  tiingo.password: dGlpbmdvLXRoZW4=\n"
+    );
+    let stand = stand().answering(MANIFEST_12, Ok(&manifest));
+    let _ = check(&stand, &asked(None)).await;
+    let asked_for: Vec<Vec<String>> = stand
+        .arguments
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|arguments| arguments.iter().any(|each| each == "secret"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        asked_for,
+        vec![[
+            "get",
+            "secret",
+            name,
+            "-n",
+            "meridian",
+            "--ignore-not-found",
+            "-o",
+            "json"
+        ]
+        .map(String::from)
+        .to_vec()]
+    );
+}
+
+#[tokio::test]
+async fn a_launched_secret_that_cannot_be_read_as_json_is_refused_and_not_taken_for_empty() {
+    let then = [
+        ("tiingo.password", "dGlpbmdvLXRoZW4="),
+        ("tiingo.url", "bmF0czovL3RpaW5nby10aGVu"),
+    ];
+    // Cut short: what it holds can't be compared, so nothing says the
+    // credential is as it was.
+    let stand = stand()
+        .answering(MANIFEST_12, Ok(&manifest_with_credentials(&then)))
+        .answering(
+            LAUNCHED,
+            Ok(r#"{"kind": "Secret", "data": {"tiingo.password": "dGlpbmdvLW5vdw"#),
+        );
+    let refused = check(&stand, &asked(None)).await.unwrap_err();
+    assert!(
+        refused.contains(
+            "Can't read which launched plugins hold a credential now (kubectl's answer is not \
+             JSON), so can't tell"
+        ),
+        "{refused}"
+    );
+    assert!(!refused.contains("dGlpbmdv"), "{refused}");
+    // No such Secret is kubectl saying nothing, and is no credential held.
+    let none = self::stand()
+        .answering(MANIFEST_12, Ok(&manifest_with_credentials(&then)))
+        .answering(LAUNCHED, Ok(""));
+    assert_eq!(check(&none, &asked(None)).await.unwrap().to.revision, 12);
+}
+
+/// A value no test's refusal, failure or progress line may hold: planted as
+/// every credential the rollback reads.
+const PLANTED: &str = "UExBTlRFRC1TRUNSRVQtVkFMVUU=";
+const PLANTED_NOW: &str = "UExBTlRFRC1TRUNSRVQtTk9X";
+
+#[tokio::test]
+async fn no_launched_credential_reaches_a_refusal_a_failure_or_a_progress_line() {
+    let then = [("tiingo.password", PLANTED), ("tiingo.url", PLANTED)];
+    let newest = [
+        then[0],
+        then[1],
+        ("kalshi.password", PLANTED),
+        ("kalshi.url", PLANTED),
+    ];
+    let now = [
+        ("tiingo.password", PLANTED_NOW),
+        ("tiingo.url", PLANTED_NOW),
+        ("kalshi.password", PLANTED_NOW),
+        ("kalshi.url", PLANTED_NOW),
+    ];
+    let rollback = "helm rollback meridian 12 --namespace meridian --timeout 10m";
+    let base = || {
+        stand()
+            .answering(MANIFEST_12, Ok(&manifest_with_credentials(&then)))
+            .answering(MANIFEST_13, Ok(&manifest_with_credentials(&newest)))
+    };
+    let pace = Pace {
+        poll: Duration::from_millis(1),
+        timeout: Duration::from_millis(20),
+    };
+    let mut said: Vec<String> = Vec::new();
+    // Refused at the checks, for both reasons at once.
+    let refused = base().answering(LAUNCHED, Ok(&held(&now)));
+    said.push(check(&refused, &asked(None)).await.unwrap_err());
+    // The Secret's answer cut short, and kubectl failing.
+    let cut = held(&now);
+    let cut = base().answering(LAUNCHED, Ok(&cut[..cut.len() - 9]));
+    said.push(check(&cut, &asked(None)).await.unwrap_err());
+    let failing = base().answering(LAUNCHED, Err("Error from server (Forbidden)"));
+    said.push(check(&failing, &asked(None)).await.unwrap_err());
+    // Passed at the checks, refused just before the rollback.
+    let changed = base()
+        .answering(LAUNCHED, Ok(&held(&then)))
+        .answering_after(1, LAUNCHED, Ok(&held(&now)));
+    let plan = check(&changed, &asked(None)).await.unwrap();
+    said.push(plan_text(&asked(None), &plan));
+    said.push(
+        apply(&changed, &asked(None), &plan, &pace, &mut |_: &str| {})
+            .await
+            .unwrap_err(),
+    );
+    // Rolled back, every line it says kept; and helm refusing the rollback.
+    for answer in [Ok("Rollback was a success!"), Err("Error: timed out")] {
+        let rolled = base()
+            .answering(LAUNCHED, Ok(&held(&then)))
+            .answering(rollback, answer);
+        let plan = check(&rolled, &asked(None)).await.unwrap();
+        let mut lines = Vec::new();
+        let ended = apply(&rolled, &asked(None), &plan, &pace, &mut |line: &str| {
+            lines.push(line.to_string())
+        })
+        .await;
+        said.extend(lines);
+        said.push(ended.unwrap_or_else(|failed| failed));
+    }
+    assert!(said.len() >= 7, "{said:?}");
+    for line in &said {
+        for planted in [PLANTED, PLANTED_NOW, "PLANTED-SECRET"] {
+            assert!(!line.contains(planted), "a credential in: {line}");
+        }
+    }
+    // And no command given to helm or kubectl carries one.
+    for stand in [&refused, &cut, &failing, &changed] {
+        for command in stand.asked() {
+            assert!(!command.contains("UExBTlRFRC"), "{command}");
+        }
+    }
 }
