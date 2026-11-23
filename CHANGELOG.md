@@ -74,6 +74,10 @@ an older one each says so and changes nothing.
 - `meridian rollback-deployment` refuses a rollback that would put back a launched plugin's old
   credential or remove a live one, and names the plugins to stop first. (#29)
 
+### Security
+
+- Updates `url` to 2.5.9 for RUSTSEC-2026-0592.
+
 ## 0.1.60
 
 - `meridian restore --to-time` follows the timeline that held the time. Each restore starts a
