@@ -16,12 +16,14 @@ mod down;
 #[cfg(test)]
 mod fake_http;
 mod gc;
+mod help;
 mod install;
 mod live;
 mod machine;
 mod migrate;
 mod moves;
 mod offline;
+mod output;
 mod pack;
 mod plugin;
 mod plugin_release;
@@ -36,567 +38,7 @@ mod up;
 mod upgrade_deployment;
 
 use doctor::Intended;
-
-const USAGE: &str = "\
-meridian -- bringing a Meridian deployment up
-
-  meridian doctor            can this machine and this cluster run a deployment?
-  meridian up                install the chart, and open this deployment's wizard
-  meridian down              uninstall it; --delete-namespace removes its namespace too
-  meridian upgrade-deployment
-                             move a running deployment to a newer chart, in place,
-                             after checking it can; not this binary
-  meridian plugin new <name> start a plugin: the SDK's reference plugin, named <name>;
-                             with --role connectivity, custody, data, operations,
-                             pricing or reporting, that role's template
-  meridian plugin check      hold the plugin here to the framework's rules: its pages,
-                             settings, SDK use, [tool.meridian], documentation (docs/),
-                             tests and shape
-  meridian plugin migrate    move the plugin here to a newer release of its SDK: its pins
-                             (a base pinned by digest takes the new release's digest)
-                             and its CI's meridian, each release's rewrite of its code,
-                             then plugin check
-  meridian plugin upload     build the plugin here and put it in the deployment's catalogue,
-                             its documentation (docs/) with it
-  meridian plugin list       the catalogue: versions uploaded, and what is launched
-  meridian plugin launch <name> <version> --instance <id>
-                             run a version, once you approve the roles it asks for;
-                             its limits at its sidecar, shards and a standby pod, if
-                             asked
-  meridian plugin stop <id>  stop a launched instance
-  meridian plugin dev --instance <id>
-                             run the plugin here live on a development deployment,
-                             sending each save as it is made
-  meridian plugin logs --instance <id>
-                             what a live plugin printed
-  meridian plugin events --instance <id>
-                             what happened to a live plugin: synced, restarted,
-                             ready, crashed, refused, each with its revision
-  meridian plugin open --instance <id> [--level manage|open|view]
-                             a link to a plugin's page that one browser opens once
-  meridian plugin publish --registry community|verified --tag vX.Y.Z
-                             ask the platform to build that signed release tag of the
-                             plugin here and list it, after plugin check passes; its
-                             report a line a check (--details: each check's full text)
-  meridian plugin release <version>
-                             release the plugin here: checks (on main, clean, up to
-                             date, the version higher than the last tag, pyproject.toml
-                             at it, CHANGELOG.md's `## <version>` undated, main's CI
-                             green), then signs v<version> on main's head, pushes it,
-                             publishes it and follows the build. It opens no pull
-                             request: the change's own PR bumps the version and adds
-                             its CHANGELOG entry
-  meridian plugin key setup  make the key release tags are signed with ready: git's
-                             SSH signing key, or a new one ssh-keygen makes (--hardware:
-                             on a security key); git set to sign with it, and its public
-                             half registered on the organisation
-  meridian plugin key register <file.pub> | revoke <key-id> | list
-                             the organisation's tag-signing keys at the platform
-  meridian plugin gc         collect the deployment's plugin registry's garbage: the layers
-                             retired versions left. Read-only while it runs (pulls go
-                             on, uploads wait), then back; shown, then asked
-  meridian plugin download <organisation>/<plugin>@<version>
-                             write a plugin bundle of a listed version, verified, for
-                             a deployment that reaches nothing
-  meridian plugin upload --bundle <file>
-                             carry a plugin bundle into the deployment's catalogue
-  meridian plugin install <organisation>/<plugin>[@<version>] --note <why>
-                             install a listed version into the deployment, as Browse
-                             does; without @version, the one Browse shows. Launches
-                             nothing
-  meridian plugin install --pack <pack> --note <why>
-                             install a starter pack through the deployment, one pack
-                             install of its members: a bare <pack> is open-meridian's.
-                             Shown version by version, then asked; followed member by
-                             member; launches nothing
-  meridian plugin pack list  the starter packs the deployment's catalogue holds, each
-                             with its state here
-  meridian plugin pack show <pack>
-                             a pack's setup checklist: each member's versions, state and
-                             connection, and how each installed one is launched
-  meridian plugin pack update <pack> --note <why>
-                             update all: each installed member to its newest offered
-                             version; shown, then asked
-  meridian plugin pack remove <pack> --note <why>
-                             remove the deployment's record of a pack; every member
-                             stays installed and running; shown, then asked
-  meridian connect [<address>]
-                             sign in to a deployment's dashboard and let this computer
-                             act as you, for up to 90 days
-                             (default: https://meridian.localhost, the local install)
-  meridian sign-out [<address>]
-                             revoke that delegation, here and at the deployment
-  meridian status            the release (revision, state, chart; Helm's words where it
-                             is not deployed); each component and each plugin: its
-                             image, readiness, restarts and why, each pod's memory
-                             (its working set) against its limit; the database's
-                             members (primary or standby, ready, how far behind),
-                             its page checksums and full_page_writes, the WAL
-                             archiver, the replica comparison and internal TLS; each
-                             store member's mode, lag and last scrub with its
-                             findings; and the book's health per account
-  meridian partition split <partition> --reason <why>
-                             halve a lake range at its midpoint: the range closes and
-                             its two halves continue, with its writer group
-  meridian partition move <partition> --to-group <n> --reason <why>
-                             move a lake range or a book partition (P0, P1, ...) to
-                             another writer group, online; followed until it has
-                             moved, or not switched and why
-  meridian account move <account> --to-partition <partition> --reason <why>
-                             continue an account in another book partition, online
-  meridian logs <component>  what a component printed: core's, a plugin's by its instance,
-                             or a Job's (migrate, key, first-run, backup), its newest run;
-                             --since 10m for the last ten minutes, --previous for what
-                             it printed before its last restart
-  meridian rollback-deployment [--to-revision <n>]
-                             return the deployment to an earlier revision of its release:
-                             by default the last one deployed before the newest. The
-                             database is not rolled back with it; shown, then asked
-  meridian upgrade           replace this binary with the latest release; not a
-                             deployment, which is upgrade-deployment
-  meridian authority         this machine's certificate authority, which signs a local
-                             deployment's HTTPS: where it is, and how clients trust it
-  meridian authority trust   trust it here: the login keychain, which browsers and the
-                             Claude Code CLI read, and NODE_EXTRA_CA_CERTS, which the
-                             Claude app reads. Asked first; the install script runs it
-  meridian authority remove  take it out of the login keychain and apps' environment,
-                             and off this machine
-  meridian backup            back the deployment up now: its keys, credentials, values,
-                             the database it brought and each plugin's storage, sealed
-                             to backup.recipient; --to <dir> copies the file here too
-  meridian backup key        make the identity backups are sealed with, and print its
-                             public half, for backup.recipient
-  meridian restore <file> --identity <file>
-                             restore a backup into a namespace holding no deployment
-  meridian restore --to-time <RFC 3339>
-                             restore the running deployment's database from its WAL
-                             archive to that time, in place, along the timeline that
-                             held it; shown, then asked
-  meridian restore --to-archive-end
-                             the same, to the last commit the archive holds
-  meridian uninstall         revoke every delegation this holds, and remove it
-  meridian --version         which release this is
-
-Both:
-  -n, --namespace <name>    where the deployment goes (default: meridian)
-      --platform <url>      the platform it reports to (default: https://open-meridian.com)
-      --image <ref>         the runtime image to run (default: the published one)
-  -h, --help                this
-
-up:
-      --release <name>      the Helm release (default: meridian)
-      --chart <ref>         the chart to install (default: the published one)
-      --chart-version <v>   which version of it
-      --id <id>             this deployment's identifier, from the platform
-      --enrolment-code <c>  the one-time code it enrols its key with. Better in
-                            MERIDIAN_ENROLMENT_CODE, which no shell writes down
-  -p, --params <file>       answer the wizard from a file instead of a browser.
-                            It holds the wizard's own answers and no credential:
-                            each of those comes from MERIDIAN_<FIELD>; and
-                            `archive`, up's own question (below)
-      --first-run-code <c>  the claim code --params redeems (or MERIDIAN_FIRST_RUN_CODE)
-  -f, --values <file>       Helm-style chart values, passed straight through
-      --archive <path>      where edge plugins' older records go: a directory on the
-                            cluster's node, a NAS export or a second disk mounted
-                            there. A deployment admin allows each plugin its part
-      --no-archive          none: records past their window stay in each plugin's
-                            storage. Given neither, up asks at a terminal, and
-                            takes none where there is no terminal. In a cloud, name
-                            the bucket as pluginArchive in a values file (-f)
-      --shared-storage-class <class>
-                            the ReadWriteMany storage class a plugin's shards and
-                            standby pod share its storage through on several nodes
-                            (pluginStorage.shared.storageClassName). Without one, a
-                            plugin that keeps storage runs as one pod there
-      --host <name>         the name it is reached by through the cluster's ingress
-                            controller (default: meridian.localhost, which every
-                            browser sends to this machine). Any other name is
-                            reached over HTTPS, with its certificate's Secret
-                            named in a values file (-f)
-      --no-ingress          reach it by a port-forward this command holds, as on a
-                            cluster with no ingress controller
-      --development         install it for development: it may run plugin code as
-                            it is being written, and says so on every page
-                            At a name under .localhost it is served over HTTPS, with
-                            a certificate from this machine's own authority, made
-                            and trusted the first time (`meridian authority`)
-      --plain-http          serve plain HTTP and make no certificate: for the
-                            cluster tests, and nothing else
-      --port <n>            the local port a port-forward uses (default: 8443)
-      --timeout <d>         how long to give Helm (default: 10m)
-      --no-doctor           skip the checks. A check nobody runs does not exist
-
-plugin new:
-      --into <dir>          where to write it (default: ./<name>). Never somewhere
-                            that already exists
-      --role <role>         write that role's template, a whole plugin holding it
-                            on the role's common pages and settings:
-                            connectivity (a venue placed at through the SDK's
-                            Trader, with its Trading page, its tests running the
-                            suite), custody (a custodian's accounts and
-                            statements), data (a vendor's prices into the lake,
-                            its tests running the suite), operations (opening
-                            balances, reconciliation and breaks), pricing (the
-                            analytics component's batches answered through the
-                            SDK's Pricer, its tests running the suite) or
-                            reporting (the book valued from the lake, its tests
-                            running the suite). Without it, the reference plugin
-
-plugin check: needs no deployment. Exits 0 when every rule holds, 1 when one does
-not, each failure with its file, line and what to write instead. A warning
-(replaced-ids-followed: an instrument ID kept in the code; roles-registered: a
-role's class registered for a role not declared) fails nothing, and
-neither does advice: a prompted section of docs/ missing (troubleshooting.md,
-terms.md), a file there that is not uploaded, a heading's text past one screen
-of the Documentation tab, or a link it shows as plain text
-      --dir <dir>           the plugin's directory (default: .)
-      --run-tests           run its tests too, with pytest in the project's own
-                            environment: uv run for a uv.lock, else its .venv or
-                            venv, else python3 on the PATH
-      --verified            hold it as a verified plugin is: every changing route
-                            a tool for agents, none kept from them, each role it
-                            holds with a suite (custody, data, connectivity,
-                            pricing) run
-                            in its tests, each role's common pages, tools and
-                            settings kept, and every act naming its check tool
-                            (role-pages; without --verified, said as advice)
-      --json                one JSON object on stdout
-
-plugin migrate: needs no deployment, and docker. Exits 0 when migrated with nothing
-left by hand and every rule holding; 1 when something is left by hand, a rule does
-not hold, or it could not run (then nothing was changed); 2 when asked wrongly or
-refused before changing anything: no pins, pins disagreeing, an older --to, or
-changes git does not hold yet
-      --to <version>        the release to move to (default: the latest). Never older;
-                            one the registry lists on its simple index before its
-                            JSON is accepted
-      --dir <dir>           the plugin's directory (default: .)
-      --image <ref>         the SDK image the steps run in (default: the latest
-                            release's, which carries every step)
-      --force               migrate a directory git does not hold as it is
-      --run-tests           run its tests in the check, as plugin check does
-      --json                one JSON object on stdout
-
-plugin upload, list, launch, stop, dev, logs, events, open: through the session
-`meridian connect` keeps. They exit 0 when done, 1 when refused or failed, 2 when
-asked wrongly, and 3 when there is no session or it has lapsed
-      --deployment <addr>   which connected deployment, when there is more than one
-      --dir <dir>           upload, dev: the plugin's directory (default: .). Its image
-                            is built with docker, from its own Dockerfile
-      --instance <id>       launch, dev, logs, events, open: the instance's name,
-                            which its page is found by
-      --yes                 launch, dev: approve what it asks for without being asked.
-                            For a script that has already read it
-      --in-flight <n>       launch: the most requests it has in flight at its sidecar
-                            at once (limits.in_flight); left out, the deployment's
-                            sidecar.limits.inFlight
-      --requests-per-second <n>
-                            launch: the most requests a second, with a second's burst
-                            (limits.requests_per_second); left out, the deployment's
-      --answer-mib <n>      launch: MiB of answers held or paged in flight for it
-                            (limits.answer_mib); left out, the deployment's
-      --shards <n>          launch: the pods of the instance sharing its subjects
-                            (shards), at most the version's most_shards. Kept on the
-                            launch; this release still runs one pod
-      --standby             launch: a standby pod that takes over within 10 s
-                            (standby). Kept on the launch; this release still runs
-                            one pod
-      --json                dev, logs, events, open: JSON on stdout, one object, or one
-                            per line for dev and --follow; progress goes to stderr
-      --release             dev: upload the plugin as it is now as a version, and run
-                            that version in place of the live instance
-      --since <revision>    logs, events: only what came after that revision
-      --follow              events: keep reporting them as they happen
-      --print <path>        open: the page at that path on the plugin's host, as you
-                            are served it, instead of a link
-      --level <level>       open: the level its session carries, as the dashboard's
-                            home offers them: manage (admin), open (write) or view
-                            (read). Without it, the first you hold: Manage, then
-                            Open, then View, as the home's first button opens
-
-plugin publish, release, key, download: through the platform sign-in, made in your
-browser the first time and kept 30 days; never a password. The platform is
---platform's. release asks GitHub with your own GitHub sign-in: GH_TOKEN or
-GITHUB_TOKEN, else the credential git keeps for github.com
-      --registry <r>        publish: community or verified; release: the same (default:
-                            community); download: which registry's version (default:
-                            community)
-      --tag <vX.Y.Z>        publish: the release tag, signed with an SSH key registered on
-                            the organisation, of the version pyproject.toml holds
-      --organisation <namespace>
-                            publish, release, key: the organisation the listing or the key is its
-                            (default: the one the plugin's git remote names); a listing
-                            is organisation/plugin
-      --hardware            key setup: where git has no SSH signing key, make one held
-                            on a FIDO security key (ssh-keygen -t ed25519-sk) rather
-                            than a desktop key (-t ed25519)
-      --reason <text>       key revoke: why, as the revocation records it
-      --not-trusted-after <time>
-                            key revoke: when the key stopped being trusted, as
-                            2026-10-16T12:00Z (default: now)
-      --to <file>           download: where the bundle goes (default:
-                            <organisation>-<plugin>-<version>.plugin-bundle.tar)
-      --timeout <d>         publish, release: how long to follow the build (default:
-                            30m)
-      --details             publish: every check's full text, where it prints one line
-                            a check that fits the terminal
-
-plugin install, plugin pack: through the session meridian connect keeps (--deployment
-names one), as the deployment's admin; a listing without @version reads the platform's
-catalogue through the platform sign-in. Exits 0 when every member asked for is
-installed or held, 1 when one failed (each named) or nothing was approved
-      --note <why>          why, kept with the install, update or removal. Required
-      --registry <r>        a listing: community or verified (default: with @version,
-                            community; without, the one Browse shows)
-      --pack <pack>         a starter pack, organisation/pack, or a bare name for
-                            open-meridian's
-      --with <plugin>       --pack: also install this `choose` member (a listing, or
-                            its plugin part); repeatable
-      --without <plugin>    --pack: leave out this preselected member; repeatable
-      --yes                 install, update or remove without being asked; an
-                            unnamed `choose` member is not installed. Where there is
-                            no terminal, nothing is done without it
-      --json                pack: the deployment's answer, one JSON object on stdout
-
-status, logs: read-only; the components and logs through kubectl and the release through
-helm, as doctor and backup read them, and status's book health from the deployment,
-through the session meridian connect keeps (--deployment names one). Status's memory is
-each pod's working set, as Kubernetes counts it: the pod's memory in use less its
-inactive file cache, which the kernel takes back before the pod runs short. It is
-read from each node's cAdvisor (the nodes/proxy read); where that is refused, from the
-metrics API, which some container runtimes give with the file cache in, and said so
-      --release <name>      the Helm release (default: meridian)
-      --since <span>        logs: only what was printed in the last 30s, 10m, 2h or 1d
-      --previous            logs: what each container printed before its last restart
-      --json                status: one JSON object on stdout
-      --profile             status: the resilience profile alone, as the deployment
-                            computes it from its configuration as it is (never a
-                            preset's name): its level, what the next lacks, each
-                            failure class and tier met, met by restart or not met with
-                            the change that would meet it, and never blind; through
-                            the session meridian connect keeps, a deployment admin's
-
-plugin gc: through kubectl, as backup is; checks first and changes nothing if one fails
-      --release <name>      the Helm release (default: meridian)
-      --timeout <d>         how long to give the registry each restart (default: 5m)
-      --yes                 collect without being asked. For a script that has read
-                            what it will do
-
-down: nothing is asked, since saying down is the decision
-      --release <name>      the Helm release (default: meridian)
-      --delete-namespace    remove the namespace too, and with it the database the
-                            deployment brought and the deployment's own key. Never
-                            the cluster itself
-
-upgrade-deployment: checks first, and changes nothing if a check fails; then shows
-what it will do and asks
-      --release <name>      the Helm release (default: meridian)
-      --chart <ref>         the chart it was installed from (default: the published one)
-      --chart-version <v>   the version to move to (default: the latest published).
-                            Never an older one
-      --timeout <d>         how long to wait for the migration and for every
-                            component on the new image (default: 10m)
-  -f, --values <file>       chart values to change, merged over the deployment's own
-                            as --reset-then-reuse-values merges them; repeatable,
-                            each over the last. What they change is shown, by path
-                            and never by value, before it asks
-      --set <key=value>     a chart value to change, as Helm reads one
-                            (resilience.profile=ha); repeatable, over every -f.
-                            An upgrade even at the version it is at. What it changes
-                            is shown by path; a value whose key names a secret is
-                            never echoed. A database moving under Patroni takes two
-                            upgrades, both run here under the one approval
-      --enable-checksums    turn page checksums on in the database the deployment
-                            brought, made before they were on: on its own, no chart
-                            moved. The downtime, from its size, said before it asks;
-                            a backup first, and nothing changed if it fails; every
-                            component and the database stopped, pg_checksums run on
-                            the stopped volume, everything started again and the
-                            setting read again
-      --https               move a local deployment, at a name under .localhost, to
-                            HTTPS: a certificate from this machine's authority, then
-                            the upgrade setting its address to https://<name>. A
-                            certificate it wrote is renewed within 30 days of its end
-                            with or without this
-      --yes                 upgrade without being asked. For a script that has read
-                            what it will do
-
-partition split, partition move, account move: a deployment admin's, through the session
-meridian connect keeps (--deployment names one), as the Resilience page's dialogs make
-them. Each is refused while a move or a split of the same partition is under way. A
-refusal that names a wait (a rollout in progress, the target lagging, a switch out of
-time) changed nothing, and says when to ask again. Exits 0 when done or begun, 1 when
-refused or not switched, 2 when asked wrongly, 3 without a session
-      --reason <why>        required: kept with the act's record, at most 2,000
-                            characters
-      --to-group <n>        partition move: the writer group to move it to, numbered
-                            from 0, below the store's writerGroups
-      --to-partition <partition>
-                            account move: the book partition it continues in (P0,
-                            P1, ...), other than its own
-      --no-wait             partition move: answer once it has begun, without
-                            following it to its record
-      --timeout <d>         partition move: how long to follow it (default: 2m). A
-                            move still under way then is left to finish, and said
-      --json                the deployment's answer, one JSON object on stdout; for
-                            partition move with its outcome (moved, aborted, moving)
-
-rollback-deployment: checks first, and changes nothing if a check fails; then shows the
-revision it returns to and asks. Then waits as upgrade-deployment does
-      --release <name>      the Helm release (default: meridian)
-      --to-revision <n>     the revision to return to, as `meridian status` and Helm number
-                            them (default: the last one deployed before the newest)
-      --timeout <d>         how long to wait for every component (default: 10m)
-      --yes                 roll back without being asked. For a script that has read
-                            what it will do
-
-upgrade: this binary, not a deployment
-      --to <version>        a named release instead of the latest, older or newer.
-                            Nothing is looked up unless asked: this never checks
-                            for a newer release on its own
-
-uninstall:
-      --yes                 remove without being asked. Sessions with deployments
-                            it cannot reach are forgotten here and lapse there.
-                            This machine's certificate authority goes too, out of
-                            the login keychain and apps' environment
-
-authority remove:
-      --yes                 remove without being asked
-
-backup: runs the deployment's backup CronJob once (set backup.recipient and
-backup.path or backup.existingClaim first), and says what it wrote. Each edge
-plugin's storage claim is mounted and read too, which a scheduled run does not do
-      --release <name>      the Helm release (default: meridian)
-      --to <dir>            copy the file to this directory here as well, its hash checked
-      --timeout <d>         how long to wait for it (default: 10m)
-
-backup key: needs no deployment
-      --to <file>           where to write the identity (default: ./meridian-backup-identity.txt).
-                            Never over a file already there. Keep it off the cluster:
-                            a backup opens with it alone
-
-restore: only into a namespace without the release and without anything a deployment
-keeps: the backup's Secrets and ConfigMaps, the key's Secret, the database's and the
-registry's claims and the plugins' storage claims. Checks first and changes nothing if one fails; then shows the
-backup, the cluster, the namespace, the chart and what it will make, and asks. A
-backup volume a deleted namespace left is deleted within that one approval, the
-node's directory with its backups kept. The database's URL is withheld until the
-database is loaded, the brought one or (from a dump of one somebody else runs) an
-empty external one, and every table's row count matches the backup's; then the
-components start. Each plugin's storage is made again and filled, every file's hash
-checked, before the chart is installed
-      --identity <file>     the identity the backup was sealed to (required)
-  -n, --namespace <name>    where to restore it (default: where it was taken)
-      --release <name>      must be the backup's own release, which it defaults to
-      --chart <ref>         the chart to install (default: the published one)
-      --chart-version <v>   which version (default: the one the backup was taken on,
-                            from whatever --chart names). Never older than that one
-      --timeout <d>         how long to wait for each step (default: 15m; 30m with
-                            --to-time or --to-archive-end)
-      --yes                 restore without being asked. For a script that has read
-                            what it will do
-      --to-time <time>      in place of a file: the running deployment's database
-                            restored from its WAL archive (backup.walArchive) to a
-                            time, RFC 3339 with its offset (2026-11-08T14:03:07Z).
-                            Every component and the database stopped, the restore
-                            run, everything started again; under Patroni the
-                            standbys made again from it. The restore reads the
-                            archive's timeline history and recovers along the
-                            timeline that held the time, and says which. A time
-                            outside the archive is refused in the restore's own
-                            words, naming the archive's first and last times, and
-                            leaves everything stopped, the volume restorable: run it
-                            again with a time inside the archive
-      --to-archive-end      in place of a file or a time: the same, to the last
-                            commit the archive holds, along its newest timeline
-
-connect:
-  <address> is the dashboard's: https://<host>, or http://127.0.0.1:<port> for a
-  local one. The sign-in opens in your browser; this never takes a password.
-";
-
-/// `meridian <command> --help`: that command's lines of the list, every
-/// section of flags naming it, and the flags both take; the whole of the
-/// usage for a command it does not know.
-fn help_for(command: &str, words: &[String]) -> String {
-    let with_sub = matches!(
-        command,
-        "plugin" | "backup" | "authority" | "partition" | "account"
-    )
-    .then(|| words.first().map(|sub| format!("{command} {sub}")))
-    .flatten();
-    let named = with_sub.clone().unwrap_or_else(|| command.to_string());
-    if command.is_empty() || matches!(command, "help" | "-h" | "--help") {
-        return USAGE.to_string();
-    }
-    let blocks: Vec<&str> = USAGE.split("\n\n").collect();
-    // The list: each `  meridian <named>...` entry with its continuation.
-    let mut listed = String::new();
-    let mut taking = false;
-    for line in blocks.iter().take(2).flat_map(|block| block.lines()) {
-        if let Some(entry) = line.strip_prefix("  meridian ") {
-            let first: Vec<&str> = entry.split_whitespace().collect();
-            let says = |name: &str| {
-                let parts: Vec<&str> = name.split(' ').collect();
-                first.len() >= parts.len() && first[..parts.len()] == parts[..]
-            };
-            taking = says(&named) || (with_sub.is_none() && says(command));
-        } else if !line.starts_with("    ") {
-            taking = false;
-        }
-        if taking {
-            listed.push_str(line);
-            listed.push('\n');
-        }
-    }
-    // The sections: a block whose head, before its first colon, names it.
-    let mut sections = Vec::new();
-    for block in &blocks[1..] {
-        let head = block.lines().next().unwrap_or_default();
-        if head.starts_with(' ') {
-            continue;
-        }
-        let Some((names, _)) = head.split_once(':') else {
-            continue;
-        };
-        let items: Vec<String> = names.split(", ").map(str::trim).map(String::from).collect();
-        let plugin = items
-            .first()
-            .is_some_and(|first| first.starts_with("plugin "));
-        let items: Vec<String> = items
-            .into_iter()
-            .map(|item| {
-                if plugin && !item.starts_with("plugin ") {
-                    format!("plugin {item}")
-                } else {
-                    item
-                }
-            })
-            .collect();
-        if items.iter().any(|item| *item == named || *item == command) {
-            sections.push(*block);
-        }
-    }
-    if listed.is_empty() && sections.is_empty() {
-        return USAGE.to_string();
-    }
-    let both = blocks
-        .iter()
-        .find(|block| block.starts_with("Both:"))
-        .copied()
-        .unwrap_or_default();
-    let mut out = format!("meridian {named}\n\n{listed}");
-    for section in sections {
-        out.push('\n');
-        out.push_str(section);
-        out.push('\n');
-    }
-    out.push('\n');
-    out.push_str(both);
-    out.push('\n');
-    out
-}
+use help::help_for;
 
 struct Arguments {
     command: String,
@@ -658,7 +100,7 @@ const TAKES_A_VALUE: [&str; 45] = [
 /// Everything else, which takes no value. An unknown one is refused rather
 /// than ignored: a misspelled `--no-doctor` that is quietly dropped installs
 /// something the person asked not to have checked.
-const SWITCHES: [&str; 23] = [
+const SWITCHES: [&str; 27] = [
     "--previous",
     "--profile",
     "--to-archive-end",
@@ -682,6 +124,10 @@ const SWITCHES: [&str; 23] = [
     "-h",
     "--help",
     "-v",
+    "--verbose",
+    "-q",
+    "--quiet",
+    "--wide",
 ];
 
 fn parse(said: Vec<String>) -> Result<Arguments, String> {
@@ -801,7 +247,10 @@ fn see(command: &str) -> String {
 /// `authority` that names a subcommand; nothing where the first word is a
 /// flag.
 fn named_command(said: &[String]) -> String {
-    let Some(command) = said.first().filter(|word| !word.starts_with('-')) else {
+    let Some(command) = said
+        .first()
+        .filter(|word| !word.starts_with('-') && help::known(word))
+    else {
         return String::new();
     };
     match said.get(1) {
@@ -829,8 +278,24 @@ async fn main() {
         }
     };
 
-    if arguments.set("-v") {
-        eprintln!("meridian: -v is reserved for verbose output, which is not built yet.");
+    let verbose = arguments.set("-v") || arguments.set("--verbose");
+    let quiet = arguments.set("-q") || arguments.set("--quiet");
+    output::set(match (quiet, verbose) {
+        (true, true) => {
+            eprintln!(
+                "meridian: -q is quiet and -v verbose; name one\n{}",
+                see("")
+            );
+            std::process::exit(2);
+        }
+        (true, false) => output::Level::Quiet,
+        (false, true) => output::Level::Verbose,
+        (false, false) => output::Level::Normal,
+    });
+    for warning in output::deprecated(&arguments.command, &arguments.words, &|flag| {
+        arguments.value(flag, flag).is_some() || arguments.set(flag)
+    }) {
+        eprintln!("{warning}");
     }
 
     if arguments.set("-h") || arguments.set("--help") {
@@ -897,7 +362,7 @@ async fn main() {
             (None, false) => std::process::exit(restore_command(&arguments).await),
         },
         "--version" | "version" => println!("{}", release::version_line()),
-        "-h" | "--help" | "help" | "" => print!("{USAGE}"),
+        "-h" | "--help" | "help" | "" => print!("{}", help::root()),
         other => {
             eprintln!("meridian: {other} is not a command\n{}", see(""));
             std::process::exit(2);
@@ -2229,7 +1694,7 @@ async fn publish_command(arguments: &Arguments, words: &[&str], platform: &str) 
         follow_every: registry::FOLLOW_EVERY,
         shown: registry::Shown {
             width: registry::terminal_width(),
-            details: arguments.set("--details"),
+            details: arguments.set("--details") || output::verbose(),
         },
     };
     published(&asked, platform, "publish").await
@@ -2363,7 +1828,7 @@ async fn release_command(arguments: &Arguments, words: &[&str], platform: &str) 
         follow_every: registry::FOLLOW_EVERY,
         shown: registry::Shown {
             width: registry::terminal_width(),
-            details: arguments.set("--details"),
+            details: arguments.set("--details") || output::verbose(),
         },
     };
     published(&publish, platform, "release").await
@@ -3989,10 +3454,10 @@ mod tests {
     fn a_commands_help_is_its_own_flags() {
         // `meridian logs --help` printed the whole usage in 0.1.46.
         let logs = help_for("logs", &[]);
-        assert!(logs.starts_with("meridian logs\n"), "{logs}");
-        assert!(logs.contains("--previous            logs:"), "{logs}");
+        assert!(logs.contains("meridian logs <component>"), "{logs}");
+        assert!(logs.contains("--previous"), "{logs}");
         assert!(logs.contains("--since <span>"), "{logs}");
-        assert!(logs.contains("Both:"), "{logs}");
+        assert!(logs.contains("Common flags:"), "{logs}");
         assert!(!logs.contains("--first-run-code"), "{logs}");
         assert!(!logs.contains("meridian plugin logs"), "{logs}");
         let release = help_for("plugin", &["release".to_string()]);
@@ -4005,15 +3470,17 @@ mod tests {
         assert!(!release.contains("--first-run-code"), "{release}");
         let rollback = help_for("rollback-deployment", &[]);
         assert!(rollback.contains("--to-revision <n>"), "{rollback}");
-        let key = help_for("plugin", &["key".to_string()]);
+        let setup = help_for("plugin", &["key".to_string(), "setup".to_string()]);
         assert!(
-            key.contains("meridian plugin key setup") && key.contains("--hardware"),
-            "{key}"
+            setup.contains("meridian plugin key setup") && setup.contains("--hardware"),
+            "{setup}"
         );
+        let key = help_for("plugin", &["key".to_string(), "revoke".to_string()]);
+        assert!(key.contains("--not-trusted-after <time>"), "{key}");
         let gc = help_for("plugin", &["gc".to_string()]);
         assert!(gc.contains("meridian plugin gc"), "{gc}");
-        // A command it does not know: the whole usage.
-        assert_eq!(help_for("nonsense", &[]), super::USAGE);
+        // A command it does not know: the list of commands.
+        assert_eq!(help_for("nonsense", &[]), super::help::root());
     }
 
     #[test]
@@ -4022,7 +3489,10 @@ mod tests {
         // line until 0.1.63; now it points at the command's own help.
         assert_eq!(super::see("plugin gc"), "See `meridian plugin gc --help`.");
         assert_eq!(super::see(""), "See `meridian --help`.");
-        assert_eq!(super::named_command(&said("plugin launch p 1.0")), "plugin launch");
+        assert_eq!(
+            super::named_command(&said("plugin launch p 1.0")),
+            "plugin launch"
+        );
         assert_eq!(super::named_command(&said("up --no-docter")), "up");
         assert_eq!(super::named_command(&said("partition --x")), "partition");
         assert_eq!(super::named_command(&said("--nonsense")), "");
@@ -4136,7 +3606,7 @@ mod tests {
             "meridian plugin pack show <pack>",
             "meridian plugin pack update <pack> --note <why>",
             "meridian plugin pack remove <pack> --note <why>",
-            "--json                pack: the deployment's answer",
+            "--json",
         ] {
             assert!(help.contains(line), "{line}: {help}");
         }
@@ -4175,9 +3645,9 @@ mod tests {
         let help = help_for("partition", &["move".to_string()]);
         for line in [
             "meridian partition move <partition> --to-group <n> --reason <why>",
-            "--to-group <n>        partition move: the writer group",
-            "--no-wait             partition move: answer once it has begun",
-            "says when to ask again",
+            "--to-group <n>",
+            "--no-wait",
+            "answer once it has begun",
         ] {
             assert!(help.contains(line), "{line}: {help}");
         }
@@ -4190,8 +3660,9 @@ mod tests {
         );
         let help = help_for("partition", &[]);
         assert!(
-            help.contains("meridian partition split <partition> --reason <why>")
-                && help.contains("meridian partition move"),
+            help.contains("Usage: meridian partition <command>")
+                && help.contains("  split ")
+                && help.contains("  move "),
             "{help}"
         );
     }
@@ -4454,7 +3925,7 @@ mod tests {
         let help = help_for("up", &[]);
         assert!(
             help.contains("--shared-storage-class <class>")
-                && help.contains("(pluginStorage.shared.storageClassName)"),
+                && help.contains("pluginStorage.shared.storageClassName"),
             "{help}"
         );
     }

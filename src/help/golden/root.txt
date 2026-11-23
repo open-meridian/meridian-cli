@@ -1,0 +1,55 @@
+Usage: meridian <command> [flags]
+
+Deployment:
+  doctor               Check this machine and cluster can run a deployment
+  up                   Install a deployment and open its first-run wizard
+  down                 Uninstall a deployment
+  status               Show a deployment's health
+  logs                 Show what a component printed
+  upgrade-deployment   Move a deployment to a newer chart, in place
+  rollback-deployment  Return a deployment to an earlier revision
+  connect              Sign in to a deployment's dashboard
+  sign-out             Revoke this computer's sign-in to a deployment
+
+Plugin:
+  plugin install       Install a listed plugin or a starter pack
+  plugin pack          List, show, update or remove starter packs
+  plugin list          List the catalogue and what is launched
+  plugin launch        Run a plugin version as an instance
+  plugin stop          Stop a launched instance
+  plugin upload        Build a plugin and add it to the catalogue
+  plugin gc            Collect the plugin registry's garbage
+  plugin logs          Show what a live plugin printed
+  plugin events        Show what happened to a live plugin
+  plugin open          Open a plugin's page with a one-time link
+  plugin download      Download a verified plugin bundle
+
+Dev:
+  plugin new           Start a plugin from a template
+  plugin check         Check a plugin against the framework's rules
+  plugin migrate       Move a plugin to a newer SDK release
+  plugin dev           Run a plugin live on a development deployment
+  plugin publish       Ask the platform to build and list a release
+  plugin release       Sign, push and publish a plugin release
+  plugin key setup     Set up the key release tags are signed with
+  plugin key           Register, revoke or list tag-signing keys
+
+Data:
+  backup               Back the deployment up now
+  backup key           Make the identity backups are sealed to
+  restore              Restore a backup, or the database to a time
+  partition split      Halve a lake range at its midpoint
+  partition move       Move a partition to another writer group
+  account move         Continue an account in another book partition
+
+Self:
+  upgrade              Replace this binary with the latest release
+  uninstall            Revoke every sign-in and remove this binary
+  authority            Show this machine's certificate authority
+  authority trust      Trust that authority on this machine
+  authority remove     Take that authority off this machine
+  --version            Print which release this is
+
+Global flags: -q, --quiet  -v, --verbose  -h, --help
+Each command's flags: meridian <command> --help
+Docs: https://open-meridian.dev/api/cli/

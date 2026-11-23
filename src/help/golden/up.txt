@@ -1,0 +1,36 @@
+Install the chart, then open the deployment's first-run wizard.
+
+Usage:
+  meridian up --id <id> [flags]
+
+Flags:
+      --id <id>               this deployment's identifier, from the platform
+      --enrolment-code <c>    deprecated: set MERIDIAN_ENROLMENT_CODE instead
+  -p, --params <file>         answer the wizard from a file, not a browser
+      --first-run-code <c>    deprecated: set MERIDIAN_FIRST_RUN_CODE instead
+  -f, --values <file>         chart values, passed to Helm as they are; repeatable
+      --chart-version <v>     the chart version (default: the latest)
+      --archive <path>        where edge plugins' older records go, on the node
+      --no-archive            no archive: older records stay in each plugin's storage
+      --shared-storage-class <class>  deprecated: use pluginStorage.shared.storageClassName
+      --host <name>           the name it is reached at (default: meridian.localhost)
+      --no-ingress            reach it through a port-forward this command holds
+      --development           for development: plugins may run code as it is written
+
+Common flags:
+  -n, --namespace <name>      the deployment's namespace (default: meridian)
+      --timeout <d>           how long to wait (default: 10m)
+
+Advanced:
+      --port <n>              the port a port-forward uses (default: 8443)
+      --no-doctor             skip the checks
+      --chart <ref>           the chart (default: the published one)
+      --platform <url>        the platform (default: https://open-meridian.com)
+      --image <ref>           the runtime image (default: the published one)
+      --release <name>        the Helm release (default: meridian)
+
+Examples:
+  meridian up --id DEP-01ABC
+  meridian up --id DEP-01ABC -p first-run.yaml --no-archive
+
+Docs: https://open-meridian.dev/api/cli/#meridian-up
