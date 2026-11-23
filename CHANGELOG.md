@@ -69,10 +69,19 @@ an older one each says so and changes nothing.
   anything: each covers only a store's first database, and says which databases it would leave
   out. A backup taken where a store ran more than one database is refused at restore the same way.
 
+### Changed
+
+- `meridian upgrade-deployment` refuses a client-side merge over a launched plugins' Secret Helm once
+  applied server-side, while plugins hold credentials, naming the plugins to stop first. (#30)
+- `meridian upgrade-deployment` refuses, with nothing changed, when it can't read how Helm last applied
+  the release or who manages the launched plugins' Secret. (#30)
+
 ### Fixed
 
 - `meridian rollback-deployment` refuses a rollback that would put back a launched plugin's old
   credential or remove a live one, and names the plugins to stop first. (#29)
+- `meridian upgrade-deployment` on Helm 4 no longer fails on a release Helm 3 installed: it passes
+  `--force-conflicts` only where Helm last applied server-side. (#30)
 
 ### Security
 

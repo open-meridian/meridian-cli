@@ -1251,8 +1251,9 @@ pub struct Plan {
     /// The database moved under Patroni, in two upgrades this one approval
     /// covers, or the second of them alone.
     pub patroni_move: Option<PatroniMove>,
-    /// `--force-conflicts`, with Helm 4's server-side apply: the chart's
-    /// counts over a scale another manager made.
+    /// `--force-conflicts`, where Helm 4 applies on the server (the release
+    /// was last applied so): the chart's counts over a scale another manager
+    /// made.
     pub force_conflicts: bool,
     /// Each store whose writer groups the upgrade raises, from what runs to
     /// what it sets: a return to the revision it was at would lower them.
@@ -1743,6 +1744,121 @@ const INSTANCE: &str = "meridian.dev/instance";
 const LIVE: &str = "meridian.dev/live";
 const COMPONENT: &str = "meridian.dev/component";
 const RELEASE: &str = "app.kubernetes.io/instance";
+
+/// Whether Helm applied a revision on the server, from what Helm 4's `helm
+/// get metadata -o json` says of it: `applyMethod` is `ssa` there, and `csa`
+/// or not said where it merged on the client (a revision Helm 3 made says
+/// nothing). Anything that is not that document is an error, never a
+/// guess; nothing of the answer is repeated in it.
+pub fn applied_on_server(metadata: &str) -> Result<bool, String> {
+    let unread = || "`helm get metadata` did not answer in its JSON".to_string();
+    let metadata: serde_json::Value = serde_json::from_str(metadata).map_err(|_| unread())?;
+    match (metadata.as_object(), &metadata["applyMethod"]) {
+        (Some(_), serde_json::Value::Null) => Ok(false),
+        (Some(_), serde_json::Value::String(method)) => Ok(method == "ssa"),
+        _ => Err(unread()),
+    }
+}
+
+/// The instances of the launched plugins among the release's workloads, as
+/// listed: each has a Deployment the launcher made, and the broker keeps a
+/// credential for each while that Deployment is there. None where the list
+/// is not one.
+pub fn launched_instances(workloads: &serde_json::Value) -> Option<Vec<String>> {
+    let mut instances: Vec<String> = workloads["items"]
+        .as_array()?
+        .iter()
+        .filter(|workload| workload["kind"] == "Deployment")
+        .filter(|workload| workload["metadata"]["labels"][LAUNCHED] == "true")
+        .filter_map(|workload| workload["metadata"]["labels"][INSTANCE].as_str())
+        .map(String::from)
+        .collect();
+    instances.sort();
+    instances.dedup();
+    Some(instances)
+}
+
+/// The Secret the broker keeps launched plugins' credentials in, by the end
+/// of its name: `<release>-meridian-runtime-broker-launched`.
+const LAUNCHED_SECRET: &str = "-launched";
+
+/// One manager's entry in a Secret's managed fields.
+#[derive(serde::Deserialize)]
+struct ManagedFields {
+    #[serde(default)]
+    operation: String,
+    #[serde(default, rename = "fieldsV1")]
+    fields: serde_json::Value,
+}
+
+/// Whether Helm ever applied the launched plugins' Secret on the server,
+/// from the release's Secrets as kubectl lists them for this: one line
+/// each, its name, a tab, and its managed fields as JSON. A server-side
+/// apply leaves an `Apply` entry there, and Helm's owns the annotation that
+/// names the release; a client-side merge never leaves one. Nothing a Secret
+/// holds is asked for. Anything that is not that list is an error, never a
+/// guess; nothing of the answer is repeated in it.
+pub fn launched_secret_applied_on_server(secrets: &str) -> Result<bool, String> {
+    let unread = || "`kubectl get secrets` did not answer as it was asked to".to_string();
+    let mut applied = false;
+    for line in secrets.lines().filter(|line| !line.trim().is_empty()) {
+        let (name, managed) = line.split_once('\t').ok_or_else(unread)?;
+        let managed: Vec<ManagedFields> = match managed.trim() {
+            "" => Vec::new(),
+            managed => serde_json::from_str(managed).map_err(|_| unread())?,
+        };
+        applied |= name.ends_with(LAUNCHED_SECRET)
+            && managed.iter().any(|managed| {
+                managed.operation == "Apply"
+                    && !managed.fields["f:metadata"]["f:annotations"]["f:meta.helm.sh/release-name"]
+                        .is_null()
+            });
+    }
+    Ok(applied)
+}
+
+/// The refusal of an upgrade Helm would merge on the client over a launched
+/// plugins' Secret it once applied on the server, while launched plugins
+/// hold a credential (`launched`; None where they could not be listed). The
+/// chart leaves the launched plugins' credentials to the broker once Helm
+/// has applied their Secret on the server, and a client-side merge then
+/// takes out the keys the last manifest stated.
+pub fn client_side_after_server_side(release: &str, launched: Option<&[String]>) -> Finding {
+    let before = format!(
+        "Helm would merge this upgrade on the client, and the Secret that keeps {release}'s \
+         launched plugins' credentials was applied on the server before"
+    );
+    let why = "A merge on the client over a Secret once applied on the server can take the \
+               launched plugins' credentials away under them.";
+    let Some(launched) = launched else {
+        return Finding::Stops {
+            what: format!("{before}, and which plugins are launched could not be listed"),
+            fix: format!(
+                "{why} Stop the launched plugins, upgrade, and launch them again (a stopped \
+                 plugin has no credential to lose): `meridian plugin stop <instance>`."
+            ),
+        };
+    };
+    let (hold, them) = match launched.len() {
+        1 => ("1 launched plugin holds".to_string(), "it"),
+        n => (format!("{n} launched plugins hold"), "them"),
+    };
+    let stops = launched
+        .iter()
+        .map(|instance| format!("  meridian plugin stop {instance}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Finding::Stops {
+        what: format!(
+            "{before}, while {hold} a credential: {}",
+            launched.join(", ")
+        ),
+        fix: format!(
+            "{why} Stop {them}, upgrade, and launch {them} again (a stopped plugin has no \
+             credential to lose):\n{stops}"
+        ),
+    }
+}
 
 /// A launched plugin to relaunch: on a sidecar that is not the deployment's,
 /// or launched while an upgrade rolled out.
