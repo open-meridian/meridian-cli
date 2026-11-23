@@ -209,8 +209,7 @@ it; `meridian authority trust` asks again; `meridian authority remove`, and
 `meridian uninstall`, undo all of it: the keychain entry, the LaunchAgent,
 `NODE_EXTRA_CA_CERTS` put back as it was, and the root and its key.
 
-`--plain-http` serves plain HTTP and makes no certificate: it is for the
-cluster tests, and nothing else. `--host` names another name: under
+`--host` names another name: under
 `.localhost` it is served as above, and any other name — your firm's — is
 reached over HTTPS, with the Secrets holding its certificates named in a
 values file:
@@ -264,8 +263,8 @@ refused rather than one quietly dropped. `upgrade-deployment` keeps it.
 standby pod, shares one claim between its pods, each shard writing its own
 folder of it. On several nodes that takes a ReadWriteMany storage class -- a
 cloud's file store, CephFS, NFS, Longhorn's RWX -- which
-`--shared-storage-class <class>` names, the chart's
-`pluginStorage.shared.storageClassName` (its size is
+a values file names as the chart's
+`pluginStorage.shared.storageClassName` (`--shared-storage-class` is deprecated; its size is
 `pluginStorage.shared.size`, 10Gi by default). Without one, such a plugin runs
 as one pod there, and a launch asking for more is refused in the deployment's
 own words; a deployment on one node needs none. A class the cluster does not
@@ -937,7 +936,7 @@ version pyproject.toml holds, or that is not signed with an SSH key
 (`git -c gpg.format=ssh tag -s v0.18.0`); then it asks the platform to build
 the tag, with a token good for that plugin alone, and follows the build until
 it is listed, queued for review, or refused: one line a check, cut to the
-terminal's width (`--details` prints each check's full text), the build's log,
+terminal's width (`-v` prints each check's full text), the build's log,
 and the listing's address once it is listed. It builds, signs and pushes
 nothing. Its push token is held while the build is followed, and narrowed
 again only within a minute of its end; where the platform will not narrow the
@@ -996,7 +995,8 @@ half-way leaves it read-only, says so, and the next run finishes.
 ## status and logs
 
 ```
-meridian status                 # the release, each component and plugin, the book's health
+meridian status                 # a line a part when healthy; what is not, with its fix
+meridian status --wide          # every image, pod and member probe
 meridian status --json
 meridian logs bor --since 10m
 meridian logs bor --previous    # what it printed before its last restart
@@ -1004,19 +1004,12 @@ meridian logs migrate           # the newest migration Job's log
 meridian logs snaptrade         # a plugin, by its instance
 ```
 
-`status` says the release first -- its revision, state, chart and app version,
-and Helm's own words for why where it is not `deployed`, with the
-`rollback-deployment` that recovers it -- then each of the deployment's
-components and, under Plugins, each plugin instance by its name: its image (a
-plugin's own), how many of its pods are ready, how often they restarted and
-why the last time (`OOMKilled`), and each pod's memory against the limit each
-pod has, where the cluster serves metrics. Its book health says, per account,
-how many journal entries the book replays since the account's last snapshot,
-and when that was taken. It also shows the database's members, its page
-checksums, `full_page_writes`, WAL archiver and internal TLS, each store
-member's mode and lag, and, while a restore or `--enable-checksums` has the
-deployment stopped, which and the command that resumes it; `--json` adds
-these as new keys. `doctor` says where the database has page checksums or
+`status` prints a line for each part when it is healthy: the release, the
+components, the database, the store members, the plugins and the book. Anything
+unhealthy gets its own line with the command that reads why or fixes it: a
+component not ready or restarted, a release not `deployed`, a database member
+behind, an integrity finding, a stopped deployment. `--wide` adds each image,
+pod, pod's memory and member probe; `--json` has everything. `doctor` says where the database has page checksums or
 `full_page_writes` off. `logs` prints what a component's pods printed: core's
 components, a plugin by its instance, and the release's Jobs (`migrate`, `key`,
 `first-run`, `backup`), the newest run of each; `--previous` prints what each
@@ -1025,7 +1018,7 @@ through kubectl and the release through helm, and book health is the
 deployment's own answer (core's `ReadBookHealthFromTerminal`, on the session
 `meridian connect` keeps); nothing is changed, and a deployment admin never
 runs kubectl or helm by hand. `meridian <command> --help` prints that
-command's own flags.
+command's own flags; `-q` drops progress lines and `-v` adds detail.
 
 ## Moving partitions and accounts
 

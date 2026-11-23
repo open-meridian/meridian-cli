@@ -3,6 +3,6 @@
 src/backup.rs	2937
 src/check/rules.rs	4854
 src/check/tests.rs	4877
-src/main.rs	4383
+src/main.rs	3938
 src/upgrade_deployment.rs	2057
 src/upgrade_deployment/tests.rs	3122

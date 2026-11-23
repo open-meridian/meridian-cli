@@ -20,6 +20,10 @@ size_exempt = [
   "plugin-template/*", "plugin-templates/*", "sdk-roles/*",
 ]
 
+# The output budget: root help, flag lines, `up` and `status` on a healthy
+# install, and refusals printing a whole usage, measured by src/budget.rs.
+output_baseline = "src/budget/baseline.tsv"
+
 # S10: the scaffolds `plugin new` writes, and the SDK modules they are held
 # to, ship in plugins under Apache-2.0; the CLI itself is AGPL-3.0-or-later.
 licence_scan = ["plugin-template/*", "plugin-templates/*", "sdk-roles/*"]

@@ -786,8 +786,9 @@ fn restarts_said(c: &Component) -> String {
     }
 }
 
-/// The release, as a line, and Helm's words where it is not deployed.
-fn release_said(release: &Result<Release, String>, namespace: &str) -> String {
+/// The release, as a line, and Helm's words where it is not deployed; when
+/// it was updated only when wide.
+fn release_said(release: &Result<Release, String>, namespace: &str, wide: bool) -> String {
     match release {
         Err(why) => format!("Release: not read: {why}\n"),
         Ok(r) => {
@@ -802,7 +803,7 @@ fn release_said(release: &Result<Release, String>, namespace: &str) -> String {
                 } else {
                     format!(" (app {})", r.app_version)
                 },
-                if r.updated.is_empty() {
+                if r.updated.is_empty() || !wide {
                     String::new()
                 } else {
                     format!(", updated {}", r.updated)
@@ -827,9 +828,141 @@ fn release_said(release: &Result<Release, String>, namespace: &str) -> String {
     }
 }
 
-/// The status, for a person to read.
-pub fn said(status: &Status, now_ns: u64, namespace: &str) -> String {
-    let mut out = release_said(&status.release, namespace);
+/// Why book health was not read, where no deployment is connected.
+pub const NOT_CONNECTED: &str =
+    "run `meridian connect` first (with its address if on another machine)";
+
+/// The widest line the compact status prints.
+pub const WIDTH: usize = 100;
+
+/// A component worth a line of its own: not all ready, restarted, or its
+/// busiest pod at 90% of its limit or more.
+fn unwell(c: &Component) -> bool {
+    let near_limit = match (c.memory, c.limit) {
+        (Some(used), Some(limit)) if limit > 0 => used * 10 >= limit * 9,
+        _ => false,
+    };
+    c.ready < c.wanted || c.restarts > 0 || near_limit
+}
+
+/// The command that reads why a component is unwell.
+fn logs_for(name: &str, c: &Component, scope: &str) -> String {
+    format!(
+        "`meridian logs {name}{}{}`",
+        if c.restarts > 0 { " --previous" } else { "" },
+        match scope.is_empty() {
+            true => String::new(),
+            false => format!(" {scope}"),
+        }
+    )
+}
+
+/// A line wider than [`WIDTH`] carried on to the next, indented.
+pub fn wrapped(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        let indent = line.len() - line.trim_start().len();
+        let mut rest = line.to_string();
+        while rest.chars().count() > WIDTH {
+            let cut = rest
+                .char_indices()
+                .take_while(|(i, _)| *i <= WIDTH)
+                .filter(|(i, c)| *c == ' ' && *i > indent + 4)
+                .map(|(i, _)| i)
+                .last();
+            let Some(cut) = cut else { break };
+            out.push_str(&rest[..cut]);
+            out.push('\n');
+            rest = format!("{}{}", " ".repeat(indent + 4), rest[cut..].trim_start());
+        }
+        out.push_str(&rest);
+        out.push('\n');
+    }
+    out
+}
+
+/// The status, for a person to read: a line a part when healthy, and each
+/// thing that is not with the command that reads why. `--wide` says it all.
+pub fn said(status: &Status, namespace: &str) -> String {
+    let mut out = release_said(&status.release, namespace, false);
+    out.push_str(&resilience::stopped_said(&status.resilience));
+    let scope = status.resilience.scope.as_str();
+    let ready = status
+        .components
+        .iter()
+        .filter(|c| c.ready >= c.wanted)
+        .count();
+    let restarts: u64 = status.components.iter().map(|c| c.restarts).sum();
+    out.push_str(&format!(
+        "Components: {ready} of {} ready, {}\n",
+        status.components.len(),
+        match restarts {
+            0 => "no restarts".to_string(),
+            n => format!("{n} restart(s)"),
+        }
+    ));
+    for c in status.components.iter().filter(|c| unwell(c)) {
+        out.push_str(&format!(
+            "  {}  {}/{} ready, {}, {}: {}\n",
+            c.name,
+            c.ready,
+            c.wanted,
+            restarts_said(c),
+            memory_said(c),
+            logs_for(&c.name, c, scope)
+        ));
+    }
+    out.push_str(&resilience::compact(&status.resilience, namespace));
+    let named = |c: &Component| c.instance.clone().unwrap_or_else(|| "(unnamed)".into());
+    match status.plugins.len() {
+        0 => out.push_str("Plugins: none running; `meridian plugin list` shows the catalogue\n"),
+        n => out.push_str(&format!(
+            "Plugins: {n} running, {} ready\n",
+            status
+                .plugins
+                .iter()
+                .filter(|c| c.ready >= c.wanted)
+                .count()
+        )),
+    }
+    for c in status.plugins.iter().filter(|c| unwell(c)) {
+        let name = named(c);
+        out.push_str(&format!(
+            "  {name}  {}/{} ready, {}, {}: {}\n",
+            c.ready,
+            c.wanted,
+            restarts_said(c),
+            memory_said(c),
+            logs_for(&name, c, scope)
+        ));
+    }
+    match &status.accounts {
+        Err(why) => out.push_str(&format!("Book health: not read; {why}\n")),
+        Ok(accounts) if accounts.is_empty() => {
+            out.push_str("Book health: no account has a journal yet\n")
+        }
+        Ok(accounts) => {
+            let longest = accounts.iter().max_by_key(|a| a.replay);
+            out.push_str(&format!(
+                "Book health: {} account(s){}\n",
+                accounts.len(),
+                longest
+                    .map(|a| format!(
+                        ", the longest replay {} entries ({})",
+                        a.replay, a.account_id
+                    ))
+                    .unwrap_or_default()
+            ));
+        }
+    }
+    out.push_str("Images, pods and each member's probe: `meridian status --wide`\n");
+    wrapped(&out)
+}
+
+/// The status, all of it: each component's image and memory, each pod and
+/// each store member's probe.
+pub fn said_wide(status: &Status, now_ns: u64, namespace: &str) -> String {
+    let mut out = release_said(&status.release, namespace, true);
     out.push_str(&resilience::stopped_said(&status.resilience));
     let width = status
         .components
@@ -1177,4 +1310,4 @@ pub async fn logs(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

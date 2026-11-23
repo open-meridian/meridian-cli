@@ -211,7 +211,7 @@ async fn without_metrics_it_says_so_and_book_health_not_read_says_why() {
     let mut held = status(&fake, &asked()).await.unwrap();
     assert!(held.components.iter().all(|c| c.memory.is_none()));
     held.accounts = Err("not connected to a deployment: `meridian connect` first".into());
-    let said = said(&held, 0, "meridian");
+    let said = said_wide(&held, 0, "meridian");
     assert!(
         said.contains("memory in use is not known: the cluster serves no metrics"),
         "{said}"
@@ -245,7 +245,7 @@ async fn each_plugin_is_its_own_line_by_its_instance_with_its_own_pods_memory() 
     assert_eq!(held.plugins[0].memory, Some(9 * 1024 * 1024));
     assert_eq!(held.plugins[1].memory, Some(7 * 1024 * 1024));
     assert_eq!(held.plugins[0].limit, Some(256 * 1024 * 1024));
-    let said = said(&held, 0, "meridian");
+    let said = said_wide(&held, 0, "meridian");
     assert!(said.contains("Plugins:\n  snaptrade  1/1 ready  no restarts  memory 9 MiB of 256 MiB (3%)  localhost:5000/plugins/open-meridian/snaptrade@sha256:915f\n"), "{said}");
     assert!(said.contains("  tiingo     1/1 ready  no restarts  memory 7 MiB of 256 MiB (2%)  localhost:5000/plugins/tiingo@sha256:aa01\n"), "{said}");
     // Two replicas: each pod's own, against the limit each has.
@@ -265,7 +265,7 @@ async fn each_plugin_is_its_own_line_by_its_instance_with_its_own_pods_memory() 
 #[tokio::test]
 async fn the_release_is_said_and_helms_words_where_it_is_not_deployed() {
     let held = status(&Fake::new(), &asked()).await.unwrap();
-    let said = said(&held, 0, "meridian");
+    let said = said_wide(&held, 0, "meridian");
     assert!(said.starts_with("Release: meridian revision 12, deployed, chart meridian-runtime-0.1.307 (app 15f6b22), updated 2026-10-17T17:03:12Z\n"), "{said}");
     assert!(!said.contains("Helm says"));
     assert_eq!(json_of(&held)["release"]["revision"], 12);
@@ -275,7 +275,7 @@ async fn the_release_is_said_and_helms_words_where_it_is_not_deployed() {
             "app_version": "77aa", "updated": "", "description": "Upgrade \"meridian\" failed: context deadline exceeded"}]"#.into()),
         ..Fake::new()
     };
-    let said = super::said(&status(&failed, &asked()).await.unwrap(), 0, "meridian");
+    let said = super::said_wide(&status(&failed, &asked()).await.unwrap(), 0, "meridian");
     assert!(
         said.contains(
             "Release: meridian revision 13, failed, chart meridian-runtime-0.1.308 (app 77aa)\n"
@@ -295,7 +295,7 @@ async fn the_release_is_said_and_helms_words_where_it_is_not_deployed() {
         history: Err("helm is not installed here".into()),
         ..Fake::new()
     };
-    let said = super::said(&status(&unread, &asked()).await.unwrap(), 0, "meridian");
+    let said = super::said_wide(&status(&unread, &asked()).await.unwrap(), 0, "meridian");
     assert!(
         said.starts_with("Release: not read: helm is not installed here\n"),
         "{said}"
@@ -457,7 +457,7 @@ async fn status_says_each_component_and_the_books_health() {
     assert_eq!(bor.last_reason, "OOMKilled");
     assert_eq!(bor.memory, Some(429_496_320));
     assert_eq!(bor.limit, Some(536_870_912));
-    let said = said(&held, 1_792_195_200_000_000_000, "meridian");
+    let said = said_wide(&held, 1_792_195_200_000_000_000, "meridian");
     assert!(said.contains("bor        1/1 ready  3 restart(s), the last OOMKilled at 2026-10-15T09:12:00Z  memory 410 MiB of 512 MiB (79%)  ghcr.io/open-meridian/meridian-runtime@sha256:6eb6"), "{said}");
     assert!(said.contains("ACC-01SNAP   replays 1200 of its 23114 entries, since its snapshot of 2026-10-16T00:00:00Z (24h ago)"), "{said}");
     assert!(
@@ -636,7 +636,7 @@ async fn memory_is_each_pods_working_set_from_its_nodes_cadvisor() {
     assert_eq!(held.memory_note, None);
     assert_eq!(held.components[0].memory, Some(300 * 1024 * 1024));
     assert_eq!(held.plugins[0].memory, Some(5 * 1024 * 1024));
-    let said = said(&held, 0, "meridian");
+    let said = said_wide(&held, 0, "meridian");
     assert!(said.contains("memory 300 MiB of 512 MiB (58%)"), "{said}");
     assert!(
         said.contains("memory 60 MiB, 50 MiB of 256 MiB each"),
@@ -675,7 +675,7 @@ async fn where_a_nodes_cadvisor_is_refused_the_metrics_apis_figure_is_said_as_th
         Some(429_496_320),
         "the metrics API's, every pod's"
     );
-    let said = said(&held, 0, "meridian");
+    let said = said_wide(&held, 0, "meridian");
     assert!(
         said.contains(
             "(memory is the metrics API's figure, which some container runtimes give with the \
@@ -714,7 +714,7 @@ async fn a_sharded_plugin_wants_its_shards_ready_and_its_other_pods_stand_by() {
 
     let mut held = status(&Fake::new(), &asked()).await.unwrap();
     held.plugins = found;
-    let said = said(&held, 0, "meridian");
+    let said = said_wide(&held, 0, "meridian");
     assert!(
         said.contains("  tiingo     2/2 ready, 1 standby  no restarts"),
         "{said}"
@@ -727,4 +727,167 @@ async fn a_sharded_plugin_wants_its_shards_ready_and_its_other_pods_stand_by() {
     assert_eq!(json["plugins"][2]["wanted"], 2);
     assert_eq!(json["plugins"][2]["standbys"], 1);
     assert_eq!(json["plugins"][0]["standbys"], 0);
+}
+
+/// A healthy deployment as `up` leaves one: twelve components, the database
+/// it brought, six store members, no plugin, not connected.
+pub(crate) fn healthy() -> Status {
+    let component = |name: &str| Component {
+        name: name.into(),
+        kind: "Deployment".into(),
+        images: vec![format!("ghcr.io/open-meridian/meridian-runtime:4859c49")],
+        ready: 1,
+        wanted: 1,
+        standbys: 0,
+        restarts: 0,
+        last_reason: String::new(),
+        last_at: String::new(),
+        memory: Some(16 * 1024 * 1024),
+        limit: Some(256 * 1024 * 1024),
+        pods: vec![(
+            format!("meridian-{name}-7796799698-ljr6d"),
+            Some(16 * 1024 * 1024),
+        )],
+        instance: None,
+        plugin_image: None,
+        launched: false,
+    };
+    let names = [
+        "analytics-coordinator",
+        "analytics-worker",
+        "bor",
+        "broker",
+        "conductor",
+        "dashboard",
+        "database",
+        "instrument",
+        "lake",
+        "launcher",
+        "registry",
+        "street",
+    ];
+    let path = serde_json::json!({
+        "ok": true, "data_checksums": "on", "full_page_writes": "on",
+        "integrity": {"findings": [], "checked": 0},
+    });
+    let probe = |component: &str| resilience::Probed {
+        component: component.into(),
+        pod: format!("meridian-meridian-runtime-{component}-7796799698-ljr6d"),
+        member: serde_json::json!({"mode": "writer", "ready": true, "lag_ms": 0,
+            "partitions": ["control"]}),
+        database: Some(path.clone()),
+        unread: None,
+    };
+    Status {
+        release: Ok(Release {
+            name: "meridian".into(),
+            revision: 1,
+            status: "deployed".into(),
+            chart: "meridian-runtime-0.1.655".into(),
+            app_version: "4859c49".into(),
+            updated: "2026-11-22T23:52:57.448486-05:00".into(),
+            description: String::new(),
+        }),
+        components: names.iter().map(|n| component(n)).collect(),
+        plugins: vec![],
+        memory_read: Some(MemoryRead::Cadvisor),
+        memory_note: None,
+        accounts: Err(NOT_CONNECTED.into()),
+        resilience: resilience::Resilience {
+            database: Some(resilience::Database {
+                set: crate::upgrade_deployment::DatabaseSet {
+                    name: "meridian-meridian-runtime-database".into(),
+                    replicas: 1,
+                    patroni: false,
+                    archive: false,
+                    tls: false,
+                },
+                members: vec![crate::offline::Member {
+                    name: "meridian-meridian-runtime-database-0".into(),
+                    role: None,
+                    ready: true,
+                    node: None,
+                    terminating: false,
+                }],
+                behind: BTreeMap::new(),
+                waiting_for_node: BTreeMap::new(),
+            }),
+            probes: [
+                "bor",
+                "conductor",
+                "instrument",
+                "lake",
+                "launcher",
+                "street",
+            ]
+            .iter()
+            .map(|c| probe(c))
+            .collect(),
+            replicas: None,
+            internal_tls: false,
+            stopped: None,
+            scope: String::new(),
+        },
+    }
+}
+
+#[test]
+fn a_healthy_status_is_a_line_a_part() {
+    let said = said(&healthy(), "meridian");
+    assert_eq!(
+        said,
+        "Release: meridian revision 1, deployed, chart meridian-runtime-0.1.655 (app 4859c49)\n\
+         Components: 12 of 12 ready, no restarts\n\
+         Database: 1 of 1 member(s) ready, page checksums on, WAL archive off, internal TLS off\n\
+         Members: 6 of 6 ready, lag at most 0 ms, no integrity findings\n\
+         Plugins: none running; `meridian plugin list` shows the catalogue\n\
+         Book health: not read; run `meridian connect` first (with its address if on another \
+         machine)\n\
+         Images, pods and each member's probe: `meridian status --wide`\n"
+    );
+    assert!(said.lines().count() <= 20);
+    assert!(
+        said.lines().all(|line| line.chars().count() <= WIDTH),
+        "{said}"
+    );
+    // The wide view still says every image, pod and probe.
+    let wide = said_wide(&healthy(), 0, "meridian");
+    assert!(
+        wide.contains("ghcr.io/open-meridian/meridian-runtime:4859c49"),
+        "{wide}"
+    );
+    assert!(
+        wide.contains("meridian-meridian-runtime-bor-7796799698-ljr6d"),
+        "{wide}"
+    );
+}
+
+#[test]
+fn whatever_is_unhealthy_expands_with_the_command_that_reads_why() {
+    let mut held = healthy();
+    held.components[2].ready = 0;
+    held.components[3].restarts = 2;
+    held.components[3].last_reason = "OOMKilled".into();
+    held.components[3].last_at = "2026-11-22T23:59:00Z".into();
+    held.resilience.probes[1].member["ready"] = serde_json::json!(false);
+    held.resilience.scope = "-n firm".into();
+    let said = said(&held, "firm");
+    assert!(
+        said.contains("Components: 11 of 12 ready, 2 restart(s)\n"),
+        "{said}"
+    );
+    assert!(said.contains("  bor  0/1 ready, no restarts, memory 16 MiB of 256 MiB (6%): `meridian logs bor -n firm`\n"), "{said}");
+    assert!(
+        said.contains("`meridian logs broker --previous -n firm`"),
+        "{said}"
+    );
+    assert!(said.contains("Members: 5 of 6 ready"), "{said}");
+    assert!(
+        said.contains("  conductor: not ready: `meridian logs conductor -n firm`\n"),
+        "{said}"
+    );
+    assert!(
+        said.lines().all(|line| line.chars().count() <= WIDTH),
+        "{said}"
+    );
 }

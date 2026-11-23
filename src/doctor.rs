@@ -158,6 +158,34 @@ pub fn verdict(findings: &[Finding]) -> (String, i32) {
     (said, 1)
 }
 
+/// `up`'s account of the checks: the ones that passed as a count, and every
+/// other finding in full. `meridian doctor` and `up -v` say each check.
+pub fn brief(findings: &[Finding]) -> (String, i32) {
+    let mut said = String::new();
+    let passed = findings
+        .iter()
+        .filter(|finding| matches!(finding, Finding::Fine(_)))
+        .count();
+    for finding in findings.iter().filter(|f| !matches!(f, Finding::Fine(_))) {
+        said.push_str(&format!("{finding}\n"));
+    }
+    let stopping = findings.iter().filter(|finding| finding.stops()).count();
+    match stopping {
+        0 => {
+            said.push_str(&format!(
+                "doctor: {passed} checks passed, nothing would stop an install\n"
+            ));
+            (said, 0)
+        }
+        _ => {
+            said.push_str(&format!(
+                "doctor: {passed} checks passed, {stopping} would stop an install, each with its fix above\n"
+            ));
+            (said, 1)
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "doctor/tests.rs"]
 mod tests;

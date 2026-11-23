@@ -911,3 +911,32 @@ async fn no_deployment_or_one_older_than_the_probe_says_nothing_and_asks_it_noth
     let machine = Fake::default().running(CONDUCTORS, Ok(&conductor(false)));
     assert!(checks::database(&machine, "meridian").await.is_empty());
 }
+
+#[test]
+fn ups_account_counts_what_passed_and_says_the_rest() {
+    let fine = |what: &str| Finding::Fine(what.into());
+    let (said, code) = brief(&[fine("a"), fine("b"), fine("c")]);
+    assert_eq!(
+        said,
+        "doctor: 3 checks passed, nothing would stop an install\n"
+    );
+    assert_eq!(code, 0);
+    let (said, code) = brief(&[
+        fine("a"),
+        Finding::Worth {
+            what: "w".into(),
+            why: "y".into(),
+        },
+        Finding::Stops {
+            what: "s".into(),
+            fix: "f".into(),
+        },
+    ]);
+    assert_eq!(code, 1);
+    assert!(
+        said.contains("  worth    w\n") && said.contains("  stops    s\n"),
+        "{said}"
+    );
+    assert!(said
+        .ends_with("doctor: 1 checks passed, 1 would stop an install, each with its fix above\n"));
+}
