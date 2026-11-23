@@ -6,6 +6,8 @@
 
 mod authority;
 mod backup;
+#[cfg(test)]
+mod budget;
 mod bundle;
 mod catalogue;
 mod check;

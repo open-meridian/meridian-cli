@@ -786,6 +786,8 @@ def check_baselines(root: Path, cfg: dict, base: str) -> list[str]:
             files.append(cfg[key])
     if cfg.get("shellouts"):
         files.append(cfg["shellouts"]["kinds"])
+    if cfg.get("output_baseline"):
+        files.append(cfg["output_baseline"])
     if not git(root, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"):
         return [f"the base {base} is not a commit here, so what changed cannot be read: fetch it"]
     changed = set(git(root, "diff", "--name-only", f"{base}...HEAD").split())
@@ -818,6 +820,17 @@ def check_baselines(root: Path, cfg: dict, base: str) -> list[str]:
         for path, lines in read_size_baseline(root, cfg).items():
             if lines > old.get(path, 0):
                 failures.append(f"S2: {cfg['size_baseline']} raises {path} to {lines}; it only goes down")
+    # The output budget (src/budget.rs measures it): each figure only goes down.
+    at = cfg.get("output_baseline")
+    was = git(root, "show", f"{base}:{at}") if at in watched else ""
+    if was:
+        def figures(text: str) -> dict[str, int]:
+            return {l.split("\t")[0]: int(l.split("\t")[1]) for l in text.splitlines()
+                    if l.strip() and not l.startswith("#")}
+        old, new = figures(was), figures(text_of(root, at) or "")
+        for name, figure in new.items():
+            if name in old and figure > old[name]:
+                failures.append(f"output: {at} raises {name} to {figure}; it only goes down")
     for place, was, now in moved_interims(root, cfg, base):
         if not any(f"INTERIM({was})" in line for line in trailers):
             failures.append(f"S4: {place}: INTERIM({was}) moved to INTERIM({now}) with no "
@@ -979,6 +992,20 @@ def self_test() -> int:
                         "grow\n\nBaseline-Change: grew"], check=True)
         expect("S2: a baseline entry may not rise, trailer or not",
                any("raises src/big.py to 1800" in f for f in check_baselines(root, cfg_new, "HEAD~1")))
+        cfg_out = dict(cfg, output_baseline="tools/output.tsv")
+        write("tools/output.tsv", "root_help_lines\t50\n")
+        subprocess.run(["git", *env, "-C", str(root), "commit", "-qm",
+                        "budget\n\nBaseline-Change: today's figures"], check=True)
+        write("tools/output.tsv", "root_help_lines\t55\n")
+        subprocess.run(["git", *env, "-C", str(root), "commit", "-qm",
+                        "longer\n\nBaseline-Change: longer help"], check=True)
+        expect("output: a figure of the output budget may not rise, trailer or not",
+               any("raises root_help_lines to 55" in f for f in check_baselines(root, cfg_out, "HEAD~1")))
+        write("tools/output.tsv", "root_help_lines\t45\n")
+        subprocess.run(["git", *env, "-C", str(root), "commit", "-qm",
+                        "shorter\n\nBaseline-Change: shorter help"], check=True)
+        expect("output: a figure of the output budget may go down",
+               check_baselines(root, cfg_out, "HEAD~1") == [])
         write("tools/kinds.tsv", "kubectl get pods\tthe pods' state\nhelm list\t\nhelm history\twhy\n")
         subprocess.run(["git", *env, "-C", str(root), "commit", "-qm", "add a kind"], check=True)
         found = check_baselines(root, cfg, "HEAD~1")

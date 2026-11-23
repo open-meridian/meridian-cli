@@ -1,0 +1,9 @@
+# The output budget (src/budget.rs measures each figure): only goes down, and a change carries a
+# `Baseline-Change:` trailer. Over a figure warns in 0.1.63 and fails from 0.1.64.
+root_help_lines	55
+root_help_width	74
+flag_line_words	14
+up_healthy_lines	10
+status_healthy_lines	8
+status_healthy_width	99
+whole_usage_error_sites	0
