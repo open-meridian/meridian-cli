@@ -320,7 +320,7 @@ async fn main() {
 
     match arguments.command.as_str() {
         "doctor" => {
-            let (said, code) = examined(&arguments, &intended).await;
+            let (said, code) = examined(&arguments, &intended, false).await;
             print!("{said}");
             std::process::exit(code);
         }
@@ -3306,7 +3306,7 @@ fn authority_command(arguments: &Arguments) -> i32 {
     }
 }
 
-async fn examined(arguments: &Arguments, intended: &Intended) -> (String, i32) {
+async fn examined(arguments: &Arguments, intended: &Intended, brief: bool) -> (String, i32) {
     // The Resilience read's history, for each plugin shard's epoch and last
     // takeover (step 3d, item 32): through the session `meridian connect`
     // keeps, asked only where a plugin runs sharded or with a standby pod.
@@ -3315,7 +3315,10 @@ async fn examined(arguments: &Arguments, intended: &Intended) -> (String, i32) {
         Err(why) => Box::new(doctor::shards::NoHistory(why)),
     };
     let findings = doctor::examine(&machine::ThisMachine, intended, history.as_ref()).await;
-    doctor::verdict(&findings)
+    match brief {
+        true => doctor::brief(&findings),
+        false => doctor::verdict(&findings),
+    }
 }
 
 async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
@@ -3352,13 +3355,12 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
     // Run by `up` rather than asked for, because a check nobody runs is a
     // check that does not exist (spec/the-cli, ruling 3).
     if !arguments.set("--no-doctor") {
-        let (said, code) = examined(arguments, &intended).await;
+        let (said, code) = examined(arguments, &intended, !output::verbose()).await;
         print!("{said}");
         if code != 0 {
             eprintln!("Nothing was installed. Fix the above, or run again with --no-doctor.");
             return code;
         }
-        println!();
     }
 
     let Some(enrolment_code) = credential(arguments, "--enrolment-code", "MERIDIAN_ENROLMENT_CODE")

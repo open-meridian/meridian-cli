@@ -144,13 +144,6 @@ pub enum Archive {
     InValues(String),
 }
 
-/// What `up` asks when nothing has said where the archive is.
-pub const ARCHIVE_QUESTION: &str = "Where do edge plugins' older records go? Past the window \
-    a plugin's admin sets, a plugin moves them to an archive, if a deployment admin allows it \
-    one. Name a directory on the cluster's node for the archive -- a NAS export or a second \
-    disk mounted there -- or press Enter for none, and records past their window stay in \
-    each plugin's storage.";
-
 /// The flags' answer: `--archive <path>`, `--no-archive`, or neither (None).
 pub fn archive_from_flags(path: Option<&str>, declined: bool) -> Result<Option<Archive>, String> {
     match (path, declined) {

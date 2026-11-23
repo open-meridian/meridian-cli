@@ -172,9 +172,8 @@ pub async fn up(
                     class,
                 })
             }
-            None => println!(
-                "No single ingress controller in this cluster to reach it through, so it is \
-                 reached by a port-forward this command holds."
+            None => crate::output::progress(
+                "No single ingress controller here: reached by a port-forward this command holds.",
             ),
         }
     }
@@ -186,10 +185,10 @@ pub async fn up(
     let mut prepared = None;
     if let Some(ingress) = install.ingress.clone() {
         if install.plain_http {
-            println!(
+            crate::output::progress(&format!(
                 "Served over plain HTTP at {}, with no certificate: for testing alone.",
                 ingress.host
-            );
+            ));
         } else if crate::authority::is_local(&ingress.host) {
             let ready = prepare()?;
             namespace(&install).await?;
@@ -201,23 +200,19 @@ pub async fn up(
                 &ingress.host,
             )
             .await?;
-            println!("{}", certified.said(&ingress.host));
+            crate::output::progress(&certified.said(&ingress.host));
             install.tls_secret = Some(crate::authority::secret_name(&install.release));
             prepared = Some(ready);
         }
     }
     let install = &install;
 
-    println!(
-        "Installing {} into {}:\n",
-        install.release, install.namespace
-    );
-    println!("  {}\n", shown(install).replace('\n', "\n  "));
+    crate::output::progress(&installing(&install.release, &install.namespace));
+    crate::output::detail(&format!("  {}", shown(install).replace('\n', "\n  ")));
     helm(install).await?;
-    println!("Installed.");
 
     let service = dashboard_service(install).await?;
-    println!("Waiting for {service} to answer its health check.");
+    crate::output::progress(WAITING);
     wait_for_rollout(install, &service).await?;
 
     let (address, mut forward) = match &install.ingress {
@@ -237,7 +232,7 @@ pub async fn up(
         let _ = forward.kill().await;
     }
     if outcome.is_ok() && forward.is_none() {
-        println!("\nThe dashboard stays at {address}.");
+        println!("{}", stays_at(&address));
     }
     if let Some(ready) = &prepared {
         println!("{}", trusted_by(&ready.dir));
@@ -251,33 +246,55 @@ fn asked_for_archive() -> super::Archive {
     if !std::io::stdin().is_terminal() {
         return super::Archive::None;
     }
-    println!("{}", super::ARCHIVE_QUESTION);
     loop {
-        print!("Archive directory (Enter for none): ");
-        let _ = std::io::stdout().flush();
+        eprint!("{ARCHIVE_PROMPT}");
+        let _ = std::io::stderr().flush();
         let mut answer = String::new();
         match std::io::stdin().lock().read_line(&mut answer) {
             Ok(0) | Err(_) => return super::Archive::None,
             Ok(_) => match super::archive_answer(&answer) {
                 Ok(archive) => return archive,
-                Err(refusal) => println!("{refusal}."),
+                Err(refusal) => eprintln!("{refusal}."),
             },
         }
     }
 }
 
+/// `up`'s one question, on one line with its default: where edge plugins'
+/// older records go once past the window a plugin's admin sets.
+pub const ARCHIVE_PROMPT: &str =
+    "Archive for edge plugins' older records, a directory on the cluster's node [none]: ";
+
 /// What was settled about the archive, in a line.
 pub fn archive_said(archive: &super::Archive) -> String {
     match archive {
-        super::Archive::None => "No archive: records past their window stay in each plugin's \
-            storage. `meridian up --archive <path>` names one."
-            .into(),
+        super::Archive::None => {
+            "Archive: none; older records stay in each plugin's storage (--archive names one)."
+                .into()
+        }
         super::Archive::At(path) => format!(
-            "Archive at {path} on the cluster's node. A deployment admin allows each plugin \
-             its part of it, on the plugin's Manage page."
+            "Archive: {path} on the cluster's node; a deployment admin allows each plugin its part."
         ),
-        super::Archive::InValues(file) => format!("The archive is as {file} names it."),
+        super::Archive::InValues(file) => format!("Archive: as {file} names it."),
     }
+}
+
+/// The install, as it starts.
+pub fn installing(release: &str, namespace: &str) -> String {
+    format!("Installing {release} into {namespace} (-v shows the Helm command).")
+}
+
+/// While the dashboard rolls out.
+pub const WAITING: &str = "Installed. Waiting for the dashboard to answer.";
+
+/// Where the dashboard is, once the wizard has it.
+pub fn stays_at(address: &str) -> String {
+    format!("The dashboard stays at {address}.")
+}
+
+/// The wizard, for a person to open.
+pub fn wizard_at(address: &str) -> String {
+    format!("Open {address}/first-run and enter a first-run code from the platform.")
 }
 
 /// Where the root is, and who reads it how: a browser from the system's
@@ -287,11 +304,9 @@ pub fn archive_said(archive: &super::Archive) -> String {
 pub fn trusted_by(dir: &std::path::Path) -> String {
     let root = crate::authority::root_path(dir);
     format!(
-        "\nIts certificate is signed by this machine's own authority:\n  {}\n\
-         A browser trusts it once the system does, and on macOS so does the Claude Code CLI, \
-         which reads the login keychain. The Claude app, like any app on Node, reads {} \
-         instead: `meridian authority` says whether it is named to apps here, and `meridian \
-         authority trust` names it.",
+        "Its certificate is signed by this machine's authority, {}.\n\
+         Browsers trust it once the system does; apps on Node read {}. \
+         `meridian authority` says which trust it here.",
         root.display(),
         crate::authority::NODE_EXTRA_CA_CERTS
     )
@@ -318,12 +333,19 @@ fn read_params(path: &str) -> Result<BTreeMap<String, String>, String> {
 }
 
 async fn helm(install: &super::Install) -> Result<(), String> {
+    // Helm's own output only with -v, or when it refuses: its NOTES and
+    // "Happy Helming" are not what a person installing needs to read.
+    let loud = crate::output::verbose();
+    let to = |loud: bool| match loud {
+        true => Stdio::inherit(),
+        false => Stdio::piped(),
+    };
     // S9: helm upgrade
     let mut child = tokio::process::Command::new("helm")
         .args(helm_arguments(install))
         .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(to(loud))
+        .stderr(to(loud))
         .spawn()
         .map_err(|failed| format!("helm could not be run: {failed}. Is it installed?"))?;
 
@@ -336,11 +358,24 @@ async fn helm(install: &super::Install) -> Result<(), String> {
         .map_err(|failed| format!("helm would not take its values: {failed}"))?;
     drop(child.stdin.take());
 
-    match child.wait().await {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!(
-            "helm refused this install ({status}). Nothing was forwarded and nothing was answered."
-        )),
+    match child.wait_with_output().await {
+        Ok(ran) if ran.status.success() => Ok(()),
+        Ok(ran) => {
+            let said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&ran.stdout),
+                String::from_utf8_lossy(&ran.stderr)
+            );
+            Err(format!(
+                "helm refused this install ({}). Nothing was forwarded and nothing was \
+                 answered.{}",
+                ran.status,
+                match said.trim().is_empty() {
+                    true => String::new(),
+                    false => format!("\n{}", said.trim_end()),
+                }
+            ))
+        }
         Err(failed) => Err(format!("helm could not be waited for: {failed}")),
     }
 }
@@ -389,7 +424,7 @@ async fn wait_for_rollout(install: &super::Install, service: &str) -> Result<(),
         ],
     )
     .await?;
-    print!("{said}");
+    crate::output::detail(said.trim_end());
     Ok(())
 }
 
@@ -492,14 +527,13 @@ async fn wizard(
     }
 
     let Some(params) = params else {
-        println!("\nThe wizard is at {address}/first-run");
-        println!("It asks for a first-run code, which a deployment administrator issues on the platform.");
+        println!("{}", wizard_at(address));
         if forwarded {
-            println!(
-                "\nThis forward is held open here. Press Ctrl-C when the wizard says it is done."
+            crate::output::progress(
+                "This forward is held open here. Press Ctrl-C when the wizard says it is done.",
             );
             let _ = tokio::signal::ctrl_c().await;
-            println!("\nForward closed. Nothing else was left running.");
+            crate::output::progress("Forward closed. Nothing else was left running.");
         }
         return Ok(());
     };
@@ -542,7 +576,7 @@ async fn scripted(
         )
     })?;
 
-    println!("\nTesting {} answers.", posted.len());
+    crate::output::progress(&format!("Testing {} answers.", posted.len()));
     let (_, tested) = wizard.post("/first-run/check", &posted).await?;
     if !passes(&tested) {
         return Err(format!(
@@ -550,7 +584,7 @@ async fn scripted(
             findings(&tested).join("\n  - ")
         ));
     }
-    println!("They pass. Applying.");
+    crate::output::progress("They pass. Applying.");
 
     let (_, applied) = wizard.post("/first-run/apply", &posted).await?;
     let Some(who) = administrator(&applied) else {
@@ -560,7 +594,7 @@ async fn scripted(
         ));
     };
 
-    println!("\nThis deployment is configured. {who}.");
+    println!("This deployment is configured. {who}.");
     println!("Sign in at its dashboard the way you chose; there is nothing to redeem.");
     Ok(())
 }
