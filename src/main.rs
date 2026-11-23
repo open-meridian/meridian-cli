@@ -787,12 +787,44 @@ fn credential(arguments: &Arguments, flag: &str, variable: &str) -> Option<Strin
         .filter(|held| !held.is_empty())
 }
 
+/// Where a usage error points: the command's own help, in one line, in
+/// place of the whole usage it once printed after every refusal.
+fn see(command: &str) -> String {
+    match command {
+        "" => "See `meridian --help`.".to_string(),
+        command => format!("See `meridian {command} --help`."),
+    }
+}
+
+/// The command a refused line was for, as far as it can be told: the
+/// command, and a word after `plugin`, `partition`, `account`, `backup` or
+/// `authority` that names a subcommand; nothing where the first word is a
+/// flag.
+fn named_command(said: &[String]) -> String {
+    let Some(command) = said.first().filter(|word| !word.starts_with('-')) else {
+        return String::new();
+    };
+    match said.get(1) {
+        Some(sub)
+            if !sub.starts_with('-')
+                && matches!(
+                    command.as_str(),
+                    "plugin" | "partition" | "account" | "backup" | "authority"
+                ) =>
+        {
+            format!("{command} {sub}")
+        }
+        _ => command.clone(),
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    let arguments = match parse(std::env::args().skip(1).collect()) {
+    let said: Vec<String> = std::env::args().skip(1).collect();
+    let arguments = match parse(said.clone()) {
         Ok(arguments) => arguments,
         Err(refusal) => {
-            eprintln!("meridian: {refusal}\n\n{USAGE}");
+            eprintln!("meridian: {refusal}\n{}", see(&named_command(&said)));
             std::process::exit(2);
         }
     };
@@ -867,7 +899,7 @@ async fn main() {
         "--version" | "version" => println!("{}", release::version_line()),
         "-h" | "--help" | "help" | "" => print!("{USAGE}"),
         other => {
-            eprintln!("meridian: {other} is not a command\n\n{USAGE}");
+            eprintln!("meridian: {other} is not a command\n{}", see(""));
             std::process::exit(2);
         }
     }
@@ -933,7 +965,7 @@ async fn plugin_command(arguments: &Arguments) -> i32 {
             }
         }
         _ => {
-            eprintln!("meridian: plugin takes `new <name>`, `check`, `migrate`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events`, `open`, `publish`, `release <version>`, `key`, `download`, `install` or `pack`\n\n{USAGE}");
+            eprintln!("meridian: plugin takes `new <name>`, `check`, `migrate`, `upload`, `list`, `launch <name> <version>`, `stop <instance>`, `dev`, `logs`, `events`, `open`, `publish`, `release <version>`, `key`, `download`, `install` or `pack`\n{}", see("plugin"));
             2
         }
     }
@@ -967,7 +999,7 @@ async fn offer_key_setup(into: &std::path::Path, platform: &str) {
 /// garbage collected, then back; checked, shown and asked first.
 async fn gc_command(arguments: &Arguments, words: &[&str]) -> i32 {
     if words.len() != 1 {
-        eprintln!("meridian plugin gc: takes no words\n\n{USAGE}");
+        eprintln!("meridian plugin gc: takes no words\n{}", see("plugin gc"));
         return 2;
     }
     let timeout = arguments.value("--timeout", "--timeout").unwrap_or("5m");
@@ -1016,7 +1048,8 @@ async fn gc_command(arguments: &Arguments, words: &[&str]) -> i32 {
 fn check_command(arguments: &Arguments, words: &[&str]) -> i32 {
     if words.len() != 1 {
         eprintln!(
-            "meridian plugin check: takes no words; --dir names the plugin's directory\n\n{USAGE}"
+            "meridian plugin check: takes no words; --dir names the plugin's directory\n{}",
+            see("plugin check")
         );
         return 2;
     }
@@ -1049,7 +1082,8 @@ fn check_command(arguments: &Arguments, words: &[&str]) -> i32 {
 async fn migrate_command(arguments: &Arguments, words: &[&str]) -> i32 {
     if words.len() != 1 {
         eprintln!(
-            "meridian plugin migrate: takes no words; --dir names the plugin's directory\n\n{USAGE}"
+            "meridian plugin migrate: takes no words; --dir names the plugin's directory\n{}",
+            see("plugin migrate")
         );
         return 2;
     }
@@ -1195,7 +1229,7 @@ async fn catalogue_command(arguments: &Arguments, words: &[&str]) -> i32 {
             .await
             .map(|_| format!("Stopped {instance}.\n")),
         _ => {
-            eprintln!("meridian: plugin takes `upload`, `list`, `launch <name> <version>` or `stop <instance>`\n\n{USAGE}");
+            eprintln!("meridian: plugin takes `upload`, `list`, `launch <name> <version>` or `stop <instance>`\n{}", see("plugin"));
             return 2;
         }
     };
@@ -1225,7 +1259,7 @@ async fn install_command(arguments: &Arguments, words: &[&str], platform: &str) 
         (["install"], Some(_)) => None,
         (["install", listing], None) => Some(*listing),
         _ => {
-            eprintln!("meridian plugin install: takes one listing, <organisation>/<plugin>[@<version>], or --pack <pack>\n\n{USAGE}");
+            eprintln!("meridian plugin install: takes one listing, <organisation>/<plugin>[@<version>], or --pack <pack>\n{}", see("plugin install"));
             return 2;
         }
     };
@@ -1390,7 +1424,7 @@ async fn pack_command(arguments: &Arguments, words: &[&str]) -> i32 {
         ["pack", "list"] => ("list", None),
         ["pack", verb @ ("show" | "update" | "remove"), name] => (*verb, Some(*name)),
         _ => {
-            eprintln!("meridian plugin pack: takes `list`, `show <pack>`, `update <pack>` or `remove <pack>`\n\n{USAGE}");
+            eprintln!("meridian plugin pack: takes `list`, `show <pack>`, `update <pack>` or `remove <pack>`\n{}", see("plugin pack"));
             return 2;
         }
     };
@@ -1753,7 +1787,10 @@ async fn live_command(arguments: &Arguments, words: &[&str]) -> i32 {
             None => opened(&deployment, instance, level, json).await,
         },
         _ => {
-            eprintln!("meridian: plugin {verb} takes no words; --instance <id> names the instance\n\n{USAGE}");
+            eprintln!(
+                "meridian: plugin {verb} takes no words; --instance <id> names the instance\n{}",
+                see(&format!("plugin {verb}"))
+            );
             return 2;
         }
     };
@@ -2095,7 +2132,7 @@ async fn printed(
 /// scriptable").
 async fn down_command(arguments: &Arguments, namespace: &str) -> i32 {
     if !arguments.words.is_empty() {
-        eprintln!("meridian down: takes no words\n\n{USAGE}");
+        eprintln!("meridian down: takes no words\n{}", see("down"));
         return 2;
     }
     let asked = down::Down {
@@ -2142,7 +2179,10 @@ async fn signed_in(platform: &str) -> Result<registry::SignedIn, String> {
 /// it is refused or could not be asked, 2 when asked wrongly.
 async fn publish_command(arguments: &Arguments, words: &[&str], platform: &str) -> i32 {
     if words.len() != 1 {
-        eprintln!("meridian plugin publish: takes no words; --dir names the plugin's directory\n\n{USAGE}");
+        eprintln!(
+            "meridian plugin publish: takes no words; --dir names the plugin's directory\n{}",
+            see("plugin publish")
+        );
         return 2;
     }
     let (Some(registry), Some(tag)) = (
@@ -2243,7 +2283,10 @@ async fn published(asked: &registry::Publish, platform: &str, verb: &str) -> i32
 /// pull request: the version and the CHANGELOG entry are already on main.
 async fn release_command(arguments: &Arguments, words: &[&str], platform: &str) -> i32 {
     let ["release", version] = words else {
-        eprintln!("meridian plugin release: takes the version, as `meridian plugin release 1.4.0`\n\n{USAGE}");
+        eprintln!(
+            "meridian plugin release: takes the version, as `meridian plugin release 1.4.0`\n{}",
+            see("plugin release")
+        );
         return 2;
     };
     let version = version.trim_start_matches('v');
@@ -2405,7 +2448,7 @@ async fn key_command(arguments: &Arguments, words: &[&str], platform: &str) -> i
         }
         ["key", "list"] => Act::List,
         _ => {
-            eprintln!("meridian plugin key: takes `setup`, `register <file.pub>`, `revoke <key-id>` or `list`\n\n{USAGE}");
+            eprintln!("meridian plugin key: takes `setup`, `register <file.pub>`, `revoke <key-id>` or `list`\n{}", see("plugin key"));
             return 2;
         }
     };
@@ -2548,7 +2591,10 @@ async fn set_up_key(
 /// verified plugin bundle, or nothing written.
 async fn download_command(arguments: &Arguments, words: &[&str], platform: &str) -> i32 {
     let ["download", given] = words else {
-        eprintln!("meridian plugin download: takes <organisation>/<plugin>@<version>\n\n{USAGE}");
+        eprintln!(
+            "meridian plugin download: takes <organisation>/<plugin>@<version>\n{}",
+            see("plugin download")
+        );
         return 2;
     };
     let (organisation, plugin, version) = match bundle::named(given) {
@@ -2620,15 +2666,15 @@ async fn moves_command(arguments: &Arguments) -> i32 {
         ("account", ["move", account]) => ("account move", *account),
         ("partition", _) => {
             eprintln!(
-                "meridian partition: takes `split <partition>` or `move <partition>`\n\n{}",
-                help_for("partition", &[])
+                "meridian partition: takes `split <partition>` or `move <partition>`\n{}",
+                see("partition")
             );
             return 2;
         }
         _ => {
             eprintln!(
-                "meridian account: takes `move <account>`\n\n{}",
-                help_for("account", &[])
+                "meridian account: takes `move <account>`\n{}",
+                see("account")
             );
             return 2;
         }
@@ -2768,7 +2814,7 @@ async fn moves_command(arguments: &Arguments) -> i32 {
 
 async fn status_command(arguments: &Arguments, namespace: &str) -> i32 {
     if !arguments.words.is_empty() {
-        eprintln!("meridian status: takes no words\n\n{USAGE}");
+        eprintln!("meridian status: takes no words\n{}", see("status"));
         return 2;
     }
     let asked = status::Asked {
@@ -2824,7 +2870,10 @@ async fn status_command(arguments: &Arguments, namespace: &str) -> i32 {
 
 async fn logs_command(arguments: &Arguments, namespace: &str) -> i32 {
     let [component] = arguments.words.as_slice() else {
-        eprintln!("meridian logs: takes the component, as `meridian status` names them\n\n{USAGE}");
+        eprintln!(
+            "meridian logs: takes the component, as `meridian status` names them\n{}",
+            see("logs")
+        );
         return 2;
     };
     let asked = status::Asked {
@@ -2907,7 +2956,7 @@ async fn backup_command(arguments: &Arguments, namespace: &str) -> i32 {
             }
         }
         _ => {
-            eprintln!("meridian backup: takes `key` or nothing\n\n{USAGE}");
+            eprintln!("meridian backup: takes `key` or nothing\n{}", see("backup"));
             2
         }
     }
@@ -2916,7 +2965,7 @@ async fn backup_command(arguments: &Arguments, namespace: &str) -> i32 {
 /// `meridian restore <file> --identity <file>`.
 async fn restore_command(arguments: &Arguments) -> i32 {
     let [file] = arguments.words.as_slice() else {
-        eprintln!("meridian restore: name one backup file\n\n{USAGE}");
+        eprintln!("meridian restore: name one backup file\n{}", see("restore"));
         return 2;
     };
     let Some(identity) = arguments.value("--identity", "--identity") else {
@@ -3268,7 +3317,10 @@ async fn restore_in_place(arguments: &Arguments, namespace: &str, to: Option<&st
 /// rolls back and waits.
 async fn rollback_command(arguments: &Arguments, namespace: &str) -> i32 {
     if !arguments.words.is_empty() {
-        eprintln!("meridian rollback-deployment: takes no words; --to-revision <n> names a revision\n\n{USAGE}");
+        eprintln!(
+            "meridian rollback-deployment: takes no words; --to-revision <n> names a revision\n{}",
+            see("rollback-deployment")
+        );
         return 2;
     }
     let to_revision = match arguments.value("--to-revision", "--to-revision") {
@@ -3340,7 +3392,8 @@ fn connect_address(words: &[String]) -> Option<String> {
 async fn connect_command(arguments: &Arguments) -> i32 {
     let Some(given) = connect_address(&arguments.words) else {
         eprintln!(
-            "meridian: connect takes one dashboard address, or none for this machine's\n\n{USAGE}"
+            "meridian: connect takes one dashboard address, or none for this machine's\n{}",
+            see("connect")
         );
         return 2;
     };
@@ -3473,7 +3526,10 @@ async fn sign_out_command(arguments: &Arguments) -> i32 {
             }
         }
         _ => {
-            eprintln!("meridian: sign-out takes at most one address\n\n{USAGE}");
+            eprintln!(
+                "meridian: sign-out takes at most one address\n{}",
+                see("sign-out")
+            );
             return 2;
         }
     };
@@ -3776,7 +3832,10 @@ fn authority_command(arguments: &Arguments) -> i32 {
             }
         },
         _ => {
-            eprintln!("meridian authority: takes nothing, `trust` or `remove`\n\n{USAGE}");
+            eprintln!(
+                "meridian authority: takes nothing, `trust` or `remove`\n{}",
+                see("authority")
+            );
             2
         }
     }
@@ -3955,6 +4014,25 @@ mod tests {
         assert!(gc.contains("meridian plugin gc"), "{gc}");
         // A command it does not know: the whole usage.
         assert_eq!(help_for("nonsense", &[]), super::USAGE);
+    }
+
+    #[test]
+    fn a_usage_error_is_one_line_and_where_the_help_is() {
+        // Every refusal printed the whole usage, 440 lines, after its one
+        // line until 0.1.63; now it points at the command's own help.
+        assert_eq!(super::see("plugin gc"), "See `meridian plugin gc --help`.");
+        assert_eq!(super::see(""), "See `meridian --help`.");
+        assert_eq!(super::named_command(&said("plugin launch p 1.0")), "plugin launch");
+        assert_eq!(super::named_command(&said("up --no-docter")), "up");
+        assert_eq!(super::named_command(&said("partition --x")), "partition");
+        assert_eq!(super::named_command(&said("--nonsense")), "");
+        assert_eq!(super::named_command(&[]), "");
+        // No refusal prints the usage, or a command's help, after itself.
+        let source = include_str!("main.rs");
+        let printed_after = ["\\n\\n{USAGE}", "\\n\\n{}\",\n                help_for("];
+        for after in printed_after {
+            assert!(!source.contains(after), "a refusal still prints {after}");
+        }
     }
 
     #[test]
