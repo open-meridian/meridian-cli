@@ -83,6 +83,10 @@ an older one each says so and changes nothing.
 - `meridian upgrade-deployment` on Helm 4 no longer fails on a release Helm 3 installed: it passes
   `--force-conflicts` only where Helm last applied server-side. (#30)
 
+### Security
+
+- Updates `url` to 2.5.9 for RUSTSEC-2026-0592.
+
 ## 0.1.60
 
 - `meridian restore --to-time` follows the timeline that held the time. Each restore starts a
