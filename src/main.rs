@@ -2318,11 +2318,13 @@ async fn status_command(arguments: &Arguments, namespace: &str) -> i32 {
             };
             if arguments.set("--json") {
                 println!("{}", status::json_of(&held));
-            } else {
+            } else if arguments.set("--wide") {
                 print!(
                     "{}",
-                    status::said(&held, credential::now_s() * 1_000_000_000, namespace)
+                    status::said_wide(&held, credential::now_s() * 1_000_000_000, namespace)
                 );
+            } else {
+                print!("{}", status::said(&held, namespace));
             }
             0
         }

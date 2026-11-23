@@ -342,6 +342,150 @@ pub fn stopped_said(resilience: &Resilience) -> String {
     out
 }
 
+/// The database and the store members, a line each when healthy; each thing
+/// that is not, with what reads or fixes it.
+pub fn compact(resilience: &Resilience, namespace: &str) -> String {
+    let mut out = String::new();
+    let brought = resilience.database.is_some();
+    let path = resilience.database_path();
+    let setting = |name: &str| {
+        path.and_then(|path| crate::probe::setting(path, name))
+            .unwrap_or("not read")
+            .to_string()
+    };
+    let mut line = match &resilience.database {
+        Some(db) => format!(
+            "Database: {} of {} member(s) ready{}",
+            db.members.iter().filter(|m| m.ready).count(),
+            db.set.replicas,
+            if db.set.patroni { " under Patroni" } else { "" }
+        ),
+        None => format!(
+            "Database: external{}",
+            path.and_then(|path| path["address"].as_str())
+                .map(|at| format!(" at {at}"))
+                .unwrap_or_default()
+        ),
+    };
+    line.push_str(&format!(
+        ", page checksums {}, WAL archive {}, internal TLS {}\n",
+        setting("data_checksums"),
+        match resilience.database.as_ref().map(|db| db.set.archive) {
+            Some(true) => "on",
+            Some(false) => "off",
+            None => "the operator's",
+        },
+        if resilience.internal_tls { "on" } else { "off" }
+    ));
+    out.push_str(&line);
+    if let Some(db) = &resilience.database {
+        for member in db.members.iter().filter(|m| !m.ready) {
+            out.push_str(&format!(
+                "  {} is not ready: `meridian logs database {}`\n",
+                member.name, resilience.scope
+            ));
+        }
+        for (member, node) in &db.waiting_for_node {
+            out.push_str(&format!(
+                "  {member} waits for its node {node}, which is not ready; it starts again when \
+                 the node returns\n"
+            ));
+        }
+        for (member, bytes) in db.behind.iter().filter(|(_, bytes)| **bytes > 0) {
+            out.push_str(&format!(
+                "  {member} is {} behind the primary\n",
+                bytes_said(*bytes)
+            ));
+        }
+    }
+    match path {
+        Some(path) => {
+            for hint in crate::probe::integrity_hints(path, brought, namespace) {
+                out.push_str(&format!("  {}\n", hint.to_string().trim_start()));
+            }
+        }
+        None => out.push_str("  its settings not read: no member's probe reached it\n"),
+    }
+    if let Some(archive) = resilience.archive().filter(|a| a["failing"] == true) {
+        out.push_str(&format!(
+            "  WAL archive FAILING ({} failures): a restore cannot reach past its last segment\n",
+            archive["failed"].as_u64().unwrap_or(0)
+        ));
+    }
+    if let Some(answer) = &resilience.replicas {
+        for finding in answer["findings"].as_array().into_iter().flatten() {
+            out.push_str(&format!(
+                "  replica comparison: {}: {}; {}\n",
+                finding["member"].as_str().unwrap_or("?"),
+                finding["why"].as_str().unwrap_or_default(),
+                finding["outcome"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+
+    let ready = resilience
+        .probes
+        .iter()
+        .filter(|p| p.unread.is_none() && p.member["ready"] == true)
+        .count();
+    let lag = resilience
+        .probes
+        .iter()
+        .filter_map(|p| p.member["lag_ms"].as_u64())
+        .max();
+    let findings: usize = resilience
+        .probes
+        .iter()
+        .filter_map(|p| p.database.as_ref())
+        .filter_map(|path| path["integrity"]["findings"].as_array())
+        .map(Vec::len)
+        .max()
+        .unwrap_or(0);
+    out.push_str(&format!(
+        "Members: {ready} of {} ready{}, {}\n",
+        resilience.probes.len(),
+        lag.map(|ms| format!(", lag at most {ms} ms"))
+            .unwrap_or_default(),
+        match findings {
+            0 => "no integrity findings".to_string(),
+            n => format!("{n} integrity finding(s) not yet answered (--wide lists them)"),
+        }
+    ));
+    let logs = |component: &str| {
+        format!(
+            "`meridian logs {component}{}`",
+            match resilience.scope.is_empty() {
+                true => String::new(),
+                false => format!(" {}", resilience.scope),
+            }
+        )
+    };
+    for probed in &resilience.probes {
+        let why = match &probed.unread {
+            Some(why) => Some(format!("not probed: {why}")),
+            None if probed.member["ready"] != true => Some("not ready".to_string()),
+            None => probed
+                .database
+                .as_ref()
+                .filter(|path| path["ok"] != true)
+                .map(|path| {
+                    format!(
+                        "database not reached: {}",
+                        path["why"].as_str().unwrap_or("no reason given")
+                    )
+                }),
+        };
+        if let Some(why) = why {
+            out.push_str(&format!(
+                "  {}: {why}: {}\n",
+                probed.component,
+                logs(&probed.component)
+            ));
+        }
+    }
+    out
+}
+
 /// The sections `status` prints for all of it.
 pub fn said(resilience: &Resilience, now_ns: u64, namespace: &str) -> String {
     let mut out = String::new();
