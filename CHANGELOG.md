@@ -6,7 +6,7 @@
 - Shorter output: two-tier help, one-line usage errors, a compact `up` and `status` (`--wide` for detail), and global `-q`/`-v`.
 
 ### Deprecated
-- `up --enrolment-code`, `--first-run-code`, `--shared-storage-class` and `plugin publish --details` warn with their replacement; removed next release.
+- `up --enrolment-code`, `--first-run-code`, `--shared-storage-class` and `plugin publish`/`release --details` warn with their replacement; removed next release.
 
 Step 3d. These need a deployment whose core carries step 3d's terminal routes and probe; against
 an older one each says so and changes nothing.

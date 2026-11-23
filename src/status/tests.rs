@@ -792,11 +792,7 @@ pub(crate) fn healthy() -> Status {
         plugins: vec![],
         memory_read: Some(MemoryRead::Cadvisor),
         memory_note: None,
-        accounts: Err(
-            "not connected to a deployment: `meridian connect` first, with the \
-                       address if it is not this machine's"
-                .into(),
-        ),
+        accounts: Err(NOT_CONNECTED.into()),
         resilience: resilience::Resilience {
             database: Some(resilience::Database {
                 set: crate::upgrade_deployment::DatabaseSet {
@@ -845,8 +841,8 @@ fn a_healthy_status_is_a_line_a_part() {
          Database: 1 of 1 member(s) ready, page checksums on, WAL archive off, internal TLS off\n\
          Members: 6 of 6 ready, lag at most 0 ms, no integrity findings\n\
          Plugins: none running; `meridian plugin list` shows the catalogue\n\
-         Book health: not read: not connected to a deployment: `meridian connect` first, with \
-         the address if\n    it is not this machine's\n\
+         Book health: not read; run `meridian connect` first (with its address if on another \
+         machine)\n\
          Images, pods and each member's probe: `meridian status --wide`\n"
     );
     assert!(said.lines().count() <= 20);

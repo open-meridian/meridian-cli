@@ -587,6 +587,10 @@ async fn migrate_command(arguments: &Arguments, words: &[&str]) -> i32 {
 
 /// The credential a catalogue command acts through: the one held, or the
 /// one `--deployment` names.
+/// Why a command that needs a session has none: no deployment connected.
+const NOT_CONNECTED: &str =
+    "not connected to a deployment: `meridian connect` first, with the address if it is not this machine's";
+
 fn held_session(arguments: &Arguments) -> Result<credential::Credential, String> {
     let within = sessions::directory()?;
     if let Some(given) = arguments.value("--deployment", "--deployment") {
@@ -600,10 +604,7 @@ fn held_session(arguments: &Arguments) -> Result<credential::Credential, String>
     }
     let mut every = sessions::all(&within);
     match every.len() {
-        0 => Err(
-            "not connected to a deployment: `meridian connect` first, with the address if it is not this machine's"
-                .into(),
-        ),
+        0 => Err(NOT_CONNECTED.into()),
         1 => Ok(credential::Credential::new(within, every.remove(0))),
         _ => Err(format!(
             "connected to more than one deployment; say which with --deployment: {}",
@@ -2316,6 +2317,7 @@ async fn status_command(arguments: &Arguments, namespace: &str) -> i32 {
         Ok(mut held) => {
             held.accounts = match held_session(arguments) {
                 Ok(session) => status::book_health(session.address(), &session).await,
+                Err(refusal) if refusal == NOT_CONNECTED => Err(status::NOT_CONNECTED.into()),
                 Err(refusal) => Err(refusal),
             };
             if arguments.set("--json") {

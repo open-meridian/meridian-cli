@@ -559,7 +559,7 @@ pub const COMMANDS: &[Command] = &[
             flag("--registry <r>", "community or verified (default: community)"),
             ORGANISATION,
             DIR,
-            flag("--details", "each check's full text, as -v prints it"),
+            flag("--details", "deprecated: use -v for each check's full text"),
             PLATFORM,
         ],
         common: &[Timeout("30m")],

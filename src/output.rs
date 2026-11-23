@@ -73,7 +73,11 @@ pub fn deprecated(command: &str, words: &[String], given: &dyn Fn(&str) -> bool)
             "set pluginStorage.shared.storageClassName in a values file (-f) instead",
         );
     }
-    if command == "plugin" && words.first().is_some_and(|w| w == "publish") {
+    if command == "plugin"
+        && words
+            .first()
+            .is_some_and(|w| w == "publish" || w == "release")
+    {
         warn("--details", "use -v instead");
     }
     said
@@ -106,6 +110,11 @@ mod tests {
         assert_eq!(said.len(), 1);
         assert!(said[0].ends_with("use -v instead"), "{said:?}");
         assert!(deprecated("plugin", &publish, &given(&[])).is_empty());
+        let release = ["release".to_string(), "1.4.0".to_string()];
+        assert_eq!(
+            deprecated("plugin", &release, &given(&["--details"])).len(),
+            1
+        );
         // Nothing else is deprecated.
         assert!(deprecated("status", &[], &given(&["--details", "--json"])).is_empty());
     }

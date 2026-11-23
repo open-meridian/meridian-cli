@@ -828,6 +828,10 @@ fn release_said(release: &Result<Release, String>, namespace: &str, wide: bool) 
     }
 }
 
+/// Why book health was not read, where no deployment is connected.
+pub const NOT_CONNECTED: &str =
+    "run `meridian connect` first (with its address if on another machine)";
+
 /// The widest line the compact status prints.
 pub const WIDTH: usize = 100;
 
@@ -933,7 +937,7 @@ pub fn said(status: &Status, namespace: &str) -> String {
         ));
     }
     match &status.accounts {
-        Err(why) => out.push_str(&format!("Book health: not read: {why}\n")),
+        Err(why) => out.push_str(&format!("Book health: not read; {why}\n")),
         Ok(accounts) if accounts.is_empty() => {
             out.push_str("Book health: no account has a journal yet\n")
         }
