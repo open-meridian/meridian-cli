@@ -69,10 +69,14 @@ said="$(PATH="$here/stub:$PATH" HOME="$work" XDG_CONFIG_HOME="$work/config" meri
 status=$?
 check $status "meridian status reads the stand-in deployment"
 check "$(holds "$said" "Release: meridian revision 3, deployed")" "and says its release, deployed"
-check "$(holds "$said" "bor")" "and its component"
-check "$(holds "$said" "1/1 ready")" "and that its one pod is ready"
+check "$(holds "$said" "Components: 1 of 1 ready")" "and that its one component is ready"
+wide="$(PATH="$here/stub:$PATH" HOME="$work" XDG_CONFIG_HOME="$work/config" meridian status --wide -n smoke 2>&1)"
+status=$?
+check $status "meridian status --wide reads it too"
+check "$(holds "$wide" "bor")" "and names its component"
+check "$(holds "$wide" "1/1 ready")" "and that its one pod is ready"
 if [ "$failures" != "$before" ]; then
-    printf '%s\n' "$said"
+    printf '%s\n' "$said" "$wide"
 fi
 
 # ── plugin new, then plugin check ─────────────────────────────────────────
