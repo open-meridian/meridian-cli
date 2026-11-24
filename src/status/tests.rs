@@ -891,3 +891,106 @@ fn whatever_is_unhealthy_expands_with_the_command_that_reads_why() {
         "{said}"
     );
 }
+
+/// A plugin's pod as the launcher makes it: the plugin and its sidecar, each
+/// with a limit of its own (256 MiB each), and cAdvisor's line for the pod as
+/// a whole beside each container's.
+fn plugin_of_two() -> (Vec<Component>, Usage) {
+    let mut workload = sidecar("oanda", "localhost:5000/plugins/oanda@sha256:bb02");
+    for container in 0..2 {
+        workload["spec"]["template"]["spec"]["containers"][container]["resources"]["limits"]
+            ["memory"] = serde_json::json!("256Mi");
+    }
+    let mut pod = sidecar_pod("oanda");
+    pod["status"]["containerStatuses"][1]["restartCount"] = serde_json::json!(1);
+    let line = |container: &str, mib: u64| {
+        format!(
+            "container_memory_working_set_bytes{{container=\"{container}\",namespace=\"meridian\",\
+             pod=\"meridian-plugin-oanda-5d9\"}} {}\n",
+            mib * 1024 * 1024
+        )
+    };
+    let usage = cadvisor_usage(
+        &(line("", 150) + &line("plugin", 100) + &line("sidecar", 50)),
+        "meridian",
+    );
+    let found = components(
+        &serde_json::json!({ "items": [workload] }),
+        &serde_json::json!({ "items": [pod] }),
+        &usage,
+    );
+    (found, usage)
+}
+
+#[test]
+fn a_plugins_memory_is_its_own_container_and_its_sidecar_is_said_apart() {
+    // The pod's limit, its containers' summed, said 512 MiB where the plugin
+    // container has 256 MiB.
+    let mib = 1024 * 1024;
+    let (found, usage) = plugin_of_two();
+    assert_eq!(usage.pods["meridian-plugin-oanda-5d9"], 150 * mib);
+    let plugin = &found[0];
+    assert_eq!(plugin.limit, Some(256 * mib), "the plugin container's own");
+    assert_eq!(plugin.memory, Some(100 * mib), "the plugin container's own");
+    let sidecar = plugin.sidecar.as_ref().expect("the sidecar, apart");
+    assert_eq!(sidecar.limit, Some(256 * mib));
+    assert_eq!(sidecar.memory, Some(50 * mib));
+
+    let mut held = healthy();
+    held.plugins = found;
+    let wide = said_wide(&held, 0, "meridian");
+    assert!(
+        wide.contains(
+            "  oanda  1/1 ready  1 restart(s)  memory 100 MiB of 256 MiB (39%)  \
+             localhost:5000/plugins/oanda@sha256:bb02\n         sidecar  memory 50 MiB of \
+             256 MiB (19%)\n"
+        ),
+        "{wide}"
+    );
+    assert!(!wide.contains("512 MiB"), "{wide}");
+
+    // The compact status: one line for it, the plugin's own memory.
+    let compact = said(&held, "meridian");
+    let lines: Vec<&str> = compact
+        .lines()
+        .filter(|line| line.contains("oanda"))
+        .collect();
+    assert_eq!(
+        lines,
+        ["  oanda  1/1 ready, 1 restart(s), memory 100 MiB of 256 MiB (39%): `meridian logs \
+          oanda --previous`"],
+        "{compact}"
+    );
+
+    let json = json_of(&held);
+    assert_eq!(json["plugins"][0]["memory_bytes"], 100 * mib);
+    assert_eq!(json["plugins"][0]["memory_limit_bytes"], 256 * mib);
+    assert_eq!(json["plugins"][0]["sidecar"]["memory_bytes"], 50 * mib);
+    assert_eq!(json["plugins"][0]["sidecar"]["memory_limit_bytes"], 256 * mib);
+    assert_eq!(
+        json["plugins"][0]["sidecar"]["pods"][0]["memory_bytes"],
+        50 * mib
+    );
+    assert!(json["components"][0].get("sidecar").is_none());
+}
+
+#[test]
+fn a_sidecar_near_its_own_limit_is_said_on_its_plugins_one_line() {
+    let mib = 1024 * 1024;
+    let (mut found, _) = plugin_of_two();
+    found[0].restarts = 0;
+    let sidecar = found[0].sidecar.as_mut().unwrap();
+    sidecar.memory = Some(240 * mib);
+    sidecar.pods[0].1 = Some(240 * mib);
+    let mut held = healthy();
+    held.plugins = found;
+    // Carried on to a second line past the width, as every long line is.
+    let compact = said(&held, "meridian").replace("\n      ", " ");
+    assert!(
+        compact.contains(
+            "  oanda  1/1 ready, no restarts, memory 100 MiB of 256 MiB (39%), sidecar memory \
+             240 MiB of 256 MiB (93%): `meridian logs oanda`\n"
+        ),
+        "{compact}"
+    );
+}
