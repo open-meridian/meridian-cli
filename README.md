@@ -997,6 +997,7 @@ half-way leaves it read-only, says so, and the next run finishes.
 ```
 meridian status                 # a line a part when healthy; what is not, with its fix
 meridian status --wide          # every image, pod and member probe
+meridian status --profile       # the resilience profile, its advice a line each
 meridian status --json
 meridian logs bor --since 10m
 meridian logs bor --previous    # what it printed before its last restart
@@ -1017,7 +1018,9 @@ container printed before its last restart. The components and logs are read
 through kubectl and the release through helm, and book health is the
 deployment's own answer (core's `ReadBookHealthFromTerminal`, on the session
 `meridian connect` keeps); nothing is changed, and a deployment admin never
-runs kubectl or helm by hand. `meridian <command> --help` prints that
+runs kubectl or helm by hand. `--profile` prints the resilience profile as the
+deployment computes it, each line of its advice under the level, cut to the
+width where it is long; with `--wide`, each in full. `meridian <command> --help` prints that
 command's own flags; `-q` drops progress lines and `-v` adds detail.
 
 ## Moving partitions and accounts

@@ -4,6 +4,7 @@
 
 ### Changed
 - Shorter output: two-tier help, one-line usage errors, a compact `up` and `status` (`--wide` for detail), and global `-q`/`-v`.
+- `status --profile` prints the profile's advice in its text output too, a line each (`--wide` for each in full), not only in `--json`.
 
 ### Fixed
 - `status` says a plugin's memory against its own container's limit, its sidecar's apart (`--wide`, `--json`'s `sidecar`), not the pod's summed.
