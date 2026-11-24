@@ -2303,6 +2303,10 @@ async fn status_command(arguments: &Arguments, namespace: &str) -> i32 {
                 println!("{profile}");
                 0
             }
+            Ok(profile) if arguments.set("--wide") => {
+                print!("{}", status::profile::said_wide(&profile));
+                0
+            }
             Ok(profile) => {
                 print!("{}", status::profile::said(&profile));
                 0

@@ -7,7 +7,10 @@
 //! Leases and the source priorities -- never from a preset's name, so
 //! neither does this: it prints the level, what the next level lacks, each
 //! failure class and tier with its state, reason and the change that would
-//! meet it, and never blind per live data type. Read-only.
+//! meet it, and never blind per live data type. Its advice (a store's
+//! partitions or writer groups) is a line each under the level, cut to the
+//! compact width where it is longer; `--wide` says each in full, its changes
+//! on lines of their own. Read-only.
 
 use serde_json::Value;
 
@@ -101,8 +104,71 @@ fn computed(at: &Value) -> String {
     }
 }
 
-/// The profile, as `status --profile` prints it.
+/// The profile's advice, a line each: its subject, state and reason, then
+/// each change it names. A line past the compact width is cut, and the
+/// whole is under `--wide`.
+fn advice_compact(out: &mut String, advice: &Value) {
+    let held: Vec<&Value> = advice.as_array().into_iter().flatten().collect();
+    if held.is_empty() {
+        return;
+    }
+    out.push_str("\nAdvice:\n");
+    let width = held
+        .iter()
+        .filter_map(|line| line["subject"].as_str())
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let mut cut = false;
+    for line in held {
+        let reason = line["reason"].as_str().unwrap_or_default();
+        let mut said = format!(
+            "  {:width$}  {}{}",
+            line["subject"].as_str().unwrap_or_default(),
+            spoken(line["state"].as_str().unwrap_or_default()),
+            if reason.is_empty() {
+                String::new()
+            } else {
+                format!(": {reason}")
+            }
+        );
+        for change in line["changes"].as_array().into_iter().flatten() {
+            let cost = change["cost"].as_str().unwrap_or_default();
+            said.push_str(&format!(
+                "; change: {}{}",
+                change["change"].as_str().unwrap_or_default(),
+                if cost.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (costs {cost})")
+                }
+            ));
+        }
+        if said.chars().count() > super::WIDTH {
+            said = said.chars().take(super::WIDTH - 1).collect::<String>();
+            said.truncate(said.trim_end().len());
+            said.push('…');
+            cut = true;
+        }
+        out.push_str(&said);
+        out.push('\n');
+    }
+    if cut {
+        out.push_str("  `meridian status --profile --wide` says each in full\n");
+    }
+}
+
+/// The profile, as `status --profile` prints it: its advice a line each.
 pub fn said(profile: &Value) -> String {
+    said_as(profile, false)
+}
+
+/// The profile, as `status --profile --wide` prints it: its advice in full.
+pub fn said_wide(profile: &Value) -> String {
+    said_as(profile, true)
+}
+
+fn said_as(profile: &Value, wide: bool) -> String {
     let mut out = format!(
         "Resilience profile, as the deployment computes it from its configuration as it is \
          (computed {}):\n  level: {}\n",
@@ -115,6 +181,11 @@ pub fn said(profile: &Value) -> String {
             changes(&mut out, &profile["next_level_changes"], "    ");
         }
         None => out.push_str("  the highest level there is\n"),
+    }
+    if wide {
+        lines(&mut out, "Advice", &profile["advice"]);
+    } else {
+        advice_compact(&mut out, &profile["advice"]);
     }
     lines(&mut out, "Failure classes", &profile["failures"]);
     lines(&mut out, "Tiers", &profile["tiers"]);
@@ -141,11 +212,6 @@ pub fn said(profile: &Value) -> String {
          or at the dashboard's Plugins and Data sources.\n",
     );
     out
-}
-
-/// The profile, as `status --profile --wide` prints it.
-pub fn said_wide(profile: &Value) -> String {
-    said(profile)
 }
 
 #[cfg(test)]
