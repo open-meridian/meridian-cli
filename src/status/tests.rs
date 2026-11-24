@@ -242,12 +242,13 @@ async fn each_plugin_is_its_own_line_by_its_instance_with_its_own_pods_memory() 
         .filter_map(|c| c.instance.as_deref())
         .collect();
     assert_eq!(instances, ["snaptrade", "tiingo"]);
-    assert_eq!(held.plugins[0].memory, Some(9 * 1024 * 1024));
-    assert_eq!(held.plugins[1].memory, Some(7 * 1024 * 1024));
-    assert_eq!(held.plugins[0].limit, Some(256 * 1024 * 1024));
+    // The plugin container's own, its sidecar's apart.
+    assert_eq!(held.plugins[0].memory, Some(4 * 1024 * 1024));
+    assert_eq!(held.plugins[1].memory, Some(3 * 1024 * 1024));
+    assert_eq!(held.plugins[0].limit, Some(192 * 1024 * 1024));
     let said = said_wide(&held, 0, "meridian");
-    assert!(said.contains("Plugins:\n  snaptrade  1/1 ready  no restarts  memory 9 MiB of 256 MiB (3%)  localhost:5000/plugins/open-meridian/snaptrade@sha256:915f\n"), "{said}");
-    assert!(said.contains("  tiingo     1/1 ready  no restarts  memory 7 MiB of 256 MiB (2%)  localhost:5000/plugins/tiingo@sha256:aa01\n"), "{said}");
+    assert!(said.contains("Plugins:\n  snaptrade  1/1 ready  no restarts  memory 4 MiB of 192 MiB (2%)  localhost:5000/plugins/open-meridian/snaptrade@sha256:915f\n             sidecar  memory 5 MiB of 64 MiB (7%)\n"), "{said}");
+    assert!(said.contains("  tiingo     1/1 ready  no restarts  memory 3 MiB of 192 MiB (1%)  localhost:5000/plugins/tiingo@sha256:aa01\n             sidecar  memory 4 MiB of 64 MiB (6%)\n"), "{said}");
     // Two replicas: each pod's own, against the limit each has.
     assert!(
         said.contains("dashboard  1/2 ready  no restarts  memory 120 MiB, 98 MiB of 256 MiB each"),
@@ -255,7 +256,11 @@ async fn each_plugin_is_its_own_line_by_its_instance_with_its_own_pods_memory() 
     );
     let json = json_of(&held);
     assert_eq!(json["plugins"][0]["instance_id"], "snaptrade");
-    assert_eq!(json["plugins"][0]["memory_bytes"], 9 * 1024 * 1024);
+    assert_eq!(json["plugins"][0]["memory_bytes"], 4 * 1024 * 1024);
+    assert_eq!(
+        json["plugins"][0]["sidecar"]["memory_bytes"],
+        5 * 1024 * 1024
+    );
     assert_eq!(
         json["components"][1]["pods"][1]["pod"],
         "meridian-dashboard-2"
@@ -635,7 +640,11 @@ async fn memory_is_each_pods_working_set_from_its_nodes_cadvisor() {
     assert_eq!(held.memory_read, Some(MemoryRead::Cadvisor));
     assert_eq!(held.memory_note, None);
     assert_eq!(held.components[0].memory, Some(300 * 1024 * 1024));
-    assert_eq!(held.plugins[0].memory, Some(5 * 1024 * 1024));
+    assert_eq!(held.plugins[0].memory, Some(3 * 1024 * 1024));
+    assert_eq!(
+        held.plugins[0].sidecar.as_ref().and_then(|s| s.memory),
+        Some(2 * 1024 * 1024)
+    );
     let said = said_wide(&held, 0, "meridian");
     assert!(said.contains("memory 300 MiB of 512 MiB (58%)"), "{said}");
     assert!(
@@ -704,7 +713,7 @@ async fn a_sharded_plugin_wants_its_shards_ready_and_its_other_pods_stand_by() {
     let found = components(
         &serde_json::json!({ "items": [sharded, single, older] }),
         &serde_json::json!({ "items": [] }),
-        &BTreeMap::new(),
+        &Usage::default(),
     );
     let shape: Vec<(u64, u64, u64)> = found
         .iter()
@@ -751,6 +760,7 @@ pub(crate) fn healthy() -> Status {
         instance: None,
         plugin_image: None,
         launched: false,
+        sidecar: None,
     };
     let names = [
         "analytics-coordinator",
@@ -957,8 +967,10 @@ fn a_plugins_memory_is_its_own_container_and_its_sidecar_is_said_apart() {
         .collect();
     assert_eq!(
         lines,
-        ["  oanda  1/1 ready, 1 restart(s), memory 100 MiB of 256 MiB (39%): `meridian logs \
-          oanda --previous`"],
+        [
+            "  oanda  1/1 ready, 1 restart(s), memory 100 MiB of 256 MiB (39%): `meridian logs \
+          oanda --previous`"
+        ],
         "{compact}"
     );
 
@@ -966,7 +978,10 @@ fn a_plugins_memory_is_its_own_container_and_its_sidecar_is_said_apart() {
     assert_eq!(json["plugins"][0]["memory_bytes"], 100 * mib);
     assert_eq!(json["plugins"][0]["memory_limit_bytes"], 256 * mib);
     assert_eq!(json["plugins"][0]["sidecar"]["memory_bytes"], 50 * mib);
-    assert_eq!(json["plugins"][0]["sidecar"]["memory_limit_bytes"], 256 * mib);
+    assert_eq!(
+        json["plugins"][0]["sidecar"]["memory_limit_bytes"],
+        256 * mib
+    );
     assert_eq!(
         json["plugins"][0]["sidecar"]["pods"][0]["memory_bytes"],
         50 * mib
