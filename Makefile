@@ -10,7 +10,7 @@ DOCKER := DOCKER_BUILDKIT=1 docker
 unexport GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
          GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
 
-.PHONY: help check-structure check-structure-selftest check-interims check-pins check-licences check-shellouts check-size check-baselines ci-local ci-local-deep ci-stage pre-push pre-push-run build test lint fmt lock install-hooks e2e-up e2e-migrate \
+.PHONY: help e2e-stop-start check-structure check-structure-selftest check-interims check-pins check-licences check-shellouts check-size check-baselines ci-local ci-local-deep ci-stage pre-push pre-push-run build test lint fmt lock install-hooks e2e-up e2e-migrate \
         vendor-template check-vendored-template check-install check-c-deps check-scaffolds \
         check-fresh-sources smoke-linux \
         ci-mirror-check e2e-authority-macos advisories
@@ -41,7 +41,7 @@ help:
 # it (accepted 2026-11-07, superseding ruling 1075's full local gate); here it
 # is the optional full run, for when CI is down.
 ci-local: ci-mirror-check check-structure check-vendored-template advisories build test lint smoke-linux \
-          check-c-deps check-fresh-sources check-install check-scaffolds
+          check-c-deps check-fresh-sources check-install check-scaffolds e2e-stop-start
 	@echo
 	@echo "ci-local: GREEN"
 
@@ -51,7 +51,7 @@ ci-local-deep: ci-local
 # with this before pushing again, rather than rerunning CI until it is green.
 # ci-local's prerequisites, the same list (ci-mirror-check reads that line).
 CI_STAGES := ci-mirror-check check-structure check-vendored-template advisories build test lint smoke-linux \
-          check-c-deps check-fresh-sources check-install check-scaffolds
+          check-c-deps check-fresh-sources check-install check-scaffolds e2e-stop-start
 ci-stage:
 	@case " $(CI_STAGES) " in *" $(STAGE) "*) ;; \
 		*) echo "ci-stage: STAGE is one of CI's gates: $(CI_STAGES)" >&2; exit 2;; esac
@@ -333,6 +333,17 @@ smoke-linux:
 	 done; \
 	 if [ -n "$$failed" ]; then echo "smoke-linux FAILED on:$$failed" >&2; exit 1; fi; \
 	 echo "smoke-linux OK: $$target, --version, status and plugin check on $(or $(SMOKE_IMAGE),$(SMOKE_IMAGES))"
+
+# `meridian stop` and `meridian start` on a k3d cluster made for the run and
+# deleted after (tests/stop-start): the round trip, each refusal, a stop and a
+# start cut short and run again, status, doctor and the commands refused
+# while stopped. Needs only Docker: the image holds the binary, helm, kubectl
+# and k3d, and is given the host's daemon and network.
+e2e-stop-start:
+	@$(DOCKER) build --load -f Dockerfile.rust --target stop-start -t meridian-cli-stop-start:local . >/dev/null 2>&1 \
+		|| { echo "e2e-stop-start FAILED: its image did not build; see it with:" >&2; \
+		     echo "  DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust --target stop-start --progress=plain ." >&2; exit 1; }
+	@docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock meridian-cli-stop-start:local
 
 # Applied in a container and written back, because the host has no toolchain.
 fmt:

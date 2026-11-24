@@ -8,6 +8,8 @@ Deployment:
   logs                 Show what a component printed
   upgrade-deployment   Move a deployment to a newer chart, in place
   rollback-deployment  Return a deployment to an earlier revision
+  stop                 Stop a deployment's workloads, keeping its data
+  start                Start a stopped deployment as it was
   connect              Sign in to a deployment's dashboard
   sign-out             Revoke this computer's sign-in to a deployment
 

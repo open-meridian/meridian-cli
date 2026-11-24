@@ -197,6 +197,26 @@ COPY --from=docker:29-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /u
 COPY --from=release /meridian /usr/local/bin/meridian
 ENTRYPOINT ["meridian"]
 
+# `meridian stop` and `meridian start` on a k3d cluster of their own
+# (tests/stop-start, `make e2e-stop-start`): the binary, helm and kubectl as
+# `e2e` has them, k3d at a pinned release, and the script with its stand-in
+# chart. Run with the host's docker daemon and on its network, so k3d makes
+# the cluster beside it and its API answers here; deleted when it ends.
+FROM debian:bookworm-slim AS stop-start
+ARG K3D_VERSION=v5.7.4
+ARG TARGETARCH
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && curl -fsSL -o /usr/local/bin/k3d \
+      "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-${TARGETARCH}" \
+ && chmod 755 /usr/local/bin/k3d
+COPY --from=alpine/helm:3.16.2 /usr/bin/helm /usr/local/bin/helm
+COPY --from=registry.k8s.io/kubectl:v1.35.0 /bin/kubectl /usr/local/bin/kubectl
+COPY --from=release /meridian /usr/local/bin/meridian
+COPY tests/stop-start/ /w/
+ENTRYPOINT ["sh", "/w/run.sh"]
+
 # `meridian plugin migrate`, the real binary, over the plugins meridian-python
 # records its migrations for: `make e2e-migrate`, which hands in that
 # checkout's tests/migrations and names the SDK image built from it. Not a

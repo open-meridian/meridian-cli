@@ -60,6 +60,12 @@ pub struct State {
     /// above one: its members' MERIDIAN_<STORE>_DATABASES, and with the
     /// database brought, a StatefulSet for each past the first.
     pub store_databases: BTreeMap<String, u64>,
+    /// What `meridian stop` recorded, on the database's StatefulSet.
+    pub stop_record: Option<String>,
+    /// Helm's word for the release (`deployed`, `pending-upgrade`).
+    pub helm_status: String,
+    /// The release's Jobs as `kubectl get jobs -l <instance>` lists them.
+    pub release_jobs: Vec<Value>,
 }
 
 impl Default for State {
@@ -100,6 +106,9 @@ impl Default for State {
             brought: true,
             script: NEW_SCRIPT.into(),
             store_databases: BTreeMap::new(),
+            stop_record: None,
+            helm_status: "deployed".into(),
+            release_jobs: Vec::new(),
         }
     }
 }
@@ -235,9 +244,17 @@ impl Sim {
             if state.patroni {
                 labels["meridian.dev/database-manager"] = json!("patroni");
             }
+            let mut annotations = json!({});
+            if let Some(record) = &state.stopped_record {
+                annotations[STOPPED] = json!(record);
+            }
+            if let Some(record) = &state.stop_record {
+                annotations[stop::STOPPED_BY_STOP] = json!(record);
+            }
             items.push(json!({
                 "kind": "StatefulSet",
-                "metadata": { "name": SET, "generation": 1 },
+                "metadata": { "name": SET, "generation": 1, "annotations": annotations,
+                              "labels": { "app.kubernetes.io/instance": "meridian" } },
                 "spec": { "replicas": state.database,
                     "selector": { "matchLabels": { "app.kubernetes.io/instance": "meridian",
                                                    "meridian.dev/component": "database" } },
@@ -291,7 +308,7 @@ impl Machine for Sim {
         let sel = "app.kubernetes.io/instance=meridian";
         if command.starts_with("helm list") {
             return said(
-                json!([{ "name": "meridian", "revision": "9", "status": "deployed",
+                json!([{ "name": "meridian", "revision": "9", "status": state.helm_status,
                          "chart": "meridian-runtime-0.1.469", "app_version": "515969a" }])
                 .to_string(),
             );
@@ -417,6 +434,33 @@ impl Machine for Sim {
                 })
                 .collect();
             return said(json!({ "items": items }).to_string());
+        }
+        if command == format!("kubectl get jobs -n {NS} -l {sel} -o json") {
+            return said(json!({ "items": state.release_jobs }).to_string());
+        }
+        if command == format!("kubectl get statefulsets -n {NS} -o json") {
+            let mut listed = Sim::workloads(&state, true);
+            if let Some(items) = listed["items"].as_array_mut() {
+                items.retain(|item| item["kind"] == "StatefulSet");
+            }
+            return said(listed.to_string());
+        }
+        let stop_record = format!(
+            "kubectl annotate statefulset {SET} -n {NS} --overwrite {}=",
+            stop::STOPPED_BY_STOP
+        );
+        if let Some(said_json) = command.strip_prefix(&stop_record) {
+            state.stop_record = Some(said_json.to_string());
+            return said("annotated".into());
+        }
+        if command
+            == format!(
+                "kubectl annotate statefulset {SET} -n {NS} {}-",
+                stop::STOPPED_BY_STOP
+            )
+        {
+            state.stop_record = None;
+            return said("annotated".into());
         }
         if command.starts_with("kubectl get pvc") {
             return said(json!({ "items": [] }).to_string());

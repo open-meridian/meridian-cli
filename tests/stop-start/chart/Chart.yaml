@@ -1,0 +1,5 @@
+apiVersion: v2
+name: stop-start-stand-in
+description: A stand-in for meridian-runtime's workloads, as `meridian stop` and `start` read them
+type: application
+version: 0.1.0
