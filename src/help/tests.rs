@@ -181,3 +181,25 @@ fn advanced_flags_wait_at_the_end_and_test_flags_are_not_listed() {
         "{root}"
     );
 }
+
+#[test]
+fn a_pair_of_commands_is_one_line_of_the_first_tier() {
+    let root = root();
+    for (first, second, summary) in ROOT_PAIRS {
+        assert!(find(first, &[]).is_some() && find(second, &[]).is_some());
+        let line = format!(
+            "  {:width$}{summary}",
+            format!("{first} | {second}"),
+            width = ROOT_COLUMN - 2
+        );
+        assert!(root.lines().any(|l| l == line), "{line}:\n{root}");
+        for name in [first, second] {
+            assert!(
+                !root
+                    .lines()
+                    .any(|l| l.starts_with(&format!("  {name:width$}", width = ROOT_COLUMN - 2))),
+                "{name} has a line of its own:\n{root}"
+            );
+        }
+    }
+}

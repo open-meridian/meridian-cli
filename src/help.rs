@@ -781,6 +781,21 @@ const ROOT_COLUMN: usize = 23;
 pub const COMMAND_WIDTH: usize = 100;
 const FLAG_COLUMN: usize = 30;
 
+/// Commands the first tier lists on one line, `first | second`, with that
+/// line's summary in place of each one's own.
+const ROOT_PAIRS: &[(&str, &str, &str)] = &[
+    (
+        "stop",
+        "start",
+        "Stop a deployment, keeping its data; start it again",
+    ),
+    (
+        "connect",
+        "sign-out",
+        "Sign in to a deployment's dashboard, or sign out",
+    ),
+];
+
 /// `meridian` and `meridian --help`.
 pub fn root() -> String {
     let mut out = String::from("Usage: meridian <command> [flags]\n");
@@ -789,10 +804,15 @@ pub fn root() -> String {
         out.push_str(group.heading());
         out.push('\n');
         for command in COMMANDS.iter().filter(|c| c.group == group) {
+            let (name, summary) = match ROOT_PAIRS.iter().find(|p| p.0 == command.name) {
+                Some((first, second, summary)) => (format!("{first} | {second}"), *summary),
+                None if ROOT_PAIRS.iter().any(|p| p.1 == command.name) => continue,
+                None => (command.name.to_string(), command.summary),
+            };
             out.push_str(&format!(
                 "  {:width$}{}\n",
-                command.name,
-                command.summary,
+                name,
+                summary,
                 width = ROOT_COLUMN - 2
             ));
         }

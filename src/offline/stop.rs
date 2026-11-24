@@ -669,3 +669,61 @@ pub async fn start_command_run(machine: &dyn Machine, release: &Release, pace: &
 #[cfg(test)]
 #[path = "stop_tests.rs"]
 mod tests;
+
+/// The release a command names: `--release` (default `meridian`) in
+/// `namespace`.
+fn release_named(arguments: &crate::Arguments, namespace: &str) -> Release {
+    Release {
+        release: arguments
+            .value("--release", "--release")
+            .unwrap_or("meridian")
+            .into(),
+        namespace: namespace.into(),
+    }
+}
+
+/// `meridian stop` and `meridian start`, from the command line: the words
+/// and flags read, the plan shown and asked (`--yes` asks nothing), then
+/// stopped or started on this machine's kubectl.
+pub async fn command(arguments: &crate::Arguments, namespace: &str) -> i32 {
+    let command = arguments.command.as_str();
+    if !arguments.words.is_empty() {
+        eprintln!(
+            "meridian {command}: takes no words\n{}",
+            crate::see(command)
+        );
+        return 2;
+    }
+    let Some(timeout) = crate::upgrade_deployment::duration(
+        arguments.value("--timeout", "--timeout").unwrap_or("10m"),
+    ) else {
+        eprintln!("meridian {command}: --timeout takes a duration as Helm writes one: 10m, 90s");
+        return 2;
+    };
+    let release = release_named(arguments, namespace);
+    let pace = Pace {
+        poll: std::time::Duration::from_secs(2),
+        timeout,
+    };
+    let yes = arguments.set("--yes");
+    let mut approve = |plan: &str| {
+        eprintln!("{plan}");
+        yes || crate::approved("Stop it?")
+    };
+    let machine = crate::machine::ThisMachine;
+    match command {
+        "stop" => stop_command(&machine, &release, &pace, &mut approve).await,
+        _ => start_command_run(&machine, &release, &pace).await,
+    }
+}
+
+/// Whether `command` is refused because `meridian stop` has the release
+/// stopped: said, pointing to `meridian start`.
+pub async fn while_stopped(arguments: &crate::Arguments, namespace: &str, command: &str) -> bool {
+    let release = release_named(arguments, namespace);
+    let refused = refused_while_stopped(&crate::machine::ThisMachine, &release, command).await;
+    if let Some(refused) = &refused {
+        eprintln!("{command}: {refused}.");
+    }
+    refused.is_some()
+}
