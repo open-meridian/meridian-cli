@@ -242,12 +242,13 @@ async fn each_plugin_is_its_own_line_by_its_instance_with_its_own_pods_memory() 
         .filter_map(|c| c.instance.as_deref())
         .collect();
     assert_eq!(instances, ["snaptrade", "tiingo"]);
-    assert_eq!(held.plugins[0].memory, Some(9 * 1024 * 1024));
-    assert_eq!(held.plugins[1].memory, Some(7 * 1024 * 1024));
-    assert_eq!(held.plugins[0].limit, Some(256 * 1024 * 1024));
+    // The plugin container's own, its sidecar's apart.
+    assert_eq!(held.plugins[0].memory, Some(4 * 1024 * 1024));
+    assert_eq!(held.plugins[1].memory, Some(3 * 1024 * 1024));
+    assert_eq!(held.plugins[0].limit, Some(192 * 1024 * 1024));
     let said = said_wide(&held, 0, "meridian");
-    assert!(said.contains("Plugins:\n  snaptrade  1/1 ready  no restarts  memory 9 MiB of 256 MiB (3%)  localhost:5000/plugins/open-meridian/snaptrade@sha256:915f\n"), "{said}");
-    assert!(said.contains("  tiingo     1/1 ready  no restarts  memory 7 MiB of 256 MiB (2%)  localhost:5000/plugins/tiingo@sha256:aa01\n"), "{said}");
+    assert!(said.contains("Plugins:\n  snaptrade  1/1 ready  no restarts  memory 4 MiB of 192 MiB (2%)  localhost:5000/plugins/open-meridian/snaptrade@sha256:915f\n             sidecar  memory 5 MiB of 64 MiB (7%)\n"), "{said}");
+    assert!(said.contains("  tiingo     1/1 ready  no restarts  memory 3 MiB of 192 MiB (1%)  localhost:5000/plugins/tiingo@sha256:aa01\n             sidecar  memory 4 MiB of 64 MiB (6%)\n"), "{said}");
     // Two replicas: each pod's own, against the limit each has.
     assert!(
         said.contains("dashboard  1/2 ready  no restarts  memory 120 MiB, 98 MiB of 256 MiB each"),
@@ -255,7 +256,11 @@ async fn each_plugin_is_its_own_line_by_its_instance_with_its_own_pods_memory() 
     );
     let json = json_of(&held);
     assert_eq!(json["plugins"][0]["instance_id"], "snaptrade");
-    assert_eq!(json["plugins"][0]["memory_bytes"], 9 * 1024 * 1024);
+    assert_eq!(json["plugins"][0]["memory_bytes"], 4 * 1024 * 1024);
+    assert_eq!(
+        json["plugins"][0]["sidecar"]["memory_bytes"],
+        5 * 1024 * 1024
+    );
     assert_eq!(
         json["components"][1]["pods"][1]["pod"],
         "meridian-dashboard-2"
@@ -635,7 +640,11 @@ async fn memory_is_each_pods_working_set_from_its_nodes_cadvisor() {
     assert_eq!(held.memory_read, Some(MemoryRead::Cadvisor));
     assert_eq!(held.memory_note, None);
     assert_eq!(held.components[0].memory, Some(300 * 1024 * 1024));
-    assert_eq!(held.plugins[0].memory, Some(5 * 1024 * 1024));
+    assert_eq!(held.plugins[0].memory, Some(3 * 1024 * 1024));
+    assert_eq!(
+        held.plugins[0].sidecar.as_ref().and_then(|s| s.memory),
+        Some(2 * 1024 * 1024)
+    );
     let said = said_wide(&held, 0, "meridian");
     assert!(said.contains("memory 300 MiB of 512 MiB (58%)"), "{said}");
     assert!(
@@ -704,7 +713,7 @@ async fn a_sharded_plugin_wants_its_shards_ready_and_its_other_pods_stand_by() {
     let found = components(
         &serde_json::json!({ "items": [sharded, single, older] }),
         &serde_json::json!({ "items": [] }),
-        &BTreeMap::new(),
+        &Usage::default(),
     );
     let shape: Vec<(u64, u64, u64)> = found
         .iter()
@@ -751,6 +760,7 @@ pub(crate) fn healthy() -> Status {
         instance: None,
         plugin_image: None,
         launched: false,
+        sidecar: None,
     };
     let names = [
         "analytics-coordinator",
@@ -889,5 +899,113 @@ fn whatever_is_unhealthy_expands_with_the_command_that_reads_why() {
     assert!(
         said.lines().all(|line| line.chars().count() <= WIDTH),
         "{said}"
+    );
+}
+
+/// A plugin's pod as the launcher makes it: the plugin and its sidecar, each
+/// with a limit of its own (256 MiB each), and cAdvisor's line for the pod as
+/// a whole beside each container's.
+fn plugin_of_two() -> (Vec<Component>, Usage) {
+    let mut workload = sidecar("oanda", "localhost:5000/plugins/oanda@sha256:bb02");
+    for container in 0..2 {
+        workload["spec"]["template"]["spec"]["containers"][container]["resources"]["limits"]
+            ["memory"] = serde_json::json!("256Mi");
+    }
+    let mut pod = sidecar_pod("oanda");
+    pod["status"]["containerStatuses"][1]["restartCount"] = serde_json::json!(1);
+    let line = |container: &str, mib: u64| {
+        format!(
+            "container_memory_working_set_bytes{{container=\"{container}\",namespace=\"meridian\",\
+             pod=\"meridian-plugin-oanda-5d9\"}} {}\n",
+            mib * 1024 * 1024
+        )
+    };
+    let usage = cadvisor_usage(
+        &(line("", 150) + &line("plugin", 100) + &line("sidecar", 50)),
+        "meridian",
+    );
+    let found = components(
+        &serde_json::json!({ "items": [workload] }),
+        &serde_json::json!({ "items": [pod] }),
+        &usage,
+    );
+    (found, usage)
+}
+
+#[test]
+fn a_plugins_memory_is_its_own_container_and_its_sidecar_is_said_apart() {
+    // The pod's limit, its containers' summed, said 512 MiB where the plugin
+    // container has 256 MiB.
+    let mib = 1024 * 1024;
+    let (found, usage) = plugin_of_two();
+    assert_eq!(usage.pods["meridian-plugin-oanda-5d9"], 150 * mib);
+    let plugin = &found[0];
+    assert_eq!(plugin.limit, Some(256 * mib), "the plugin container's own");
+    assert_eq!(plugin.memory, Some(100 * mib), "the plugin container's own");
+    let sidecar = plugin.sidecar.as_ref().expect("the sidecar, apart");
+    assert_eq!(sidecar.limit, Some(256 * mib));
+    assert_eq!(sidecar.memory, Some(50 * mib));
+
+    let mut held = healthy();
+    held.plugins = found;
+    let wide = said_wide(&held, 0, "meridian");
+    assert!(
+        wide.contains(
+            "  oanda  1/1 ready  1 restart(s)  memory 100 MiB of 256 MiB (39%)  \
+             localhost:5000/plugins/oanda@sha256:bb02\n         sidecar  memory 50 MiB of \
+             256 MiB (19%)\n"
+        ),
+        "{wide}"
+    );
+    assert!(!wide.contains("512 MiB"), "{wide}");
+
+    // The compact status: one line for it, the plugin's own memory.
+    let compact = said(&held, "meridian");
+    let lines: Vec<&str> = compact
+        .lines()
+        .filter(|line| line.contains("oanda"))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "  oanda  1/1 ready, 1 restart(s), memory 100 MiB of 256 MiB (39%): `meridian logs \
+          oanda --previous`"
+        ],
+        "{compact}"
+    );
+
+    let json = json_of(&held);
+    assert_eq!(json["plugins"][0]["memory_bytes"], 100 * mib);
+    assert_eq!(json["plugins"][0]["memory_limit_bytes"], 256 * mib);
+    assert_eq!(json["plugins"][0]["sidecar"]["memory_bytes"], 50 * mib);
+    assert_eq!(
+        json["plugins"][0]["sidecar"]["memory_limit_bytes"],
+        256 * mib
+    );
+    assert_eq!(
+        json["plugins"][0]["sidecar"]["pods"][0]["memory_bytes"],
+        50 * mib
+    );
+    assert!(json["components"][0].get("sidecar").is_none());
+}
+
+#[test]
+fn a_sidecar_near_its_own_limit_is_said_on_its_plugins_one_line() {
+    let mib = 1024 * 1024;
+    let (mut found, _) = plugin_of_two();
+    found[0].restarts = 0;
+    let sidecar = found[0].sidecar.as_mut().unwrap();
+    sidecar.memory = Some(240 * mib);
+    sidecar.pods[0].1 = Some(240 * mib);
+    let mut held = healthy();
+    held.plugins = found;
+    // Carried on to a second line past the width, as every long line is.
+    let compact = said(&held, "meridian").replace("\n      ", " ");
+    assert!(
+        compact.contains(
+            "  oanda  1/1 ready, no restarts, memory 100 MiB of 256 MiB (39%), sidecar memory \
+             240 MiB of 256 MiB (93%): `meridian logs oanda`\n"
+        ),
+        "{compact}"
     );
 }
