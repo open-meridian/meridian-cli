@@ -143,6 +143,11 @@ pub fn said(profile: &Value) -> String {
     out
 }
 
+/// The profile, as `status --profile --wide` prints it.
+pub fn said_wide(profile: &Value) -> String {
+    said(profile)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +195,111 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("It changes nothing."), "{text}");
+    }
+
+    /// The profile the deployment answers with no advice.
+    fn plain() -> Value {
+        json!({
+            "level": "multi_node",
+            "next_level": "multi_zone",
+            "next_level_changes": [{"change": "zones=3", "cost": "3 nodes"}],
+            "failures": [{"subject": "pod", "state": "met", "reason": "", "changes": []}],
+            "tiers": [],
+            "never_blind": [],
+            "computed_at_ns": "1794487905488194860",
+        })
+    }
+
+    #[test]
+    fn a_profile_without_advice_is_said_as_before_compact_or_wide() {
+        let at = crate::registry::moment(1_794_487_905_488_194_860);
+        let before = format!(
+            "Resilience profile, as the deployment computes it from its configuration as it is \
+             (computed {at}):\n  level: Multi-node\n  the next, Multi-zone, lacks:\n    change: \
+             zones=3 (costs 3 nodes)\n\nFailure classes:\n  pod  met\n\nIt changes nothing. A \
+             change it names is made with `meridian upgrade-deployment --set`, or at the \
+             dashboard's Plugins and Data sources.\n"
+        );
+        assert_eq!(said(&plain()), before);
+        assert_eq!(said_wide(&plain()), before);
+        let mut empty = plain();
+        empty["advice"] = json!([]);
+        assert_eq!(said(&empty), before);
+        assert_eq!(said_wide(&empty), before);
+    }
+
+    #[test]
+    fn advice_is_a_line_each_under_the_profile_and_in_full_under_wide() {
+        let mut profile = plain();
+        profile["advice"] = json!([
+            {"subject": "lake partitions", "state": "not_met",
+             "reason": "2 ranges for 2 writer groups",
+             "changes": [{"change": "lake.partitions=4", "cost": ""}]},
+            {"subject": "book writer group 1", "state": "not_met",
+             "reason": "its commit lane was busy 78% of the window at peak, past the 70% bound, \
+                        and it refused work as overloaded twice",
+             "changes": [{"change": "bor.writerGroups=3", "cost": "1 pod, 512 MiB"}]},
+        ]);
+        let text = said(&profile);
+        // Under the profile, before the failure classes: a line each.
+        let advice = text.find("\nAdvice:\n").expect(&text);
+        assert!(
+            advice < text.find("\nFailure classes:\n").expect(&text),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "\nAdvice:\n  lake partitions      not met: 2 ranges for 2 writer groups; \
+                 change: lake.partitions=4\n"
+            ),
+            "{text}"
+        );
+        // The long one cut at the width, its detail under --wide.
+        let long = text
+            .lines()
+            .find(|line| line.starts_with("  book writer group 1 "))
+            .expect(&text);
+        assert!(long.chars().count() <= crate::status::WIDTH, "{long}");
+        assert!(long.ends_with('…'), "{long}");
+        assert!(
+            text.contains("  `meridian status --profile --wide` says each in full\n"),
+            "{text}"
+        );
+        // Nothing else changed.
+        assert!(text.contains("\nFailure classes:\n  pod  met\n"), "{text}");
+        assert!(text.contains("It changes nothing."), "{text}");
+
+        let wide = said_wide(&profile);
+        assert!(
+            wide.contains(
+                "  book writer group 1  not met: its commit lane was busy 78% of the window at \
+                 peak, past the 70% bound, and it refused work as overloaded twice\n"
+            ),
+            "{wide}"
+        );
+        assert!(
+            wide.contains("change: bor.writerGroups=3 (costs 1 pod, 512 MiB)\n"),
+            "{wide}"
+        );
+        assert!(wide.contains("change: lake.partitions=4\n"), "{wide}");
+        assert!(!wide.contains('…'), "{wide}");
+        assert!(!wide.contains("says each in full"), "{wide}");
+    }
+
+    #[test]
+    fn short_advice_needs_no_pointer_to_wide() {
+        let mut profile = plain();
+        profile["advice"] = json!([{"subject": "lake partitions", "state": "not_met",
+            "reason": "2 ranges for 2 writer groups",
+            "changes": [{"change": "lake.partitions=4", "cost": "none"}]}]);
+        let text = said(&profile);
+        assert!(
+            text.contains(
+                "\nAdvice:\n  lake partitions  not met: 2 ranges for 2 writer groups; change: \
+                 lake.partitions=4 (costs none)\n\nFailure classes:"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("--wide"), "{text}");
     }
 }
