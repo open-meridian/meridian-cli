@@ -5,10 +5,10 @@
 //! standing notice for a stuck stream sends a person here ("meridian status
 //! shows what it holds").
 //!
-//! A member whose words say its stream is stuck full, or that the broker
-//! refuses its writes or does not answer them, is a line: its state, since
-//! when, and what the stream holds against its bound, where its words say
-//! it. Nothing is said while none does. `--json` lists every member as the
+//! A member whose words say its stream is stuck full or at its rate limit,
+//! or that the broker refuses its writes or does not answer them, is a line:
+//! its state, since when, what the stream holds against its bound and, at
+//! its rate limit, the rate its bounds allow, where its words say them. Nothing is said while none does. `--json` lists every member as the
 //! deployment answered it. Read-only.
 
 use serde_json::{json, Value};
@@ -22,6 +22,11 @@ pub type Members = Result<Vec<Value>, String>;
 /// The words a member's detail opens with while its stream is stuck full,
 /// as the lake's writer says them.
 const STUCK_FULL: &str = "the lake's write-ahead stream is stuck full";
+
+/// The words a member's detail opens with while its stream is at its rate
+/// limit: the lake keeps up, but writes arrive faster than the stream's
+/// bounds allow. Never said with [`STUCK_FULL`].
+const RATE_LIMITED: &str = "the lake's write-ahead stream is at its rate limit";
 
 /// The words a member's detail holds while the broker refuses its writes or
 /// does not answer them, first or after the stuck-full words.
@@ -69,22 +74,37 @@ fn since(after: &str) -> Option<&str> {
 }
 
 /// A member's line, where its words say its stream is stuck full or
-/// refused; none otherwise.
+/// at its rate limit, or refused; none otherwise.
 pub fn line(member: &Value) -> Option<String> {
     let detail = member["detail"].as_str().unwrap_or_default();
     let mut said = Vec::new();
-    if let Some(stuck) = detail.strip_prefix(STUCK_FULL) {
+    for (opening, state) in [
+        (STUCK_FULL, "write-ahead stream stuck full"),
+        (RATE_LIMITED, "write-ahead stream at its rate limit"),
+    ] {
+        let Some(words) = detail.strip_prefix(opening) else {
+            continue;
+        };
         // What it holds, in its own words up to the next clause: `holds
         // 256.0 MiB of its 256.0 MiB bound`.
-        let holds = stuck
+        let holds = words
             .split_once(": holds ")
             .map(|(_, rest)| rest.split([',', ';']).next().unwrap_or_default().trim());
-        let mut state = "write-ahead stream stuck full".to_string();
-        if let Some(at) = since(stuck) {
+        // At its rate limit, the rate its bounds allow: `74 KB/s` in
+        // `(256.0 MiB every 3600s, 74 KB/s)`.
+        let rate = words
+            .split_once("bounds allow (")
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .and_then(|(allowed, _)| allowed.rsplit_once(", "))
+            .map(|(_, rate)| rate.trim());
+        let mut state = state.to_string();
+        if let Some(at) = since(words) {
             state.push_str(&format!(" since {at}"));
         }
-        if let Some(holds) = holds.filter(|holds| !holds.is_empty()) {
-            state.push_str(&format!(", holds {holds}"));
+        for (lead, figure) in [("holds ", holds), ("", rate)] {
+            if let Some(figure) = figure.filter(|figure| !figure.is_empty()) {
+                state.push_str(&format!(", {lead}{figure}"));
+            }
         }
         said.push(state);
     }
@@ -106,8 +126,8 @@ pub fn line(member: &Value) -> Option<String> {
     ))
 }
 
-/// A line each member whose stream is stuck full or refused; nothing where
-/// none is, or where the members were not read.
+/// A line each member whose stream is stuck full, at its rate limit or
+/// refused; nothing where none is, or where the members were not read.
 pub fn said(members: &Members) -> String {
     members.iter().flatten().filter_map(line).collect()
 }

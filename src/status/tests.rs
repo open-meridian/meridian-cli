@@ -1095,3 +1095,58 @@ fn a_stuck_write_ahead_stream_is_a_line_a_member_with_since_when_and_what_it_hol
     assert_eq!(json_of(&held)["members"]["not_read"], "not read");
     assert_eq!(said(&held, "meridian"), said(&healthy(), "meridian"));
 }
+
+/// The lake's writer's words while its write-ahead stream is at its rate
+/// limit, as the lake says them: never with stuck full, but the broker's
+/// refusals may follow.
+const RATE_LIMITED: &str = "the lake's write-ahead stream is at its rate limit for 45s, since \
+    2026-11-24T11:00:00Z: holds 250.0 MiB of its 256.0 MiB bound, 3 write(s) past the lake's \
+    place (the lake at 99, the stream at 102); the lake is keeping up, and writes arrive faster \
+    than the stream's bounds allow (256.0 MiB every 3600s, 74 KB/s); it takes a new write as the \
+    oldest it holds reach 3600s old; a write it has no room for is refused for load, none it \
+    holds is dropped; raising lake.writeAhead.maxBytes, with broker.jetstream.size to hold it, \
+    raises that rate";
+
+/// A stream at its rate limit is a line of its own, as a stuck one is: since
+/// when, what it holds against its bound, and the rate its bounds allow; a
+/// refusal after it is said after it.
+#[test]
+fn a_write_ahead_stream_at_its_rate_limit_is_a_line_with_since_when_what_it_holds_and_the_rate() {
+    let mut held = healthy();
+    held.members = Ok(vec![
+        lake_member("om-lake-0", "degraded", RATE_LIMITED),
+        lake_member(
+            "om-lake-1",
+            "degraded",
+            &format!("{RATE_LIMITED}; {REFUSED}"),
+        ),
+    ]);
+    let limited = "write-ahead stream at its rate limit since 2026-11-24T11:00:00Z, holds 250.0 \
+                   MiB of its 256.0 MiB bound, 74 KB/s";
+    let wide = said_wide(&held, 0, "meridian");
+    assert_eq!(
+        wide.matches(&format!("  lake/om-lake-0: {limited}\n"))
+            .count(),
+        1,
+        "{wide}"
+    );
+    assert_eq!(
+        wide.matches(&format!(
+            "  lake/om-lake-1: {limited}; write-ahead writes refused or not answered by the \
+             broker since 2026-11-24T10:05:00Z\n"
+        ))
+        .count(),
+        1,
+        "{wide}"
+    );
+    assert!(!wide.contains("stuck full"), "{wide}");
+    let compact = said(&held, "meridian");
+    assert!(
+        compact.contains(&wrapped(&format!("  lake/om-lake-0: {limited}\n"))),
+        "{compact}"
+    );
+    assert!(
+        compact.lines().all(|line| line.chars().count() <= WIDTH),
+        "{compact}"
+    );
+}
