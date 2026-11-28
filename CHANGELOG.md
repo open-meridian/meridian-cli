@@ -3,10 +3,12 @@
 ## Unreleased
 
 ### Added
+- `meridian stop` stops a deployment's workloads, deleting nothing, and `meridian start` starts them again exactly as they were. What runs is recorded first on the database's StatefulSet (`meridian.dev/stopped`); `stop` refuses while a restore's record, a `pending-*` release or a migration, restore, rollback or act Job is there, and either, cut short, finishes when run again. While stopped, `status` says one line (`--json`: `stopped.since`), `doctor` says so without failing, and `up`, `upgrade-deployment`, `rollback-deployment` and `restore --to-time`/`--to-archive-end` refuse, pointing to `meridian start`.
 - `status` says each lake member whose write-ahead stream is stuck full, at its rate limit or refused: since when, what it holds against its bound and, at its rate limit, the rate its bounds allow (`--json`'s `members`).
 
 ### Changed
 - Clearer help: `plugin gc` and `backup key` reworded, and `up`'s deprecated flags listed last under Advanced.
+- `meridian --help` lists `stop | start` and `connect | sign-out` on one line each, so the first tier stays at its 55 lines.
 
 ## 0.1.63 - 2026-11-28
 

@@ -336,7 +336,10 @@ async fn main() {
             std::process::exit(upgrade_deployment_command(&arguments, &intended.namespace).await)
         }
         "rollback-deployment" => {
-            std::process::exit(rollback_command(&arguments, &intended.namespace).await)
+            std::process::exit(rollback::command(&arguments, &intended.namespace).await)
+        }
+        "stop" | "start" => {
+            std::process::exit(offline::stop::command(&arguments, &intended.namespace).await)
         }
         "uninstall" => std::process::exit(uninstall_command(&arguments).await),
         "authority" => std::process::exit(authority_command(&arguments)),
@@ -2503,6 +2506,9 @@ async fn upgrade_deployment_command(arguments: &Arguments, namespace: &str) -> i
         );
         return 2;
     };
+    if offline::stop::while_stopped(arguments, namespace, "meridian upgrade-deployment").await {
+        return 1;
+    }
     let asked = upgrade_deployment::Asked {
         release: arguments
             .value("--release", "--release")
@@ -2704,6 +2710,10 @@ async fn restore_in_place(arguments: &Arguments, namespace: &str, to: Option<&st
             return 2;
         }
     };
+    if offline::stop::while_stopped(arguments, namespace, &format!("meridian restore {flag}")).await
+    {
+        return 1;
+    }
     let timeout = arguments.value("--timeout", "--timeout").unwrap_or("30m");
     let Some(waited) = upgrade_deployment::duration(timeout) else {
         eprintln!(
@@ -2781,72 +2791,6 @@ async fn restore_in_place(arguments: &Arguments, namespace: &str, to: Option<&st
         }
         Err(refusal) => {
             eprintln!("\nmeridian restore {flag}: {refusal}");
-            1
-        }
-    }
-}
-
-/// `meridian rollback-deployment [--to-revision <n>]` (audit D4): checks,
-/// shows the revision it returns to and that the database stays, asks, then
-/// rolls back and waits.
-async fn rollback_command(arguments: &Arguments, namespace: &str) -> i32 {
-    if !arguments.words.is_empty() {
-        eprintln!(
-            "meridian rollback-deployment: takes no words; --to-revision <n> names a revision\n{}",
-            see("rollback-deployment")
-        );
-        return 2;
-    }
-    let to_revision = match arguments.value("--to-revision", "--to-revision") {
-        None => None,
-        Some(given) => match given.parse::<u64>() {
-            Ok(revision) if revision > 0 => Some(revision),
-            _ => {
-                eprintln!("meridian rollback-deployment: --to-revision takes a revision's number, as `meridian status` says it");
-                return 2;
-            }
-        },
-    };
-    let timeout = arguments.value("--timeout", "--timeout").unwrap_or("10m");
-    let Some(waited) = upgrade_deployment::duration(timeout) else {
-        eprintln!(
-            "meridian rollback-deployment: --timeout takes a duration as Helm writes one: 10m, 90s, 1h30m"
-        );
-        return 2;
-    };
-    let asked = rollback::Asked {
-        release: arguments
-            .value("--release", "--release")
-            .unwrap_or("meridian")
-            .into(),
-        namespace: namespace.into(),
-        to_revision,
-        timeout: timeout.into(),
-    };
-    let plan = match rollback::check(&machine::ThisMachine, &asked).await {
-        Ok(plan) => plan,
-        Err(refused) => {
-            eprintln!("meridian rollback-deployment: {refused}. Nothing was changed.");
-            return 1;
-        }
-    };
-    eprintln!("{}", rollback::plan_text(&asked, &plan));
-    if !arguments.set("--yes") && !approved("Roll it back?") {
-        eprintln!("meridian rollback-deployment: not approved, so nothing was changed. Where there is no terminal to ask at, --yes approves");
-        return 1;
-    }
-    let pace = rollback::Pace {
-        poll: std::time::Duration::from_secs(2),
-        timeout: waited,
-    };
-    let mut say = |line: &str| eprintln!("{line}");
-    match rollback::apply(&machine::ThisMachine, &asked, &plan, &pace, &mut say).await {
-        Ok(done) => {
-            print!("{done}");
-            0
-        }
-        Err(failed) => {
-            eprintln!("meridian rollback-deployment: {failed}");
             1
         }
     }
@@ -3340,6 +3284,9 @@ async fn brought_up(arguments: &Arguments, intended: Intended) -> i32 {
     if let Err(refusal) = up::check_id(&deployment_id) {
         eprintln!("meridian up: {refusal}. Nothing was installed.");
         return 2;
+    }
+    if offline::stop::while_stopped(arguments, &intended.namespace, "meridian up").await {
+        return 1;
     }
     let archive = match up::archive_from_flags(
         arguments.value("--archive", "--archive"),

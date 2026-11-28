@@ -741,5 +741,76 @@ pub async fn apply(
     ))
 }
 
+/// `meridian rollback-deployment [--to-revision <n>]` (audit D4): checks,
+/// shows the revision it returns to and that the database stays, asks, then
+/// rolls back and waits.
+pub async fn command(arguments: &crate::Arguments, namespace: &str) -> i32 {
+    if !arguments.words.is_empty() {
+        eprintln!(
+            "meridian rollback-deployment: takes no words; --to-revision <n> names a revision\n{}",
+            crate::see("rollback-deployment")
+        );
+        return 2;
+    }
+    let to_revision = match arguments.value("--to-revision", "--to-revision") {
+        None => None,
+        Some(given) => match given.parse::<u64>() {
+            Ok(revision) if revision > 0 => Some(revision),
+            _ => {
+                eprintln!("meridian rollback-deployment: --to-revision takes a revision's number, as `meridian status` says it");
+                return 2;
+            }
+        },
+    };
+    let timeout = arguments.value("--timeout", "--timeout").unwrap_or("10m");
+    let Some(waited) = crate::upgrade_deployment::duration(timeout) else {
+        eprintln!(
+            "meridian rollback-deployment: --timeout takes a duration as Helm writes one: 10m, 90s, 1h30m"
+        );
+        return 2;
+    };
+    if crate::offline::stop::while_stopped(arguments, namespace, "meridian rollback-deployment")
+        .await
+    {
+        return 1;
+    }
+    let asked = Asked {
+        release: arguments
+            .value("--release", "--release")
+            .unwrap_or("meridian")
+            .into(),
+        namespace: namespace.into(),
+        to_revision,
+        timeout: timeout.into(),
+    };
+    let plan = match check(&crate::machine::ThisMachine, &asked).await {
+        Ok(plan) => plan,
+        Err(refused) => {
+            eprintln!("meridian rollback-deployment: {refused}. Nothing was changed.");
+            return 1;
+        }
+    };
+    eprintln!("{}", plan_text(&asked, &plan));
+    if !arguments.set("--yes") && !crate::approved("Roll it back?") {
+        eprintln!("meridian rollback-deployment: not approved, so nothing was changed. Where there is no terminal to ask at, --yes approves");
+        return 1;
+    }
+    let pace = Pace {
+        poll: std::time::Duration::from_secs(2),
+        timeout: waited,
+    };
+    let mut say = |line: &str| eprintln!("{line}");
+    match apply(&crate::machine::ThisMachine, &asked, &plan, &pace, &mut say).await {
+        Ok(done) => {
+            print!("{done}");
+            0
+        }
+        Err(failed) => {
+            eprintln!("meridian rollback-deployment: {failed}");
+            1
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

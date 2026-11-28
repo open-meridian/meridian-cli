@@ -487,6 +487,40 @@ data back. It asks "Roll it back?" (`--yes` for a script), runs `helm rollback`
 and waits, up to `--timeout`, for that revision's migration if it runs one and
 every component on its template.
 
+## stop and start
+
+```
+meridian stop     # every component and the database stopped; nothing deleted
+meridian start    # started again, each to the count it ran at
+```
+
+`stop` stops a deployment's workloads and deletes nothing: its data, its
+volumes and its database are kept. It records first what runs, on the
+database's StatefulSet (`meridian.dev/stopped`): each Deployment's count, the
+database's, and each CronJob's `suspend`. Then it suspends the release's
+CronJobs, stops every component, launched plugins among them, and, under
+Patroni, makes member 0 the primary so no member fails over as the others
+stop; then it stops the database. It shows what it will do and asks (`--yes`
+for a script). No helm operation runs, and nothing new is put in the cluster.
+The broker's and the registry's StatefulSets keep running, as under a
+restore, and the plan names them.
+
+It refuses, naming why and changing nothing, while a restore's or an act's
+own record is there, while Helm holds the release as `pending-...`, while a
+migration, a restore, a rollback or an act on the database's volume runs, and
+where a store runs more than one database or the deployment brings none.
+Stopped already, it says so and exits 0.
+
+While it is stopped, `meridian status` says one line in place of what is not
+ready, "Stopped since <time>; run `meridian start`", and `--json` gains
+`stopped.since`; `doctor` says it is stopped and does not fail on its
+components at none; and `up`, `upgrade-deployment`, `rollback-deployment` and
+`restore --to-time`/`--to-archive-end` refuse, pointing to `meridian start`.
+
+`start` gives back exactly what was recorded, the database first, and removes
+the record once everything runs. Either command, cut short, finishes when it
+is run again: the record stands until `start` has finished.
+
 ## backup and restore
 
 ```

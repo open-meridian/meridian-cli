@@ -730,6 +730,8 @@ pub struct Status {
     pub accounts: Result<Vec<Account>, String>,
     /// The database, the members' probes and integrity at rest (step 3b).
     pub resilience: Resilience,
+    /// What `meridian stop` stopped, while it is stopped.
+    pub stopped: Option<crate::offline::Stopped>,
     /// Each member's health and its words, from the deployment (`stream`).
     pub members: stream::Members,
 }
@@ -791,7 +793,9 @@ pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, Stri
         Err(failed) => Err(failed),
     };
     let resilience = resilience::read(cluster, asked, &workloads, &pods).await;
+    let stopped = crate::offline::stop::stopped_in(&workloads);
     Ok(Status {
+        stopped,
         release,
         components,
         plugins,
@@ -1038,6 +1042,12 @@ pub fn said(status: &Status, namespace: &str) -> String {
     let mut out = release_said(&status.release, namespace, false);
     out.push_str(&resilience::stopped_said(&status.resilience));
     let scope = status.resilience.scope.as_str();
+    // Stopped by `meridian stop`: one line in place of what is not ready.
+    if let Some(stopped) = &status.stopped {
+        out.push_str(&crate::offline::stop::status_line(stopped, scope));
+        out.push_str("\nImages, pods and each member's probe: `meridian status --wide`\n");
+        return wrapped(&out);
+    }
     let ready = status
         .components
         .iter()
@@ -1117,6 +1127,11 @@ pub fn said(status: &Status, namespace: &str) -> String {
 pub fn said_wide(status: &Status, now_ns: u64, namespace: &str) -> String {
     let mut out = release_said(&status.release, namespace, true);
     out.push_str(&resilience::stopped_said(&status.resilience));
+    if let Some(stopped) = &status.stopped {
+        let scope = status.resilience.scope.as_str();
+        out.push_str(&crate::offline::stop::status_line(stopped, scope));
+        out.push('\n');
+    }
     let width = status
         .components
         .iter()
@@ -1266,6 +1281,7 @@ pub fn json_of(status: &Status) -> serde_json::Value {
         "components": status.components.iter().map(component_json).collect::<Vec<_>>(),
         "plugins": status.plugins.iter().map(component_json).collect::<Vec<_>>(),
         "metrics": status.memory_read.is_some(),
+        "stopped": status.stopped.as_ref().map(|s| serde_json::json!({ "since": s.since })),
         "memory_read": status.memory_read.map(MemoryRead::word),
         "book_health": match &status.accounts {
             Ok(accounts) => serde_json::json!(accounts.iter().map(|a| serde_json::json!({

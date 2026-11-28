@@ -762,3 +762,47 @@ pub async fn database(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
     }
     hints
 }
+
+/// Each deployment in `namespace` that `meridian stop` stopped, said and
+/// never in the way: it runs no pod on purpose, and nothing here fails on
+/// its components and database at none. Nothing where none is stopped, or
+/// the namespace's StatefulSets cannot be read.
+pub async fn stopped(machine: &dyn Machine, namespace: &str) -> Vec<Finding> {
+    use crate::offline::stop::{record_on, start_command};
+    let Ok(listed) = machine // S9: kubectl get statefulsets
+        .run(
+            "kubectl",
+            &["get", "statefulsets", "-n", namespace, "-o", "json"],
+        )
+        .await
+    else {
+        return Vec::new();
+    };
+    let listed: serde_json::Value = serde_json::from_str(&listed).unwrap_or_default();
+    listed["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|set| {
+            let stopped = record_on(set)?;
+            let release = set["metadata"]["labels"]["app.kubernetes.io/instance"]
+                .as_str()
+                .unwrap_or("meridian");
+            Some(Finding::Worth {
+                what: format!(
+                    "{release} in {namespace} is stopped{} (`meridian stop`)",
+                    stopped
+                        .since
+                        .as_deref()
+                        .map(|at| format!(" since {at}"))
+                        .unwrap_or_default()
+                ),
+                why: format!(
+                    "Its components and database run no pod on purpose, and its data is kept. \
+                     `{}` starts them as they were.",
+                    start_command(&crate::status::scope(release, namespace))
+                ),
+            })
+        })
+        .collect()
+}

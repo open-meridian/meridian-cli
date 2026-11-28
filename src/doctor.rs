@@ -135,6 +135,7 @@ pub async fn examine(
     findings.extend(checks::disk(machine).await);
     findings.push(checks::image(machine, &intended.image).await);
     findings.extend(checks::plugins(machine, &intended.namespace).await);
+    findings.extend(checks::stopped(machine, &intended.namespace).await);
     findings.extend(shards::shards(machine, &intended.namespace, history).await);
     findings.extend(checks::database(machine, &intended.namespace).await);
     findings.extend(checks::platform(machine, &intended.platform).await);

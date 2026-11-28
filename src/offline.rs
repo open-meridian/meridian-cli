@@ -19,6 +19,7 @@
 //! name sizes, times and timelines, and the names of what is stopped.
 
 pub mod checksums;
+pub mod stop;
 pub mod to_time;
 
 use std::collections::BTreeMap;

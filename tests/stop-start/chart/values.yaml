@@ -1,0 +1,2 @@
+# A helm upgrade that never becomes ready, to hold the release pending.
+hang: false

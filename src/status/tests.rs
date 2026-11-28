@@ -789,6 +789,7 @@ pub(crate) fn healthy() -> Status {
         unread: None,
     };
     Status {
+        stopped: None,
         release: Ok(Release {
             name: "meridian".into(),
             revision: 1,
