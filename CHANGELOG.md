@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.63
+## 0.1.63 - 2026-11-28
 
 ### Changed
 - Shorter output: two-tier help, one-line usage errors, a compact `up` and `status` (`--wide` for detail), and global `-q`/`-v`.
@@ -25,7 +25,7 @@
 ### Security
 - Updates `url` to 2.5.9 for RUSTSEC-2026-0592.
 
-## 0.1.62
+## 0.1.62 - 2026-11-20
 
 - New plugins start on SDK 0.37.1. `meridian plugin new --role data` writes the data template's
   `pacing.py`, `stream.py` and `tests/test_examples.py`, which it had left out.
@@ -34,7 +34,7 @@
   anything: each covers only a store's first database, and says which databases it would leave
   out. A backup taken where a store ran more than one database is refused at restore the same way.
 
-## 0.1.61
+## 0.1.61 - 2026-11-20
 
 Step 3d. These need a deployment whose core carries step 3d's terminal routes and probe; against
 an older one each says so and changes nothing.
