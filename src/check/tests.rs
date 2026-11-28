@@ -599,10 +599,10 @@ fn a_plugin_on_sdk_0_34_connecting_itself_keeps_every_rule_as_before() {
     let plugin = Scaffolded::tested("registered-0-34");
     plugin.replace(
         "pyproject.toml",
-        "open-meridian==0.37.1",
+        "open-meridian==0.37.2",
         "open-meridian==0.34.2",
     );
-    plugin.replace("Dockerfile", "plugin-python:0.37.1", "plugin-python:0.34.2");
+    plugin.replace("Dockerfile", "plugin-python:0.37.2", "plugin-python:0.34.2");
     plugin.replace("pyproject.toml", "roles = []", "roles = [\"custody\"]");
     plugin.write(&main_py(), MAIN_0_34);
     let report = plugin.check();
@@ -614,9 +614,9 @@ fn a_plugin_on_sdk_0_34_connecting_itself_keeps_every_rule_as_before() {
     plugin.replace(
         "pyproject.toml",
         "open-meridian==0.34.2",
-        "open-meridian==0.37.1",
+        "open-meridian==0.37.2",
     );
-    plugin.replace("Dockerfile", "plugin-python:0.34.2", "plugin-python:0.37.1");
+    plugin.replace("Dockerfile", "plugin-python:0.34.2", "plugin-python:0.37.2");
     let report = plugin.check();
     assert_eq!(
         failed_rules(&report),
@@ -2598,10 +2598,10 @@ fn a_plugin_breaking_each_rule_fails_that_rule_alone_where_it_is_broken() {
         (
             "template-shape",
             |p| {
-                p.replace("Dockerfile", "plugin-python:0.37.1", "plugin-python:0.5.0");
+                p.replace("Dockerfile", "plugin-python:0.37.2", "plugin-python:0.5.0");
                 ("Dockerfile".into(), 10)
             },
-            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.37.1",
+            "its base is plugin-python:0.5.0, and pyproject.toml pins open-meridian==0.37.2",
         ),
         (
             "tool-meridian",
@@ -4198,11 +4198,11 @@ fn the_advice_for_a_kept_id_is_in_the_shape_of_the_sdk_the_plugin_pins() {
     let advice = |label: &str, pin: Option<&str>| -> String {
         let plugin = Scaffolded::tested(label);
         if let Some(pin) = pin {
-            plugin.replace("pyproject.toml", "open-meridian==0.37.1", pin);
+            plugin.replace("pyproject.toml", "open-meridian==0.37.2", pin);
             let version = pin.trim_start_matches("open-meridian==");
             plugin.replace(
                 "Dockerfile",
-                "plugin-python:0.37.1",
+                "plugin-python:0.37.2",
                 &format!("plugin-python:{version}"),
             );
         }
@@ -4541,10 +4541,10 @@ fn a_plugin_on_an_older_sdk_is_advised_rather_than_failed() {
     let plugin = Scaffolded::tested("docs-older");
     plugin.replace(
         "pyproject.toml",
-        "open-meridian==0.37.1",
+        "open-meridian==0.37.2",
         "open-meridian==0.28.0",
     );
-    plugin.replace("Dockerfile", "plugin-python:0.37.1", "plugin-python:0.28.0");
+    plugin.replace("Dockerfile", "plugin-python:0.37.2", "plugin-python:0.28.0");
     std::fs::remove_dir_all(plugin.path("docs")).unwrap();
     let report = plugin.check();
     assert!(report.passed(), "{}", text(&report));
