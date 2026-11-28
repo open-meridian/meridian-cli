@@ -57,6 +57,7 @@ use std::collections::BTreeMap;
 
 pub mod profile;
 pub mod resilience;
+pub mod stream;
 pub use resilience::Resilience;
 
 /// The cluster, as these commands read it.
@@ -729,6 +730,8 @@ pub struct Status {
     pub accounts: Result<Vec<Account>, String>,
     /// The database, the members' probes and integrity at rest (step 3b).
     pub resilience: Resilience,
+    /// Each member's health and its words, from the deployment (`stream`).
+    pub members: stream::Members,
 }
 
 pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, String> {
@@ -798,6 +801,7 @@ pub async fn status(cluster: &dyn Cluster, asked: &Asked) -> Result<Status, Stri
         // Read from the deployment by the caller (`book_health`), which
         // holds the session; the cluster has no part in it.
         accounts: Err("not read".into()),
+        members: Err("not read".into()),
     })
 }
 
@@ -1060,6 +1064,7 @@ pub fn said(status: &Status, namespace: &str) -> String {
         ));
     }
     out.push_str(&resilience::compact(&status.resilience, namespace));
+    out.push_str(&stream::said(&status.members));
     let named = |c: &Component| c.instance.clone().unwrap_or_else(|| "(unnamed)".into());
     match status.plugins.len() {
         0 => out.push_str("Plugins: none running; `meridian plugin list` shows the catalogue\n"),
@@ -1134,6 +1139,7 @@ pub fn said_wide(status: &Status, now_ns: u64, namespace: &str) -> String {
         out.push_str(&format!("  ({why})\n"));
     }
     out.push_str(&resilience::said(&status.resilience, now_ns, namespace));
+    out.push_str(&stream::said(&status.members));
     out.push_str("\nPlugins:\n");
     if status.plugins.is_empty() {
         out.push_str(
@@ -1268,6 +1274,7 @@ pub fn json_of(status: &Status) -> serde_json::Value {
             })).collect::<Vec<_>>()),
             Err(why) => serde_json::json!({ "not_read": why }),
         },
+        "members": stream::json_of(&status.members),
     });
     // Step 3b's, beside the rest: additive, so a reader of the older shape
     // reads what it read.
