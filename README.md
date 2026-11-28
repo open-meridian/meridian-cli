@@ -524,7 +524,7 @@ is run again: the record stands until `start` has finished.
 ## backup and restore
 
 ```
-meridian backup key                       # the identity backups are sealed to; prints backup.recipient
+meridian backup key                       # the key backups are sealed to; prints backup.recipient
 meridian backup --to ~/meridian-backups   # back up now, and copy the file here
 meridian restore meridian-20261011T020000Z.meridian-backup --identity meridian-backup-identity.txt
 meridian restore --to-time 2026-11-09T13:59:27Z   # the running database, from its WAL archive
@@ -1019,7 +1019,7 @@ name it.
 meridian plugin gc
 ```
 
-`plugin gc` collects the deployment's own plugin registry's garbage: the
+`plugin gc` removes what the deployment's own plugin registry no longer uses: the
 layers retired versions left once their manifests were released. It sets the
 in-cluster registry read-only (uploads wait; pulls go on, so running plugins
 and launches are untouched), runs Distribution's `registry garbage-collect`
@@ -1043,7 +1043,9 @@ meridian logs snaptrade         # a plugin, by its instance
 components, the database, the store members, the plugins and the book. Anything
 unhealthy gets its own line with the command that reads why or fixes it: a
 component not ready or restarted, a release not `deployed`, a database member
-behind, an integrity finding, a stopped deployment. `--wide` adds each image,
+behind, an integrity finding, a stopped deployment, a member whose write-ahead
+stream is stuck full, at its rate limit or refused (since when, what it holds
+against its bound and, at its rate limit, the rate its bounds allow). `--wide` adds each image,
 pod, pod's memory (a plugin's sidecar on its own line) and member probe; `--json` has everything. `doctor` says where the database has page checksums or
 `full_page_writes` off. `logs` prints what a component's pods printed: core's
 components, a plugin by its instance, and the release's Jobs (`migrate`, `key`,

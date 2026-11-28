@@ -4,17 +4,47 @@
 
 ### Added
 - `meridian stop` stops a deployment's workloads, deleting nothing, and `meridian start` starts them again exactly as they were. What runs is recorded first on the database's StatefulSet (`meridian.dev/stopped`); `stop` refuses while a restore's record, a `pending-*` release or a migration, restore, rollback or act Job is there, and either, cut short, finishes when run again. While stopped, `status` says one line (`--json`: `stopped.since`), `doctor` says so without failing, and `up`, `upgrade-deployment`, `rollback-deployment` and `restore --to-time`/`--to-archive-end` refuse, pointing to `meridian start`.
+- `status` says each lake member whose write-ahead stream is stuck full, at its rate limit or refused: since when, what it holds against its bound and, at its rate limit, the rate its bounds allow (`--json`'s `members`).
 
 ### Changed
+- Clearer help: `plugin gc` and `backup key` reworded, and `up`'s deprecated flags listed last under Advanced.
 - `meridian --help` lists `stop | start` and `connect | sign-out` on one line each, so the first tier stays at its 55 lines.
+
+## 0.1.63 - 2026-11-28
+
+### Changed
 - Shorter output: two-tier help, one-line usage errors, a compact `up` and `status` (`--wide` for detail), and global `-q`/`-v`.
 - `status --profile` prints the profile's advice in its text output too, a line each (`--wide` for each in full), not only in `--json`.
-
-### Fixed
-- `status` says a plugin's memory against its own container's limit, its sidecar's apart (`--wide`, `--json`'s `sidecar`), not the pod's summed.
+- New plugins start on SDK 0.37.2.
+- `meridian upgrade-deployment` refuses a client-side merge over a launched plugins' Secret Helm once
+  applied server-side, while plugins hold credentials, naming the plugins to stop first. (#30)
+- `meridian upgrade-deployment` refuses, with nothing changed, when it can't read how Helm last applied
+  the release or who manages the launched plugins' Secret. (#30)
+- `meridian rollback-deployment` checks again just before it rolls back: a release at a newer revision than its plan's, or a plugin launched meanwhile, is refused with nothing changed. (#29)
 
 ### Deprecated
 - `up --enrolment-code`, `--first-run-code`, `--shared-storage-class` and `plugin publish`/`release --details` warn with their replacement; removed next release.
+
+### Fixed
+- `status` says a plugin's memory against its own container's limit, its sidecar's apart (`--wide`, `--json`'s `sidecar`), not the pod's summed.
+- `meridian rollback-deployment` refuses a rollback that would put back a launched plugin's old
+  credential or remove a live one, and names the plugins to stop first. (#29)
+- `meridian upgrade-deployment` on Helm 4 no longer fails on a release Helm 3 installed: it passes
+  `--force-conflicts` only where Helm last applied server-side. (#30)
+
+### Security
+- Updates `url` to 2.5.9 for RUSTSEC-2026-0592.
+
+## 0.1.62 - 2026-11-20
+
+- New plugins start on SDK 0.37.1. `meridian plugin new --role data` writes the data template's
+  `pacing.py`, `stream.py` and `tests/test_examples.py`, which it had left out.
+- `meridian restore` (each form) and `meridian backup` refuse a deployment where the lake or the
+  book runs more than one database (`lake.databases` or `bor.databases` above 1), before changing
+  anything: each covers only a store's first database, and says which databases it would leave
+  out. A backup taken where a store ran more than one database is refused at restore the same way.
+
+## 0.1.61 - 2026-11-20
 
 Step 3d. These need a deployment whose core carries step 3d's terminal routes and probe; against
 an older one each says so and changes nothing.
@@ -76,30 +106,6 @@ an older one each says so and changes nothing.
   standby pod and allowed a bucket archive, with the account `<namespace>/<fullname>-shards-<instance>`
   its bucket must trust and the cloud's step; and each such plugin's shards' epoch and last
   takeover, from the Resilience history on the session `meridian connect` keeps.
-- New plugins start on SDK 0.37.1. `meridian plugin new --role data` writes the data template's
-  `pacing.py`, `stream.py` and `tests/test_examples.py`, which it had left out.
-- `meridian restore` (each form) and `meridian backup` refuse a deployment where the lake or the
-  book runs more than one database (`lake.databases` or `bor.databases` above 1), before changing
-  anything: each covers only a store's first database, and says which databases it would leave
-  out. A backup taken where a store ran more than one database is refused at restore the same way.
-
-### Changed
-
-- `meridian upgrade-deployment` refuses a client-side merge over a launched plugins' Secret Helm once
-  applied server-side, while plugins hold credentials, naming the plugins to stop first. (#30)
-- `meridian upgrade-deployment` refuses, with nothing changed, when it can't read how Helm last applied
-  the release or who manages the launched plugins' Secret. (#30)
-
-### Fixed
-
-- `meridian rollback-deployment` refuses a rollback that would put back a launched plugin's old
-  credential or remove a live one, and names the plugins to stop first. (#29)
-- `meridian upgrade-deployment` on Helm 4 no longer fails on a release Helm 3 installed: it passes
-  `--force-conflicts` only where Helm last applied server-side. (#30)
-
-### Security
-
-- Updates `url` to 2.5.9 for RUSTSEC-2026-0592.
 
 ## 0.1.60
 
