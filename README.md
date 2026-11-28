@@ -490,7 +490,7 @@ every component on its template.
 ## backup and restore
 
 ```
-meridian backup key                       # the identity backups are sealed to; prints backup.recipient
+meridian backup key                       # the key backups are sealed to; prints backup.recipient
 meridian backup --to ~/meridian-backups   # back up now, and copy the file here
 meridian restore meridian-20261011T020000Z.meridian-backup --identity meridian-backup-identity.txt
 meridian restore --to-time 2026-11-09T13:59:27Z   # the running database, from its WAL archive
@@ -985,7 +985,7 @@ name it.
 meridian plugin gc
 ```
 
-`plugin gc` collects the deployment's own plugin registry's garbage: the
+`plugin gc` removes what the deployment's own plugin registry no longer uses: the
 layers retired versions left once their manifests were released. It sets the
 in-cluster registry read-only (uploads wait; pulls go on, so running plugins
 and launches are untouched), runs Distribution's `registry garbage-collect`

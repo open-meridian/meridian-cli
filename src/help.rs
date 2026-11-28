@@ -394,7 +394,7 @@ pub const COMMANDS: &[Command] = &[
         name: "plugin gc",
         group: Group::Plugin,
         usage: &["meridian plugin gc [flags]"],
-        summary: "Collect the plugin registry's garbage",
+        summary: "Remove images the plugin registry no longer uses",
         about: "Remove the layers retired versions left. Uploads wait while it runs. Shown, then asked.",
         flags: &[],
         common: &[Namespace, Release, Timeout("5m"), Yes],
@@ -617,8 +617,8 @@ pub const COMMANDS: &[Command] = &[
         name: "backup key",
         group: Group::Data,
         usage: &["meridian backup key [flags]"],
-        summary: "Make the identity backups are sealed to",
-        about: "Make the identity backups are sealed to, and print its public half. Needs no deployment.",
+        summary: "Make the key backups are sealed to",
+        about: "Make the key backups are sealed to, and print its public half. Needs no deployment.",
         flags: &[flag(
             "--to <file>",
             "where to write it (default: ./meridian-backup-identity.txt)",
@@ -812,11 +812,19 @@ pub const ADVANCED: [&str; 6] = [
     "--release <name>",
 ];
 
+/// Deprecated flags, listed last in the Advanced block, after every flag
+/// that is to be used.
+pub const DEPRECATED: [&str; 3] = [
+    "--enrolment-code <c>",
+    "--first-run-code <c>",
+    "--shared-storage-class <class>",
+];
+
 /// Flags no help lists: they work, for the tests they exist for.
 pub const HIDDEN: [&str; 1] = ["--plain-http"];
 
 fn advanced(spelling: &str) -> bool {
-    ADVANCED.contains(&spelling)
+    ADVANCED.contains(&spelling) || DEPRECATED.contains(&spelling)
 }
 
 /// One command's help.
@@ -849,11 +857,14 @@ pub fn command(c: &Command) -> String {
         }
     }
     let mut advanced_block = String::new();
-    for f in shown.iter().filter(|f| advanced(f.spelling)) {
+    for f in shown.iter().filter(|f| ADVANCED.contains(&f.spelling)) {
         advanced_block.push_str(&flag_line(f.spelling, f.says));
     }
     for common in c.common.iter().filter(|common| advanced(common.spelling())) {
         advanced_block.push_str(&flag_line(common.spelling(), &common.says()));
+    }
+    for f in shown.iter().filter(|f| DEPRECATED.contains(&f.spelling)) {
+        advanced_block.push_str(&flag_line(f.spelling, f.says));
     }
     if !advanced_block.is_empty() {
         out.push_str(&format!("\nAdvanced:\n{advanced_block}"));
