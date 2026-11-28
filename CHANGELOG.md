@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Clearer help: `plugin gc` and `backup key` reworded, and `up`'s deprecated flags listed last under Advanced.
+
 ## 0.1.63 - 2026-11-28
 
 ### Changed

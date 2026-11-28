@@ -172,6 +172,14 @@ fn advanced_flags_wait_at_the_end_and_test_flags_are_not_listed() {
             .unwrap_or_else(|| panic!("{spelling}: {up}"));
         assert!(at > advanced, "{spelling} before Advanced: {up}");
     }
+    // Deprecated flags come last, after every flag that is to be used.
+    let release = up.find("--release <name>").expect("--release");
+    for spelling in DEPRECATED {
+        let at = up
+            .find(spelling)
+            .unwrap_or_else(|| panic!("{spelling}: {up}"));
+        assert!(at > release, "{spelling} before --release: {up}");
+    }
     assert!(!up.contains("--plain-http"), "{up}");
     // Still a flag the parser takes.
     assert!(crate::SWITCHES.contains(&"--plain-http"));

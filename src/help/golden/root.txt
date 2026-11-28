@@ -18,7 +18,7 @@ Plugin:
   plugin launch        Run a plugin version as an instance
   plugin stop          Stop a launched instance
   plugin upload        Build a plugin and add it to the catalogue
-  plugin gc            Collect the plugin registry's garbage
+  plugin gc            Remove images the plugin registry no longer uses
   plugin logs          Show what a live plugin printed
   plugin events        Show what happened to a live plugin
   plugin open          Open a plugin's page with a one-time link
@@ -36,7 +36,7 @@ Dev:
 
 Data:
   backup               Back the deployment up now
-  backup key           Make the identity backups are sealed to
+  backup key           Make the key backups are sealed to
   restore              Restore a backup, or the database to a time
   partition split      Halve a lake range at its midpoint
   partition move       Move a partition to another writer group
