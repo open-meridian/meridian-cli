@@ -179,11 +179,11 @@ check-baselines:
 # such a decorator, copied to sdk-roles/ at their paths there: `role-pages`
 # reads the pages and routes each helper declares from them, so a plugin
 # calling one is held to what the SDK at SDK_REV declares, not a typed list.
-# meridian-python 0.37.2 (contract v30), its release PR's head: each
+# meridian-python 0.37.2 (contract v30), the v0.37.2 tag: each
 # role one generated class, the plugin entered through `meridian.run(...)`
 # (rulings 1009-1023); the reference template declares no role and registers
 # none, its entry's comment showing how custody's class is registered.
-SDK_REV  := f7c7655703911f594ca0f90ac691c0e8fb0c2b1c
+SDK_REV  := 50e053e7047472a994d764513634f06728fda2da
 SDK_REPO := https://github.com/open-meridian/meridian-python.git
 SCRATCH  := .sdk-scratch
 SDK_ROLES := $(SCRATCH)/src/meridian/roles
