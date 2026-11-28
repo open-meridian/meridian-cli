@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 # The SDK and nothing else of Meridian's, pinned exactly: the sidecar this runs
 # beside speaks one version of the contract, and a range would let a rebuild
 # pick up another.
-dependencies = ["open-meridian==0.37.1"]
+dependencies = ["open-meridian==0.37.2"]
 # The vendor's own clients are the plugin's to choose: for a WebSocket stream
 # (src/reference_plugin/stream.py's example), an established library, added
 # here -- "websockets>=13,<16" -- once the plugin streams. Left out while the
