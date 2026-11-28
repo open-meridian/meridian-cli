@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- `status` says each lake member whose write-ahead stream is stuck full or refused: since when, and what it holds against its bound (`--json`'s `members`).
+
 ### Changed
 - Clearer help: `plugin gc` and `backup key` reworded, and `up`'s deprecated flags listed last under Advanced.
 

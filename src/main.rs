@@ -2319,10 +2319,9 @@ async fn status_command(arguments: &Arguments, namespace: &str) -> i32 {
     }
     match status::status(&status::ThisCluster, &asked).await {
         Ok(mut held) => {
-            held.accounts = match held_session(arguments) {
-                Ok(session) => status::book_health(session.address(), &session).await,
-                Err(refusal) if refusal == NOT_CONNECTED => Err(status::NOT_CONNECTED.into()),
-                Err(refusal) => Err(refusal),
+            (held.accounts, held.members) = match held_session(arguments) {
+                Ok(session) => status::stream::with_book_health(&session).await,
+                Err(refusal) => status::stream::not_read(refusal, NOT_CONNECTED),
             };
             if arguments.set("--json") {
                 println!("{}", status::json_of(&held));

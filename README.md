@@ -1009,7 +1009,9 @@ meridian logs snaptrade         # a plugin, by its instance
 components, the database, the store members, the plugins and the book. Anything
 unhealthy gets its own line with the command that reads why or fixes it: a
 component not ready or restarted, a release not `deployed`, a database member
-behind, an integrity finding, a stopped deployment. `--wide` adds each image,
+behind, an integrity finding, a stopped deployment, a member whose write-ahead
+stream is stuck full or refused (since when, and what it holds against its
+bound). `--wide` adds each image,
 pod, pod's memory (a plugin's sidecar on its own line) and member probe; `--json` has everything. `doctor` says where the database has page checksums or
 `full_page_writes` off. `logs` prints what a component's pods printed: core's
 components, a plugin by its instance, and the release's Jobs (`migrate`, `key`,

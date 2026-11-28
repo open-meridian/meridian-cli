@@ -803,6 +803,7 @@ pub(crate) fn healthy() -> Status {
         memory_read: Some(MemoryRead::Cadvisor),
         memory_note: None,
         accounts: Err(NOT_CONNECTED.into()),
+        members: Err(NOT_CONNECTED.into()),
         resilience: resilience::Resilience {
             database: Some(resilience::Database {
                 set: crate::upgrade_deployment::DatabaseSet {
@@ -1008,4 +1009,89 @@ fn a_sidecar_near_its_own_limit_is_said_on_its_plugins_one_line() {
         ),
         "{compact}"
     );
+}
+
+/// A lake member as ReadResilience answers it, with its health and the
+/// words it said it with.
+fn lake_member(member: &str, health: &str, detail: &str) -> serde_json::Value {
+    serde_json::json!({"component": "lake", "member": member, "mode": "writer", "zone": "",
+        "lag_ms": 0, "partitions": ["control"], "restarts": 0, "last_restart_reason": "",
+        "health": health, "detail": detail})
+}
+
+/// The lake's writer's words while its write-ahead stream is stuck full,
+/// and while the broker refuses its writes, as the lake says them.
+const STUCK: &str = "the lake's write-ahead stream is stuck full for 30s, since \
+    2026-11-24T10:00:00Z: holds 256.0 MiB of its 256.0 MiB bound, the oldest write the lake has \
+    not recorded 40s old of its 3600s bound, 12 write(s) past the lake's place (the lake at 99, \
+    the stream at 111); a write it has no room for is refused for load, none it holds is dropped";
+const REFUSED: &str = "the lake's write-ahead writes are refused or not answered by the broker \
+    for 35s, since 2026-11-24T10:05:00Z: every look the lake's guard took at the stream was \
+    refused or not answered; the last: timed out";
+
+/// The dashboard's notice for a stuck write-ahead stream sends a person to
+/// `meridian status`: each member whose stream is stuck full or refused is
+/// a line with its state, since when and what it holds against its bound,
+/// in both views; nothing more is said while every member is serving, and
+/// `--json` lists every member's health and words as the deployment said
+/// them.
+#[test]
+fn a_stuck_write_ahead_stream_is_a_line_a_member_with_since_when_and_what_it_holds() {
+    let mut held = healthy();
+    held.members = Ok(vec![lake_member("om-lake-0", "serving", "")]);
+    assert_eq!(said(&held, "meridian"), said(&healthy(), "meridian"));
+    assert_eq!(
+        said_wide(&held, 0, "meridian"),
+        said_wide(&healthy(), 0, "meridian")
+    );
+
+    held.members = Ok(vec![
+        lake_member("om-lake-0", "degraded", STUCK),
+        lake_member("om-lake-1", "degraded", REFUSED),
+        lake_member("om-lake-2", "degraded", &format!("{STUCK}; {REFUSED}")),
+        lake_member("om-lake-3", "serving", ""),
+    ]);
+    let stuck =
+        "  lake/om-lake-0: write-ahead stream stuck full since 2026-11-24T10:00:00Z, holds \
+                 256.0 MiB of its 256.0 MiB bound\n";
+    let refused = "  lake/om-lake-1: write-ahead writes refused or not answered by the broker \
+                   since 2026-11-24T10:05:00Z\n";
+    let both = "  lake/om-lake-2: write-ahead stream stuck full since 2026-11-24T10:00:00Z, holds \
+                256.0 MiB of its 256.0 MiB bound; write-ahead writes refused or not answered by \
+                the broker since 2026-11-24T10:05:00Z\n";
+    let wide = said_wide(&held, 0, "meridian");
+    for line in [stuck, refused, both] {
+        assert_eq!(wide.matches(line).count(), 1, "{wide}");
+    }
+    assert!(!wide.contains("om-lake-3"), "{wide}");
+    let compact = said(&held, "meridian");
+    assert!(
+        compact.contains(&format!(
+            "Members: 6 of 6 ready, lag at most 0 ms, no integrity findings\n{}",
+            wrapped(stuck)
+        )),
+        "{compact}"
+    );
+    assert!(compact.contains(&wrapped(refused)), "{compact}");
+    assert!(compact.contains(&wrapped(both)), "{compact}");
+    assert!(!compact.contains("om-lake-3"), "{compact}");
+    assert!(
+        compact.lines().all(|line| line.chars().count() <= WIDTH),
+        "{compact}"
+    );
+
+    // Words with no time or figures that read say the state alone.
+    held.members = Ok(vec![lake_member(
+        "om-lake-0",
+        "degraded",
+        "the lake's write-ahead stream is stuck full for 30s, since soon",
+    )]);
+    assert!(said_wide(&held, 0, "meridian")
+        .contains("  lake/om-lake-0: write-ahead stream stuck full\n"));
+
+    let json = json_of(&held);
+    assert_eq!(json["members"][0]["health"], "degraded");
+    held.members = Err("not read".into());
+    assert_eq!(json_of(&held)["members"]["not_read"], "not read");
+    assert_eq!(said(&held, "meridian"), said(&healthy(), "meridian"));
 }
